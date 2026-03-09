@@ -1,7 +1,7 @@
 # NEXT_STEP.md
 
 title: Immediate next action
-goal: ship MVP planning docs
-immediate next action: Finalize PROJECT_STATE.md milestone + next task, then execute Task #1 immediately.
+goal: complete Nightloop MVP API baseline
+immediate next action: implement POST /reports with moderation_state pipeline scaffold and request validation.
 owner: <owner>
 blocker: <blocker>

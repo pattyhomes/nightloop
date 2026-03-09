@@ -7,12 +7,12 @@ Nightloop — college-focused nightlife decision app, launching in San Francisco
 Help users choose where to go tonight in under 60 seconds with trustworthy, explainable nightlife signals.
 
 ## Current State
-- Planning docs are now established (`README.md`, `schema.sql`, `api_contracts.md`, `MVP_TICKETS.md`).
-- Repo is in pre-implementation setup phase.
+- Planning docs are established (`README.md`, `schema.sql`, `api_contracts.md`, `MVP_TICKETS.md`).
+- Vertical slice scaffold implemented: migrations + API service + venue read endpoints.
 - Core architecture direction: API + worker jobs + Postgres.
 
 ## Milestone
-M1: Backend planning foundation complete and ready for API scaffolding.
+M2: First backend vertical slice implemented and locally validated.
 
 ## Scope (MVP)
 ### In
