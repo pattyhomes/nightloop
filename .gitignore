@@ -1,0 +1,22 @@
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# Data artifacts
+*.tmp
+data/raw/
+data/processed/
