@@ -13,58 +13,30 @@ Nightloop is an AI-native project scaffold for building a nightly data ingestion
 - `api/` API contracts and handlers
 - `docs/` architecture and implementation notes
 
-## Local setup (frontend + backend)
+## Local dev (single command)
 
-### 1) Install dependencies
-
-```bash
-cd backend && npm install
-cd ../frontend && npm install
-cd ..
-```
-
-### 2) Configure environment variables
+Copy/paste these commands from the repo root:
 
 ```bash
+cd /Users/chuckclaw/.openclaw/workspace/nightloop
+npm install --prefix backend
+npm install --prefix frontend
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
-```
-
-Default values are already wired for local dev:
-- backend runs at `http://localhost:4000`
-- frontend calls backend using `NEXT_PUBLIC_BACKEND_BASE_URL`
-
-### 3) Run backend and frontend together (exact commands)
-
-Terminal 1 (backend):
-
-```bash
-cd backend
 npm run dev
 ```
 
-Terminal 2 (frontend):
+That starts backend + frontend together in one terminal.
+
+- backend: `http://localhost:4000`
+- frontend: `http://localhost:3000`
+
+Stop both with `Ctrl+C`.
+
+## Build checks
+
+From repo root:
 
 ```bash
-cd frontend
-npm run dev
-```
-
-Backend routes in local dev:
-- health: `GET http://localhost:4000/health`
-- recommendations: `GET http://localhost:4000/api/recommendations`
-
-### 4) Production-style backend run (build + start)
-
-```bash
-cd backend
 npm run build
-npm run start
-```
-
-### 5) Build checks
-
-```bash
-cd backend && npm run build
-cd ../frontend && npm run build
 ```

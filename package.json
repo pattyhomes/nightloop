@@ -1,0 +1,9 @@
+{
+  "name": "nightloop",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "./scripts/dev.sh",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build"
+  }
+}
