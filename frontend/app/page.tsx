@@ -3,47 +3,46 @@
 import { useEffect, useState } from "react";
 import RecommendationList from "../components/RecommendationList";
 import { fetchRecommendations } from "../lib/api";
-import type { Recommendation } from "../types/recommendation";
+import { Recommendation } from "../types/recommendation";
 
 export default function HomePage() {
-  const [items, setItems] = useState<Recommendation[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
-
-    async function load() {
+    const loadRecommendations = async () => {
       try {
         setLoading(true);
-        const data = await fetchRecommendations();
-        if (!active) return;
-        setItems(data.recommendations);
-        setGeneratedAt(data.generatedAt);
         setError(null);
-      } catch (err) {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : "Failed to load recommendations");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
 
-    load();
-    return () => {
-      active = false;
+        const data = await fetchRecommendations();
+        setRecommendations(data.recommendations);
+        setGeneratedAt(data.generatedAt);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      } finally {
+        setLoading(false);
+      }
     };
+
+    void loadRecommendations();
   }, []);
 
   return (
     <main>
-      <h1>Nightloop Recommendations</h1>
-      {generatedAt ? <p>Batch generated at: {new Date(generatedAt).toLocaleString()}</p> : null}
-
-      {loading ? <p>Loading recommendations...</p> : null}
-      {error ? <p>Error: {error}</p> : null}
-      {!loading && !error ? <RecommendationList items={items} /> : null}
+      <h1>Nightloop</h1>
+      <p>Venue recommendations</p>
+      {loading && <p>Loading recommendations…</p>}
+      {!loading && error && <p>Failed to load recommendations: {error}</p>}
+      {!loading && !error && recommendations.length === 0 && <p>No recommendations yet.</p>}
+      {!loading && !error && recommendations.length > 0 && (
+        <>
+          {generatedAt && <p>Last updated: {new Date(generatedAt).toLocaleString()}</p>}
+          <RecommendationList items={recommendations} />
+        </>
+      )}
     </main>
   );
 }

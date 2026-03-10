@@ -1,5 +1,5 @@
 export type RecommendationFactor = {
-  factor: string;
+  factor: "crowdLevel" | "lineLength" | "socialActivity" | "popularity" | "recency" | "confidence";
   label: string;
   contribution: number;
   detail: string;
