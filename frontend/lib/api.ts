@@ -1,9 +1,18 @@
 import { RecommendationsResponse } from "../types/recommendation";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000";
+function getBackendBaseUrl(): string {
+  const value = process.env.NEXT_PUBLIC_BACKEND_BASE_URL;
+
+  if (!value) {
+    throw new Error("Missing NEXT_PUBLIC_BACKEND_BASE_URL");
+  }
+
+  return value.replace(/\/$/, "");
+}
 
 export async function fetchRecommendations(): Promise<RecommendationsResponse> {
-  const response = await fetch(`${API_BASE_URL}/recommendations`, {
+  const backendBaseUrl = getBackendBaseUrl();
+  const response = await fetch(`${backendBaseUrl}/recommendations`, {
     cache: "no-store"
   });
 
