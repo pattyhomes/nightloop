@@ -3,47 +3,60 @@
 import { useEffect, useState } from "react";
 import RecommendationList from "../components/RecommendationList";
 import { fetchRecommendations } from "../lib/api";
-import type { Recommendation } from "../types/recommendation";
+import { Recommendation } from "../types/recommendation";
 
 export default function HomePage() {
-  const [items, setItems] = useState<Recommendation[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-
-    async function load() {
+    const loadRecommendations = async () => {
       try {
+        setLoading(true);
+        setError(null);
+
         const data = await fetchRecommendations();
-        if (!mounted) return;
-        setItems(data.recommendations);
+        setRecommendations(data.recommendations);
         setGeneratedAt(data.generatedAt);
       } catch (err) {
-        if (!mounted) return;
-        setError(err instanceof Error ? err.message : "Failed to load recommendations");
+        setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
-        if (mounted) setLoading(false);
+        setLoading(false);
       }
-    }
-
-    load();
-
-    return () => {
-      mounted = false;
     };
+
+    void loadRecommendations();
   }, []);
 
   return (
-    <main>
-      <h1>Nightloop Recommendations</h1>
-      <p>Tonight’s best spots, ranked by live signals and recent reports.</p>
-      {generatedAt ? <p style={{ color: "#666" }}>Last generated: {new Date(generatedAt).toLocaleString()}</p> : null}
+    <main
+      style={{
+        maxWidth: 920,
+        margin: "0 auto",
+        padding: "40px 20px 64px",
+        fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+      }}
+    >
+      <header style={{ marginBottom: 24 }}>
+        <h1 style={{ margin: 0, fontSize: 34 }}>Nightloop</h1>
+        <p style={{ marginTop: 8, color: "#4b5563", fontSize: 17 }}>
+          Tonight&apos;s venue recommendations, ranked by live signals and recent check-ins.
+        </p>
+        {generatedAt && !loading && (
+          <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
+            Updated {new Date(generatedAt).toLocaleString()}
+          </p>
+        )}
+      </header>
 
-      {loading ? <p>Loading recommendations...</p> : null}
-      {error ? <p>Error: {error}</p> : null}
-      {!loading && !error ? <RecommendationList items={items} /> : null}
+      {loading && <p>Finding the best spots for tonight…</p>}
+      {!loading && error && (
+        <p style={{ color: "#b91c1c" }}>Couldn&apos;t load recommendations right now: {error}</p>
+      )}
+      {!loading && !error && recommendations.length === 0 && <p>No recommendations available yet.</p>}
+      {!loading && !error && recommendations.length > 0 && <RecommendationList items={recommendations} />}
     </main>
   );
 }

@@ -13,6 +13,7 @@ import { MOCK_VENUES } from "../data/mockVenues";
 
 const FIXED_NOW = "2026-03-09T04:00:00.000Z";
 const GENERATED_AT = "2026-03-09T04:00:00.000Z";
+const TOP_FACTOR_COUNT = 3;
 
 type SignalFactorKey = "crowdLevel" | "lineLengthMinutes" | "socialActivity" | "popularity";
 
@@ -26,13 +27,20 @@ const SIGNAL_TYPE_TO_FACTOR: Record<string, SignalFactorKey> = {
 const FACTOR_LABELS: Record<ScoreFactorKey, string> = {
   crowdLevel: "Crowd level",
   lineLength: "Line length",
-  socialActivity: "Social vibe",
-  popularity: "Popularity",
+  socialActivity: "Social energy",
+  popularity: "Buzz",
   recency: "Fresh updates",
-  confidence: "Signal confidence"
+  confidence: "Reliable check-ins"
 };
 
 const VENUES_BY_ID = new Map(MOCK_VENUES.map((venue) => [venue.id, venue]));
+
+export interface RecommendationFactor {
+  factor: ScoreFactorKey;
+  label: string;
+  contribution: number;
+  detail: string;
+}
 
 export interface ScoredRecommendation {
   id: string;
@@ -41,6 +49,8 @@ export interface ScoredRecommendation {
   score: number;
   why: string;
   factors: string[];
+  topFactors: RecommendationFactor[];
+  explanation: string;
   generatedAt: string;
 }
 
@@ -54,13 +64,26 @@ function toNumber(value: unknown): number | undefined {
 }
 
 function average(values: number[]): number | undefined {
-  if (values.length === 0) return undefined;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  if (values.length === 0) {
+    return undefined;
+  }
+
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return total / values.length;
 }
 
 function getLatestTimestamp(values: string[]): string | undefined {
-  if (values.length === 0) return undefined;
-  return values.reduce((latest, value) => (Date.parse(value) > Date.parse(latest) ? value : latest));
+  if (values.length === 0) {
+    return undefined;
+  }
+
+  return values.reduce((latest, value) => {
+    if (Date.parse(value) > Date.parse(latest)) {
+      return value;
+    }
+
+    return latest;
+  });
 }
 
 function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
@@ -69,7 +92,9 @@ function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
   const observedAtValues: string[] = [];
 
   for (const signal of MOCK_SIGNALS) {
-    if (signal.venueId !== venueId) continue;
+    if (signal.venueId !== venueId) {
+      continue;
+    }
 
     const factor = SIGNAL_TYPE_TO_FACTOR[signal.signalType];
     const signalValue = toNumber(signal.signalValue);
@@ -81,11 +106,18 @@ function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
     }
 
     const confidence = toNumber(signal.confidence);
-    if (confidence !== undefined) confidenceValues.push(confidence);
+    if (confidence !== undefined) {
+      confidenceValues.push(confidence);
+    }
+
     observedAtValues.push(signal.observedAt);
   }
 
-  if (Object.keys(buckets).length === 0 && confidenceValues.length === 0 && observedAtValues.length === 0) {
+  if (
+    Object.keys(buckets).length === 0 &&
+    confidenceValues.length === 0 &&
+    observedAtValues.length === 0
+  ) {
     return undefined;
   }
 
@@ -101,16 +133,20 @@ function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
 }
 
 function getReportsForVenue(venueId: string): RawUserReportInput[] {
-  return MOCK_REPORTS.filter((report) => report.venueId === venueId).map((report) => ({
-    reportId: report.id,
-    venueId: report.venueId,
-    crowdLevel: toNumber(report.reportData.crowdLevel),
-    lineLengthMinutes: toNumber(report.reportData.lineLengthMinutes),
-    socialActivity: toNumber(report.reportData.socialActivity),
-    popularity: toNumber(report.reportData.popularity),
-    confidence: toNumber(report.reportData.confidence),
-    reportedAt: report.reportedAt
-  }));
+  return MOCK_REPORTS.filter((report) => report.venueId === venueId).map((report) => {
+    const reportData = report.reportData;
+
+    return {
+      reportId: report.id,
+      venueId: report.venueId,
+      crowdLevel: toNumber(reportData.crowdLevel),
+      lineLengthMinutes: toNumber(reportData.lineLengthMinutes),
+      socialActivity: toNumber(reportData.socialActivity),
+      popularity: toNumber(reportData.popularity),
+      confidence: toNumber(reportData.confidence),
+      reportedAt: report.reportedAt
+    };
+  });
 }
 
 function buildScoringInput(): RawVenueScoringInput[] {
@@ -121,40 +157,82 @@ function buildScoringInput(): RawVenueScoringInput[] {
   }));
 }
 
-function toFactors(recommendation: RankedRecommendation): string[] {
-  return [...SCORE_FACTOR_KEYS]
-    .sort((a, b) => recommendation.weightedContributions[b] - recommendation.weightedContributions[a])
-    .slice(0, 3)
-    .map((factor) => FACTOR_LABELS[factor]);
+function round4(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
 }
 
-function toWhySentence(recommendation: RankedRecommendation, factors: string[]): string {
-  const score = recommendation.score;
-  const tone = score >= 0.75 ? "Great pick tonight" : score >= 0.6 ? "Solid option tonight" : "Worth checking out";
-  return `${tone} because of ${factors.slice(0, 2).join(" and ")}.`;
+function describeFactor(factor: ScoreFactorKey, adjustedValue: number): string {
+  if (factor === "crowdLevel") {
+    return adjustedValue >= 0.6 ? "Easier crowd flow right now" : "Moderate crowd pressure";
+  }
+
+  if (factor === "lineLength") {
+    return adjustedValue >= 0.6 ? "Shorter wait to get in" : "Wait time is a bit longer";
+  }
+
+  if (factor === "socialActivity") {
+    return adjustedValue >= 0.65 ? "Strong social energy" : "Steady social vibe";
+  }
+
+  if (factor === "popularity") {
+    return adjustedValue >= 0.65 ? "High buzz tonight" : "Consistent local interest";
+  }
+
+  if (factor === "recency") {
+    return adjustedValue >= 0.7 ? "Very recent check-ins" : "Mostly recent check-ins";
+  }
+
+  return adjustedValue >= 0.7 ? "Reliable signal quality" : "Mixed but usable signal quality";
+}
+
+function buildTopFactors(recommendation: RankedRecommendation): RecommendationFactor[] {
+  return [...SCORE_FACTOR_KEYS]
+    .map((factor) => ({
+      factor,
+      label: FACTOR_LABELS[factor],
+      contribution: round4(recommendation.weightedContributions[factor]),
+      detail: describeFactor(factor, recommendation.adjustedFactors[factor])
+    }))
+    .sort((left, right) => right.contribution - left.contribution)
+    .slice(0, TOP_FACTOR_COUNT);
+}
+
+function buildWhySentence(venueName: string, topFactors: RecommendationFactor[]): string {
+  const strongest = topFactors[0]?.detail?.toLowerCase() ?? "a strong overall vibe";
+  return `${venueName} is recommended because it has ${strongest}.`;
 }
 
 export function getRecommendations(): RecommendationsResponse {
-  const engineOutput = scoreAndRankVenues(buildScoringInput(), {
+  const scoringInput = buildScoringInput();
+  const engineOutput = scoreAndRankVenues(scoringInput, {
     now: FIXED_NOW,
-    ranking: { limit: 8, minScore: 0 }
+    ranking: {
+      limit: 8,
+      minScore: 0
+    }
   });
 
   const recommendations: ScoredRecommendation[] = [];
 
   for (const recommendation of engineOutput.recommendations) {
     const venue = VENUES_BY_ID.get(recommendation.venueId);
-    if (!venue) continue;
 
-    const factors = toFactors(recommendation);
+    if (!venue) {
+      continue;
+    }
+
+    const topFactors = buildTopFactors(recommendation);
+    const why = buildWhySentence(venue.name, topFactors);
 
     recommendations.push({
       id: `rec-${recommendation.rank}-${venue.id}`,
       venueName: venue.name,
       neighborhood: venue.neighborhood,
       score: recommendation.score,
-      why: toWhySentence(recommendation, factors),
-      factors,
+      why,
+      factors: topFactors.map((factor) => factor.detail),
+      topFactors,
+      explanation: why,
       generatedAt: GENERATED_AT
     });
   }
