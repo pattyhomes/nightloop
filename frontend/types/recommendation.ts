@@ -1,17 +1,10 @@
-export type RecommendationFactor = {
-  factor: "crowdLevel" | "lineLength" | "socialActivity" | "popularity" | "recency" | "confidence";
-  label: string;
-  contribution: number;
-  detail: string;
-};
-
 export type Recommendation = {
   id: string;
   venueName: string;
   neighborhood: string;
   score: number;
-  topFactors: RecommendationFactor[];
-  explanation: string;
+  why: string;
+  factors: string[];
   generatedAt: string;
 };
 

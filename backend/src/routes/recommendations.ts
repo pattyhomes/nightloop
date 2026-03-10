@@ -4,7 +4,8 @@ import { getRecommendations } from "../services/getRecommendations";
 const recommendationsRouter = Router();
 
 recommendationsRouter.get("/recommendations", (_req, res) => {
-  res.json(getRecommendations());
+  const payload = getRecommendations();
+  res.json(payload);
 });
 
 export default recommendationsRouter;
