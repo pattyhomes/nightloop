@@ -1,26 +1,18 @@
 import { Router } from "express";
+import { getRecommendations } from "../services/getRecommendations";
 
 const recommendationsRouter = Router();
 
 recommendationsRouter.get("/recommendations", (_req, res) => {
+  const recommendations = getRecommendations();
+
   res.json({
     meta: {
-      source: "starter-scaffold",
-      generatedAt: new Date().toISOString(),
-      count: 2
+      source: "mock-scoring-v1",
+      generatedAt: recommendations[0]?.generatedAt ?? new Date().toISOString(),
+      count: recommendations.length
     },
-    recommendations: [
-      {
-        id: "rec-1",
-        title: "Validate ingestion pipeline inputs",
-        score: 0.78
-      },
-      {
-        id: "rec-2",
-        title: "Tune scoring thresholds",
-        score: 0.64
-      }
-    ]
+    recommendations
   });
 });
 
