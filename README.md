@@ -1,42 +1,41 @@
 # Nightloop
 
-Nightloop is an AI-native project scaffold for building a nightly data ingestion, scoring, and agent-driven decision loop.
+Nightloop is an AI-native project scaffold for building a nightly data ingestion, scoring, and recommendation loop.
 
-## Initial layout
+## Quick start (local)
 
-- `backend/` core services and workers
-- `frontend/` operator UI
-- `data/` local datasets, fixtures, and outputs
-- `agents/` agent prompts, configs, and orchestration
-- `ingestion/` data connectors + normalization pipelines
-- `scoring/` scoring models and evaluation logic
-- `api/` API contracts and handlers
-- `docs/` architecture and implementation notes
-
-## Local dev (single command)
-
-Copy/paste these commands from the repo root:
+### 1) Install deps
 
 ```bash
-cd /Users/chuckclaw/.openclaw/workspace/nightloop
-npm install --prefix backend
-npm install --prefix frontend
+cd backend && npm install
+cd ../frontend && npm install
+cd ..
+```
+
+### 2) Configure env files
+
+```bash
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
+```
+
+### 3) Start both apps together (single command)
+
+```bash
 npm run dev
 ```
 
-That starts backend + frontend together in one terminal.
+This runs:
+- backend on `http://localhost:4000`
+- frontend on `http://localhost:3000`
 
-- backend: `http://localhost:4000`
-- frontend: `http://localhost:3000`
-
-Stop both with `Ctrl+C`.
-
-## Build checks
-
-From repo root:
+### 4) Build checks
 
 ```bash
 npm run build
 ```
+
+## Useful endpoints
+
+- `GET http://localhost:4000/health`
+- `GET http://localhost:4000/recommendations`

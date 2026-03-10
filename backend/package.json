@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/server.ts",
     "dev:local": "npm run dev",
+    "dev:watch": "npm run dev",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js"
   },

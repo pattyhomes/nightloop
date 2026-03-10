@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:local": "npm run dev",
+    "dev:watch": "npm run dev",
     "build": "next build",
     "start": "next start"
   },
