@@ -34,26 +34,33 @@ Default values are already wired for local dev:
 - backend runs at `http://localhost:4000`
 - frontend calls backend using `NEXT_PUBLIC_BACKEND_BASE_URL`
 
-### 3) Run backend
+### 3) Run backend and frontend together (exact commands)
+
+Terminal 1 (backend):
 
 ```bash
 cd backend
 npm run dev
 ```
 
-Backend env vars:
-- `NODE_ENV` (`development`, `test`, `production`)
-- `PORT` (default `4000`)
-
-### 4) Run frontend (new terminal)
+Terminal 2 (frontend):
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Frontend env vars:
-- `NEXT_PUBLIC_BACKEND_BASE_URL` (for example `http://localhost:4000`)
+Backend routes in local dev:
+- health: `GET http://localhost:4000/health`
+- recommendations: `GET http://localhost:4000/api/recommendations`
+
+### 4) Production-style backend run (build + start)
+
+```bash
+cd backend
+npm run build
+npm run start
+```
 
 ### 5) Build checks
 

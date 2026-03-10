@@ -7,9 +7,15 @@ const app = express();
 const config = loadConfig();
 
 app.use(express.json());
-app.use(healthRouter);
-app.use(recommendationsRouter);
+
+// Service health endpoint
+app.use("/", healthRouter);
+
+// API routes
+app.use("/api", recommendationsRouter);
 
 app.listen(config.port, () => {
   console.log(`nightloop-backend listening on port ${config.port}`);
+  console.log(`health: http://localhost:${config.port}/health`);
+  console.log(`recommendations: http://localhost:${config.port}/api/recommendations`);
 });
