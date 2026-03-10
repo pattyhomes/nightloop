@@ -1,16 +1,49 @@
-import RecommendationList, { RecommendationItem } from "../components/RecommendationList";
+"use client";
 
-const placeholderRecommendations: RecommendationItem[] = [
-  { id: "rec-1", title: "Review nightly ingestion anomalies", score: 0.83 },
-  { id: "rec-2", title: "Promote high-confidence opportunities", score: 0.71 }
-];
+import { useEffect, useState } from "react";
+import RecommendationList from "../components/RecommendationList";
+import { fetchRecommendations } from "../lib/api";
+import type { Recommendation } from "../types/recommendation";
 
 export default function HomePage() {
+  const [items, setItems] = useState<Recommendation[]>([]);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    async function load() {
+      try {
+        setLoading(true);
+        const data = await fetchRecommendations();
+        if (!active) return;
+        setItems(data.recommendations);
+        setGeneratedAt(data.generatedAt);
+        setError(null);
+      } catch (err) {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : "Failed to load recommendations");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <main>
-      <h1>Nightloop</h1>
-      <p>Frontend starter scaffold is running.</p>
-      <RecommendationList items={placeholderRecommendations} />
+      <h1>Nightloop Recommendations</h1>
+      {generatedAt ? <p>Batch generated at: {new Date(generatedAt).toLocaleString()}</p> : null}
+
+      {loading ? <p>Loading recommendations...</p> : null}
+      {error ? <p>Error: {error}</p> : null}
+      {!loading && !error ? <RecommendationList items={items} /> : null}
     </main>
   );
 }
