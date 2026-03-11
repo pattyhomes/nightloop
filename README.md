@@ -38,4 +38,4 @@ npm run build
 ## Useful endpoints
 
 - `GET http://localhost:4000/health`
-- `GET http://localhost:4000/recommendations`
+- `GET http://localhost:4000/api/recommendations`
