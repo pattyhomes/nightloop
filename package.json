@@ -6,6 +6,7 @@
     "dev": "bash ./scripts/dev.sh",
     "build": "npm run --prefix backend build && npm run --prefix frontend build",
     "build:backend": "npm run --prefix backend build",
-    "build:frontend": "npm run --prefix frontend build"
+    "build:frontend": "npm run --prefix frontend build",
+    "test:signal-ingestion": "npm --prefix backend exec -- tsx scripts/testSignalIngestion.ts"
   }
 }

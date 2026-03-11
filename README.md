@@ -78,3 +78,68 @@ The seed upserts venues by `slug` and stores `neighborhood` + `category` in `ven
 
 - `GET http://localhost:4000/health`
 - `GET http://localhost:4000/api/recommendations`
+
+## Signal ingestion pipeline
+
+`backend/src/services/signalIngestionService.ts` provides `ingestSignal(signalEvent)` and persists both raw signals and a lightweight recommendation snapshot per venue.
+
+Validation rules enforced by `ingestSignal`:
+
+- `venue_id`: required non-empty string
+- `signal_type`: one of `crowd_report`, `line_report`, `event_report`
+- `signal_strength`: required finite number
+- `source`: one of `user`, `scraper`, `manual`
+- `metadata`: optional object
+
+Storage + scoring behavior:
+
+- Raw signal is stored through `backend/src/dataAccess/signalRepository.ts`.
+- Latest venue signals are folded into snapshot metrics:
+  - `crowd_report` raises `popularity`
+  - `line_report` raises `wait_time`
+  - `event_report` raises `activity`
+- Snapshot is persisted through `backend/src/dataAccess/recommendationSnapshotRepository.ts`.
+
+Run the local end-to-end script:
+
+```bash
+node --import tsx scripts/testSignalIngestion.ts
+```
+
+## Signal ingestion pipeline
+
+Nightloop now includes a minimal ingestion path for normalized venue signals in:
+
+- `backend/src/services/signalIngestionService.ts`
+
+`ingestSignal(signalEvent)` validates incoming signal events, stores them through `signalRepository`, computes lightweight venue scores, and writes a recommendation snapshot through `recommendationSnapshotRepository`.
+
+Supported signal types:
+
+- `crowd_report` → increases popularity score
+- `line_report` → increases wait-time estimate
+- `event_report` → increases activity score
+
+A runnable demo script is available at:
+
+- `scripts/testSignalIngestion.ts`
+
+It generates mock signal events, ingests them, and prints snapshot updates after each insert.
+
+## Signal ingestion pipeline
+
+Nightloop includes a minimal signal ingestion pipeline service at:
+
+- `backend/src/services/signalIngestionService.ts`
+
+Local smoke check command:
+
+```bash
+npm run test:signal-ingestion
+```
+
+Optional DB-backed run:
+
+```bash
+npm --prefix backend exec -- tsx scripts/testSignalIngestion.ts --live
+```
