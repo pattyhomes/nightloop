@@ -29,6 +29,8 @@ This runs:
 - backend on `http://localhost:4000`
 - frontend on `http://localhost:3000`
 
+Local demo note: backend CORS is intentionally scoped to allow requests from `http://localhost:3000` (frontend) to `http://localhost:4000` (backend API).
+
 ### 4) Build checks
 
 ```bash
