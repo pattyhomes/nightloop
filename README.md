@@ -2,6 +2,22 @@
 
 Nightloop is an AI-native project scaffold for building a nightly data ingestion, scoring, and recommendation loop.
 
+## San Francisco MVP venue seed dataset
+
+Nightloop now includes a first-pass **MVP seed dataset** of real San Francisco nightlife venues (best-effort, approximate coordinates):
+
+- CSV seed source: `data/venues/sf_seed.csv`
+- SQL seed script: `db/seed_venues.sql`
+- Backend in-app mock dataset: `backend/src/data/mockVenues.ts`
+
+Coverage in this MVP seed:
+
+- 100 venues
+- neighborhoods: SoMa, Mission, Castro, North Beach, Marina, Lower Nob Hill/Polk, Hayes Valley
+- category mix: `club`, `bar`, `lounge`, `live_music`
+
+> Coordinates are intentionally approximate for MVP prototyping and ranking experiments.
+
 ## Quick start (local)
 
 ### 1) Install deps
@@ -36,6 +52,16 @@ Local demo note: backend CORS is intentionally scoped to allow requests from `ht
 ```bash
 npm run build
 ```
+
+## Seed workflow (Postgres)
+
+After applying `db/schema.sql`, run:
+
+```bash
+psql "$DATABASE_URL" -f db/seed_venues.sql
+```
+
+The seed upserts venues by `slug` and stores `neighborhood` + `category` in `venues.metadata`.
 
 ## Useful endpoints
 

@@ -13,6 +13,17 @@ This folder contains the baseline PostgreSQL schema for Nightloop.
 psql "$DATABASE_URL" -f db/schema.sql
 ```
 
+## Seed San Francisco venues (MVP)
+
+```bash
+psql "$DATABASE_URL" -f db/seed_venues.sql
+```
+
+- Seed source data lives in `../data/venues/sf_seed.csv`
+- Script performs an upsert on `venues.slug`
+- `metadata` includes `seed_id`, `neighborhood`, `category`, `seed_version`
+- Coordinates are best-effort approximate and intended for MVP/testing
+
 ## What is included
 
 - `venues` (with `latitude`, `longitude`, and generated PostGIS point columns)

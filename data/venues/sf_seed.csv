@@ -1,0 +1,101 @@
+id,name,neighborhood,category,latitude,longitude
+venue-audio,Audio,SoMa,club,37.780591,-122.41405
+venue-halcyon,Halcyon,SoMa,club,37.775125,-122.410482
+venue-1015-folsom,1015 Folsom,SoMa,club,37.782047,-122.402319
+venue-temple-nightclub,Temple Nightclub,SoMa,club,37.784383,-122.412935
+venue-monarch,Monarch,SoMa,club,37.777329,-122.413964
+venue-butter-sf,Butter SF,SoMa,club,37.77428,-122.405404
+venue-public-works,Public Works,SoMa,live_music,37.771398,-122.410921
+venue-great-northern,Great Northern,SoMa,club,37.780748,-122.404691
+venue-dna-lounge,DNA Lounge,SoMa,club,37.774307,-122.403893
+venue-the-endup,The EndUp,SoMa,club,37.783141,-122.414383
+venue-raven-bar,Raven Bar,SoMa,bar,37.783087,-122.401933
+venue-district-san-francisco,District San Francisco,SoMa,club,37.776104,-122.411701
+venue-oasis-arts-soma-pop-up,Oasis Arts (SoMa Pop-up),SoMa,lounge,37.785358,-122.408441
+venue-cat-club,Cat Club,SoMa,club,37.772391,-122.412759
+venue-f8-1192,F8 1192,SoMa,club,37.783712,-122.403633
+venue-el-rio,El Rio,Mission,bar,37.764107,-122.410665
+venue-make-out-room,Make-Out Room,Mission,live_music,37.760043,-122.406284
+venue-the-chapel,The Chapel,Mission,live_music,37.757678,-122.413863
+venue-valencia-room,Valencia Room,Mission,live_music,37.764441,-122.412667
+venue-blondie-s-bar,Blondie's Bar,Mission,bar,37.764926,-122.413408
+venue-the-beehive-sf,The Beehive SF,Mission,bar,37.762569,-122.422975
+venue-abv,ABV,Mission,bar,37.755418,-122.418591
+venue-trick-dog,Trick Dog,Mission,bar,37.753197,-122.41961
+venue-lolinda-bar,Lolinda Bar,Mission,lounge,37.753515,-122.418796
+venue-dr-teeth-and-the-electric-mayhem,Dr. Teeth and the Electric Mayhem,Mission,bar,37.761535,-122.417233
+venue-latin-american-club,Latin American Club,Mission,bar,37.757553,-122.420029
+venue-shotwell-s,Shotwell's,Mission,bar,37.756005,-122.40694
+venue-bender-s-bar-grill,Bender's Bar & Grill,Mission,bar,37.761721,-122.412836
+venue-zeitgeist,Zeitgeist,Mission,bar,37.754567,-122.410676
+venue-kilowatt,Kilowatt,Mission,bar,37.754451,-122.41697
+venue-the-cafe,The Cafe,Castro,club,37.768243,-122.43248
+venue-beaux,Beaux,Castro,club,37.761754,-122.431677
+venue-twin-peaks-tavern,Twin Peaks Tavern,Castro,bar,37.766043,-122.430032
+venue-440-castro,440 Castro,Castro,bar,37.756836,-122.443422
+venue-moby-dick,Moby Dick,Castro,bar,37.758132,-122.439181
+venue-toad-hall,Toad Hall,Castro,bar,37.756565,-122.427028
+venue-last-call,Last Call,Castro,bar,37.766546,-122.438336
+venue-badlands,Badlands,Castro,club,37.763232,-122.436879
+venue-the-mix,The Mix,Castro,bar,37.767118,-122.435741
+venue-hi-tops,Hi Tops,Castro,bar,37.757373,-122.439561
+venue-lookout,Lookout,Castro,bar,37.761821,-122.439271
+venue-midnight-sun,Midnight Sun,Castro,bar,37.762169,-122.427839
+venue-the-edge,The Edge,Castro,bar,37.759391,-122.440052
+venue-pilsner-inn,Pilsner Inn,Castro,bar,37.768363,-122.434829
+venue-harvey-s,Harvey's,Castro,bar,37.754764,-122.443152
+venue-the-saloon,The Saloon,North Beach,live_music,37.795945,-122.406806
+venue-comstock-saloon,Comstock Saloon,North Beach,bar,37.806181,-122.410501
+venue-tony-nik-s-cafe,Tony Nik's Cafe,North Beach,bar,37.795253,-122.411231
+venue-15-romolo,15 Romolo,North Beach,lounge,37.809242,-122.408576
+venue-bodega-north-beach,Bodega North Beach,North Beach,bar,37.808866,-122.402606
+venue-specs-twelve-adler-museum-cafe,Specs' Twelve Adler Museum Cafe,North Beach,bar,37.794472,-122.405127
+venue-maggie-mcgarry-s,Maggie McGarry's,North Beach,bar,37.804526,-122.408435
+venue-the-boardroom,The Boardroom,North Beach,bar,37.798302,-122.406563
+venue-savoy-tivoli,Savoy Tivoli,North Beach,bar,37.795973,-122.410274
+venue-belle-cora,Belle Cora,North Beach,bar,37.801106,-122.400931
+venue-vesuvio-cafe,Vesuvio Cafe,North Beach,bar,37.807438,-122.413359
+venue-tupelo,Tupelo,North Beach,live_music,37.801809,-122.414884
+venue-gino-carlo,Gino & Carlo,North Beach,bar,37.807989,-122.402431
+venue-li-po-lounge,Li Po Lounge,North Beach,lounge,37.798777,-122.406599
+venue-columbus-cafe,Columbus Cafe,North Beach,bar,37.803435,-122.415349
+venue-balboa-cafe,Balboa Cafe,Marina,bar,37.805138,-122.436891
+venue-white-rabbit,White Rabbit,Marina,bar,37.805379,-122.437054
+venue-westwood,Westwood,Marina,bar,37.793709,-122.440765
+venue-the-tipsy-pig,The Tipsy Pig,Marina,bar,37.793992,-122.429876
+venue-palm-house,Palm House,Marina,bar,37.806881,-122.43163
+venue-monaghan-s,Monaghan's,Marina,bar,37.798313,-122.445557
+venue-the-dorian,The Dorian,Marina,bar,37.80687,-122.429555
+venue-reed-greenough,Reed & Greenough,Marina,bar,37.794985,-122.437852
+venue-silver-cloud,Silver Cloud,Marina,bar,37.794738,-122.432909
+venue-the-blue-light,The Blue Light,Marina,live_music,37.805188,-122.444289
+venue-the-brixton,The Brixton,Marina,bar,37.800829,-122.436704
+venue-campus-sf,Campus SF,Marina,bar,37.797676,-122.430896
+venue-del-mar,Del Mar,Marina,lounge,37.800047,-122.442788
+venue-lush-lounge,Lush Lounge,Marina,lounge,37.801789,-122.433461
+venue-the-patio,The Patio,Marina,bar,37.796717,-122.440989
+venue-kozy-kar,Kozy Kar,Lower Nob Hill/Polk,bar,37.797327,-122.418302
+venue-mayes-oyster-house,Mayes Oyster House,Lower Nob Hill/Polk,bar,37.788972,-122.420684
+venue-mcteague-s-saloon,McTeague's Saloon,Lower Nob Hill/Polk,bar,37.784215,-122.425955
+venue-hemlock-tavern-annex,Hemlock Tavern Annex,Lower Nob Hill/Polk,bar,37.787471,-122.41941
+venue-harper-rye,Harper & Rye,Lower Nob Hill/Polk,bar,37.785852,-122.426036
+venue-route-101,Route 101,Lower Nob Hill/Polk,bar,37.783465,-122.41864
+venue-polkcha,Polkcha,Lower Nob Hill/Polk,lounge,37.785834,-122.413702
+venue-hi-lo-club,Hi-Lo Club,Lower Nob Hill/Polk,bar,37.795295,-122.428725
+venue-decodance-bar,Decodance Bar,Lower Nob Hill/Polk,bar,37.78597,-122.417958
+venue-r-bar,R Bar,Lower Nob Hill/Polk,bar,37.785614,-122.427618
+venue-nite-cap,Nite Cap,Lower Nob Hill/Polk,bar,37.796433,-122.419721
+venue-jackalope,Jackalope,Lower Nob Hill/Polk,bar,37.78949,-122.415877
+venue-rouge-nightclub,Rouge Nightclub,Lower Nob Hill/Polk,club,37.794512,-122.426573
+venue-peacekeeper,Peacekeeper,Lower Nob Hill/Polk,bar,37.783854,-122.422241
+venue-stookey-s-club-moderne,Stookey's Club Moderne,Lower Nob Hill/Polk,lounge,37.788754,-122.421594
+venue-linden-room,Linden Room,Hayes Valley,lounge,37.779836,-122.420979
+venue-absinthe-brasserie-bar,Absinthe Brasserie Bar,Hayes Valley,bar,37.783662,-122.431328
+venue-anina,Anina,Hayes Valley,bar,37.774939,-122.426993
+venue-hazie-s,Hazie’s,Hayes Valley,bar,37.781825,-122.428624
+venue-sugar-lounge,Sugar Lounge,Hayes Valley,lounge,37.771753,-122.425025
+venue-smuggler-s-cove,Smuggler's Cove,Hayes Valley,bar,37.775228,-122.428086
+venue-phonobar,Phonobar,Hayes Valley,live_music,37.772647,-122.416481
+venue-brass-tacks,Brass Tacks,Hayes Valley,bar,37.775547,-122.417596
+venue-fig-thistle,Fig & Thistle,Hayes Valley,bar,37.777155,-122.432189
+venue-rich-table-bar,Rich Table Bar,Hayes Valley,lounge,37.783889,-122.418052
