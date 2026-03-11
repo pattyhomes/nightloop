@@ -29,8 +29,17 @@ psql "$DATABASE_URL" -f db/seed_venues.sql
 - `venues` (with `latitude`, `longitude`, and generated PostGIS point columns)
 - `signals` (venue-level observations/signals)
 - `reports` (user-submitted venue reports)
-- `recommendations` (ranked output linked to venues and optional reports)
+- `recommendation_snapshots` (ranked output rows grouped by `snapshot_id` and linked to venues/reports)
 - Primary keys, timestamps, update triggers, and practical indexes for MVP queries
+
+## Backend storage access (MVP)
+
+Simple Postgres data-access repositories now live in:
+
+- `backend/src/dataAccess/signalRepository.ts`
+- `backend/src/dataAccess/recommendationSnapshotRepository.ts`
+
+These provide minimal read/write helpers for signal ingestion outputs and recommendation snapshot persistence.
 
 ## Notes
 

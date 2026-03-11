@@ -73,13 +73,15 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE INDEX IF NOT EXISTS idx_reports_venue_id ON reports (venue_id);
 CREATE INDEX IF NOT EXISTS idx_reports_status_reported_at ON reports (status, reported_at DESC);
 
-CREATE TABLE IF NOT EXISTS recommendations (
+CREATE TABLE IF NOT EXISTS recommendation_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  snapshot_id UUID NOT NULL,
   venue_id UUID NOT NULL REFERENCES venues(id) ON DELETE CASCADE,
   report_id UUID REFERENCES reports(id) ON DELETE SET NULL,
-  rationale TEXT,
-  score NUMERIC(6,5) NOT NULL,
   rank INTEGER,
+  score NUMERIC(6,5) NOT NULL,
+  rationale TEXT,
+  factors JSONB NOT NULL DEFAULT '[]'::jsonb,
   recommendation_data JSONB NOT NULL DEFAULT '{}'::jsonb,
   generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ,
@@ -87,9 +89,12 @@ CREATE TABLE IF NOT EXISTS recommendations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_recommendations_venue_id ON recommendations (venue_id);
-CREATE INDEX IF NOT EXISTS idx_recommendations_score_generated ON recommendations (score DESC, generated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_recommendations_expires_at ON recommendations (expires_at);
+CREATE INDEX IF NOT EXISTS idx_recommendation_snapshots_snapshot_id_rank
+  ON recommendation_snapshots (snapshot_id, rank);
+CREATE INDEX IF NOT EXISTS idx_recommendation_snapshots_venue_id
+  ON recommendation_snapshots (venue_id);
+CREATE INDEX IF NOT EXISTS idx_recommendation_snapshots_generated_at
+  ON recommendation_snapshots (generated_at DESC);
 
 DROP TRIGGER IF EXISTS trg_venues_updated_at ON venues;
 CREATE TRIGGER trg_venues_updated_at
@@ -106,7 +111,7 @@ CREATE TRIGGER trg_reports_updated_at
 BEFORE UPDATE ON reports
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-DROP TRIGGER IF EXISTS trg_recommendations_updated_at ON recommendations;
-CREATE TRIGGER trg_recommendations_updated_at
-BEFORE UPDATE ON recommendations
+DROP TRIGGER IF EXISTS trg_recommendation_snapshots_updated_at ON recommendation_snapshots;
+CREATE TRIGGER trg_recommendation_snapshots_updated_at
+BEFORE UPDATE ON recommendation_snapshots
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();

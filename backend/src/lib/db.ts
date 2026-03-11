@@ -1,9 +1,4 @@
-/**
- * Nightloop DB starter module.
- *
- * This is intentionally minimal until a DB client dependency is selected
- * (e.g. `pg`, `postgres`, Prisma, Drizzle).
- */
+import { Pool, type QueryResult as PgQueryResult, type QueryResultRow } from "pg";
 
 export interface QueryResult<T = unknown> {
   rows: T[];
@@ -15,13 +10,37 @@ export interface DBClient {
   close?(): Promise<void>;
 }
 
-class UnconfiguredDBClient implements DBClient {
-  async query<T = unknown>(_text: string, _params: unknown[] = []): Promise<QueryResult<T>> {
-    throw new Error('DB client not configured. Wire a postgres client in backend/src/lib/db.ts');
+class PgDBClient implements DBClient {
+  private readonly pool: Pool;
+
+  constructor(connectionString: string) {
+    this.pool = new Pool({ connectionString });
+  }
+
+  async query<T = unknown>(text: string, params: unknown[] = []): Promise<QueryResult<T>> {
+    const result: PgQueryResult<QueryResultRow> = await this.pool.query(text, params);
+    return {
+      rows: result.rows as T[],
+      rowCount: result.rowCount ?? 0
+    };
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 }
 
-let client: DBClient = new UnconfiguredDBClient();
+class UnconfiguredDBClient implements DBClient {
+  async query<T = unknown>(_text: string, _params: unknown[] = []): Promise<QueryResult<T>> {
+    throw new Error(
+      "DB client not configured. Set DATABASE_URL or wire a custom client with setDBClient()."
+    );
+  }
+}
+
+let client: DBClient = process.env.DATABASE_URL
+  ? new PgDBClient(process.env.DATABASE_URL)
+  : new UnconfiguredDBClient();
 
 export function setDBClient(nextClient: DBClient): void {
   client = nextClient;

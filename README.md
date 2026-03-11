@@ -53,6 +53,17 @@ Local demo note: backend CORS is intentionally scoped to allow requests from `ht
 npm run build
 ```
 
+## Storage model (Postgres MVP)
+
+`db/schema.sql` now defines four core persistence tables for the signal pipeline foundation:
+
+- `venues`
+- `signals`
+- `reports`
+- `recommendation_snapshots`
+
+`recommendation_snapshots` stores ranked rows per generation run via `snapshot_id`.
+
 ## Seed workflow (Postgres)
 
 After applying `db/schema.sql`, run:
