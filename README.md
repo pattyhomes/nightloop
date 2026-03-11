@@ -143,3 +143,16 @@ Optional DB-backed run:
 ```bash
 npm --prefix backend exec -- tsx scripts/testSignalIngestion.ts --live
 ```
+
+## Snapshot-backed recommendations test
+
+Run a local in-memory verification of the signal → snapshot → recommendations path:
+
+```bash
+npm --prefix backend exec -- tsx scripts/testRecommendationsFromSnapshots.ts
+```
+
+The script ingests sample signals, verifies latest recommendation snapshot rows exist, and asserts `getRecommendations()` returns snapshot-backed output.
+
+## Codex path verification
+Nightloop codex path verification marker.

@@ -10,6 +10,7 @@ import {
 import { MOCK_REPORTS } from "../data/mockReports";
 import { MOCK_SIGNALS } from "../data/mockSignals";
 import { MOCK_VENUES } from "../data/mockVenues";
+import { listLatestRecommendationSnapshots } from "../dataAccess/recommendationSnapshotRepository";
 
 const FIXED_NOW = "2026-03-09T04:00:00.000Z";
 const GENERATED_AT = "2026-03-09T04:00:00.000Z";
@@ -64,26 +65,14 @@ function toNumber(value: unknown): number | undefined {
 }
 
 function average(values: number[]): number | undefined {
-  if (values.length === 0) {
-    return undefined;
-  }
-
+  if (values.length === 0) return undefined;
   const total = values.reduce((sum, value) => sum + value, 0);
   return total / values.length;
 }
 
 function getLatestTimestamp(values: string[]): string | undefined {
-  if (values.length === 0) {
-    return undefined;
-  }
-
-  return values.reduce((latest, value) => {
-    if (Date.parse(value) > Date.parse(latest)) {
-      return value;
-    }
-
-    return latest;
-  });
+  if (values.length === 0) return undefined;
+  return values.reduce((latest, value) => (Date.parse(value) > Date.parse(latest) ? value : latest));
 }
 
 function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
@@ -92,9 +81,7 @@ function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
   const observedAtValues: string[] = [];
 
   for (const signal of MOCK_SIGNALS) {
-    if (signal.venueId !== venueId) {
-      continue;
-    }
+    if (signal.venueId !== venueId) continue;
 
     const factor = SIGNAL_TYPE_TO_FACTOR[signal.signalType];
     const signalValue = toNumber(signal.signalValue);
@@ -106,18 +93,12 @@ function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
     }
 
     const confidence = toNumber(signal.confidence);
-    if (confidence !== undefined) {
-      confidenceValues.push(confidence);
-    }
+    if (confidence !== undefined) confidenceValues.push(confidence);
 
     observedAtValues.push(signal.observedAt);
   }
 
-  if (
-    Object.keys(buckets).length === 0 &&
-    confidenceValues.length === 0 &&
-    observedAtValues.length === 0
-  ) {
+  if (Object.keys(buckets).length === 0 && confidenceValues.length === 0 && observedAtValues.length === 0) {
     return undefined;
   }
 
@@ -135,7 +116,6 @@ function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
 function getReportsForVenue(venueId: string): RawUserReportInput[] {
   return MOCK_REPORTS.filter((report) => report.venueId === venueId).map((report) => {
     const reportData = report.reportData;
-
     return {
       reportId: report.id,
       venueId: report.venueId,
@@ -162,26 +142,11 @@ function round4(value: number): number {
 }
 
 function describeFactor(factor: ScoreFactorKey, adjustedValue: number): string {
-  if (factor === "crowdLevel") {
-    return adjustedValue >= 0.6 ? "Easier crowd flow right now" : "Moderate crowd pressure";
-  }
-
-  if (factor === "lineLength") {
-    return adjustedValue >= 0.6 ? "Shorter wait to get in" : "Wait time is a bit longer";
-  }
-
-  if (factor === "socialActivity") {
-    return adjustedValue >= 0.65 ? "Strong social energy" : "Steady social vibe";
-  }
-
-  if (factor === "popularity") {
-    return adjustedValue >= 0.65 ? "High buzz tonight" : "Consistent local interest";
-  }
-
-  if (factor === "recency") {
-    return adjustedValue >= 0.7 ? "Very recent check-ins" : "Mostly recent check-ins";
-  }
-
+  if (factor === "crowdLevel") return adjustedValue >= 0.6 ? "Easier crowd flow right now" : "Moderate crowd pressure";
+  if (factor === "lineLength") return adjustedValue >= 0.6 ? "Shorter wait to get in" : "Wait time is a bit longer";
+  if (factor === "socialActivity") return adjustedValue >= 0.65 ? "Strong social energy" : "Steady social vibe";
+  if (factor === "popularity") return adjustedValue >= 0.65 ? "High buzz tonight" : "Consistent local interest";
+  if (factor === "recency") return adjustedValue >= 0.7 ? "Very recent check-ins" : "Mostly recent check-ins";
   return adjustedValue >= 0.7 ? "Reliable signal quality" : "Mixed but usable signal quality";
 }
 
@@ -202,24 +167,18 @@ function buildWhySentence(venueName: string, topFactors: RecommendationFactor[])
   return `${venueName} is recommended because it has ${strongest}.`;
 }
 
-export function getRecommendations(): RecommendationsResponse {
+function fallbackMockRecommendations(): RecommendationsResponse {
   const scoringInput = buildScoringInput();
   const engineOutput = scoreAndRankVenues(scoringInput, {
     now: FIXED_NOW,
-    ranking: {
-      limit: 8,
-      minScore: 0
-    }
+    ranking: { limit: 8, minScore: 0 }
   });
 
   const recommendations: ScoredRecommendation[] = [];
 
   for (const recommendation of engineOutput.recommendations) {
     const venue = VENUES_BY_ID.get(recommendation.venueId);
-
-    if (!venue) {
-      continue;
-    }
+    if (!venue) continue;
 
     const topFactors = buildTopFactors(recommendation);
     const why = buildWhySentence(venue.name, topFactors);
@@ -237,8 +196,55 @@ export function getRecommendations(): RecommendationsResponse {
     });
   }
 
+  return { generatedAt: GENERATED_AT, recommendations };
+}
+
+function toText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export async function getRecommendations(): Promise<RecommendationsResponse> {
+  const snapshots = await listLatestRecommendationSnapshots(8);
+
+  if (snapshots.length === 0) {
+    return fallbackMockRecommendations();
+  }
+
+  const recommendations: ScoredRecommendation[] = snapshots.map((snapshot, index) => {
+    const recommendationData = snapshot.recommendationData ?? {};
+    const venue = VENUES_BY_ID.get(snapshot.venueId);
+    const venueName = toText(recommendationData.venue_name) ?? venue?.name ?? `Venue ${snapshot.venueId.slice(0, 8)}`;
+    const neighborhood = toText(recommendationData.neighborhood) ?? venue?.neighborhood ?? "Unknown";
+    const why = toText(snapshot.rationale) ?? `${venueName} surfaced from fresh signal snapshots.`;
+    const factorDetails = Array.isArray(snapshot.factors)
+      ? snapshot.factors
+          .map((factor) => {
+            if (!factor || typeof factor !== "object") return undefined;
+            const detail = toText((factor as Record<string, unknown>).detail);
+            if (detail) return detail;
+            const factorName = toText((factor as Record<string, unknown>).factor);
+            const value = (factor as Record<string, unknown>).value;
+            if (factorName && typeof value === "number") return `${factorName}: ${value}`;
+            return factorName;
+          })
+          .filter((value): value is string => Boolean(value))
+      : [];
+
+    return {
+      id: `rec-snapshot-${index + 1}-${snapshot.id}`,
+      venueName,
+      neighborhood,
+      score: snapshot.score,
+      why,
+      factors: factorDetails,
+      topFactors: [],
+      explanation: why,
+      generatedAt: snapshot.generatedAt
+    };
+  });
+
   return {
-    generatedAt: GENERATED_AT,
+    generatedAt: recommendations[0]?.generatedAt ?? new Date().toISOString(),
     recommendations
   };
 }

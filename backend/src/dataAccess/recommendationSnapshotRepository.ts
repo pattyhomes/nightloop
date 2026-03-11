@@ -121,3 +121,50 @@ export async function listRecommendationSnapshots(
 
   return result.rows.map(toRecommendationSnapshot);
 }
+
+export async function listLatestRecommendationSnapshots(limit = 8): Promise<RecommendationSnapshot[]> {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 8;
+
+  const result = await dbQuery<RecommendationSnapshotRow>(
+    `
+      WITH latest_per_venue AS (
+        SELECT DISTINCT ON (venue_id)
+          id,
+          snapshot_id,
+          venue_id,
+          report_id,
+          rank,
+          score,
+          rationale,
+          factors,
+          recommendation_data,
+          generated_at,
+          expires_at,
+          created_at,
+          updated_at
+        FROM recommendation_snapshots
+        ORDER BY venue_id, generated_at DESC, created_at DESC
+      )
+      SELECT
+        id,
+        snapshot_id,
+        venue_id,
+        report_id,
+        rank,
+        score,
+        rationale,
+        factors,
+        recommendation_data,
+        generated_at,
+        expires_at,
+        created_at,
+        updated_at
+      FROM latest_per_venue
+      ORDER BY score DESC, generated_at DESC
+      LIMIT $1
+    `,
+    [safeLimit]
+  );
+
+  return result.rows.map(toRecommendationSnapshot);
+}
