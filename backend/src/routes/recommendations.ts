@@ -10,6 +10,7 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
     res.json({
       generatedAt: data.generatedAt,
       recommendations: data.recommendations.map((rec) => ({
+        id: rec.id,
         venueName: rec.venueName,
         neighborhood: rec.neighborhood,
         score: rec.score,
