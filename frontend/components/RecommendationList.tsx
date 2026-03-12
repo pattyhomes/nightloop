@@ -11,6 +11,16 @@ function formatSignalType(signalType: string | null): string {
   return signalType.replace(/_/g, " ");
 }
 
+function formatCount(value: number, singular: string, plural = `${singular}s`): string {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function formatUpdatedAgo(minutes: number): string {
+  if (minutes <= 0) return "Updated just now";
+  if (minutes === 1) return "Updated 1 min ago";
+  return `Updated ${minutes} min ago`;
+}
+
 function formatPulseLevel(pulseLevel: Recommendation["pulseLevel"]): string {
   if (pulseLevel >= 3) return "High";
   if (pulseLevel >= 2) return "Medium";
@@ -36,6 +46,14 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
     <div style={{ display: "grid", gap: 16 }}>
       {items.map((item) => {
         const pulseTone = getPulseTone(item.pulseLevel);
+        const provenanceLine = `${formatUpdatedAgo(item.lastUpdatedAgoMinutes)} • ${formatCount(
+          item.userSignalCount,
+          "user report"
+        )}${
+          item.platformSignalCount > 0
+            ? ` • ${formatCount(item.platformSignalCount, "platform signal")}`
+            : ""
+        }`;
 
         return (
           <article
@@ -55,6 +73,7 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
 
             <p style={{ marginTop: 6, marginBottom: 10, color: "#4b5563" }}>{item.neighborhood}</p>
             <p style={{ marginTop: 0, marginBottom: 12, color: "#111827" }}>{item.why}</p>
+            <p style={{ marginTop: -4, marginBottom: 12, color: "#6b7280", fontSize: 13 }}>{provenanceLine}</p>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
               <span

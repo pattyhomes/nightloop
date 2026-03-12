@@ -22,7 +22,10 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
         recentSignalCount: rec.recentSignalCount,
         pulseLevel: rec.pulseLevel,
         confidenceLabel: rec.confidenceLabel,
-        sourceSummary: rec.sourceSummary
+        sourceSummary: rec.sourceSummary,
+        userSignalCount: rec.userSignalCount,
+        platformSignalCount: rec.platformSignalCount,
+        lastUpdatedAgoMinutes: rec.lastUpdatedAgoMinutes
       }))
     });
   } catch (error) {

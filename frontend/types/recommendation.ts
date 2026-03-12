@@ -12,6 +12,9 @@ export type Recommendation = {
   pulseLevel: 1 | 2 | 3;
   confidenceLabel: "Low" | "Medium" | "High";
   sourceSummary: string;
+  userSignalCount: number;
+  platformSignalCount: number;
+  lastUpdatedAgoMinutes: number;
 };
 
 export type RecommendationsResponse = {
