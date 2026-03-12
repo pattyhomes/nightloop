@@ -16,6 +16,7 @@ import type { Signal } from "../types/signal";
 
 const FIXED_NOW = "2026-03-09T04:00:00.000Z";
 const GENERATED_AT = "2026-03-09T04:00:00.000Z";
+const RECOMMENDATION_LIMIT = 8;
 const TOP_FACTOR_COUNT = 3;
 const RECENT_SIGNAL_WINDOW_MINUTES = 180;
 const RECENT_ACTIVITY_LIMIT = 6;
@@ -581,7 +582,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
   const scoringInput = buildScoringInput();
   const engineOutput = scoreAndRankVenues(scoringInput, {
     now: FIXED_NOW,
-    ranking: { limit: 8, minScore: 0 }
+    ranking: { limit: RECOMMENDATION_LIMIT, minScore: 0 }
   });
 
   const recommendations: ScoredRecommendation[] = [];
@@ -733,11 +734,23 @@ function buildSourceSummary(
     : `Signal mix: ${mixLabel}.${sourcesSuffix}`;
 }
 
+function compareRecommendations(left: ScoredRecommendation, right: ScoredRecommendation): number {
+  if (right.score !== left.score) {
+    return right.score - left.score;
+  }
+
+  const rightGeneratedAt = Date.parse(right.generatedAt);
+  const leftGeneratedAt = Date.parse(left.generatedAt);
+  const rightTime = Number.isNaN(rightGeneratedAt) ? 0 : rightGeneratedAt;
+  const leftTime = Number.isNaN(leftGeneratedAt) ? 0 : leftGeneratedAt;
+  return rightTime - leftTime;
+}
+
 export async function getRecommendations(): Promise<RecommendationsResponse> {
   let snapshots: Awaited<ReturnType<typeof listLatestRecommendationSnapshots>>;
 
   try {
-    snapshots = await listLatestRecommendationSnapshots(8);
+    snapshots = await listLatestRecommendationSnapshots(RECOMMENDATION_LIMIT);
   } catch (error) {
     console.warn("[recommendations] Falling back to mock recommendations:", error);
     return fallbackMockRecommendations();
@@ -868,8 +881,25 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
     })
   );
 
+  if (recommendations.length >= RECOMMENDATION_LIMIT) {
+    recommendations.sort(compareRecommendations);
+    return {
+      generatedAt: getLatestTimestamp(recommendations.map((item) => item.generatedAt)) ?? new Date().toISOString(),
+      recommendations
+    };
+  }
+
+  // Snapshot rows are often written per-venue after user signals; merge into baseline instead of replacing the list.
+  const baseline = fallbackMockRecommendations();
+  const snapshotByVenueId = new Map(recommendations.map((item) => [item.venueId, item]));
+  const mergedRecommendations = baseline.recommendations.map(
+    (item) => snapshotByVenueId.get(item.venueId) ?? item
+  );
+  mergedRecommendations.sort(compareRecommendations);
+
   return {
-    generatedAt: recommendations[0]?.generatedAt ?? new Date().toISOString(),
-    recommendations
+    generatedAt:
+      getLatestTimestamp(mergedRecommendations.map((item) => item.generatedAt)) ?? baseline.generatedAt,
+    recommendations: mergedRecommendations
   };
 }
