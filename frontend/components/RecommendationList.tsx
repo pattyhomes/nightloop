@@ -1,3 +1,4 @@
+import Link from "next/link";
 import SignalButtons from "./SignalButtons";
 import { Recommendation } from "../types/recommendation";
 
@@ -67,7 +68,11 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-              <h3 style={{ margin: 0, fontSize: 22 }}>{item.venueName}</h3>
+              <h3 style={{ margin: 0, fontSize: 22 }}>
+                <Link href={`/venue/${encodeURIComponent(item.id)}`} style={{ color: "#111827", textDecoration: "none" }}>
+                  {item.venueName}
+                </Link>
+              </h3>
               <span style={{ fontWeight: 600, color: "#111827" }}>Score {item.score.toFixed(2)}</span>
             </div>
 
@@ -140,6 +145,12 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
                 </li>
               ))}
             </ul>
+
+            <p style={{ marginTop: 12, marginBottom: 0 }}>
+              <Link href={`/venue/${encodeURIComponent(item.id)}`} style={{ color: "#1d4ed8", fontWeight: 600 }}>
+                View full venue details
+              </Link>
+            </p>
 
             <SignalButtons venueId={item.id} onSubmitted={onSignalSubmitted} />
           </article>
