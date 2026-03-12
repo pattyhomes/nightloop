@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import SignalButtons from "./SignalButtons";
 import { Recommendation } from "../types/recommendation";
 
@@ -6,6 +7,24 @@ type RecommendationListProps = {
   items: Recommendation[];
   onSignalSubmitted?: () => void;
 };
+
+type SortMode = "default" | "highestPulse" | "mostRecentActivity" | "easiestEntry";
+
+type EntryEaseSignal = {
+  waitMinutes: number | null;
+  keywordScore: number | null;
+};
+
+type PreparedRecommendation = {
+  item: Recommendation;
+  entryEase: EntryEaseSignal;
+};
+
+const WAIT_MINUTES_PATTERN = /(\d+(?:\.\d+)?)\s*(?:minute|min)\b/i;
+const POSITIVE_ENTRY_PATTERN =
+  /fast entry|easy entry|quick entry|shorter wait|short wait|manageable wait|minimal wait|no line/;
+const NEGATIVE_ENTRY_PATTERN =
+  /long wait|longer wait|line is long|long line|hard to get in|crowded entry|wait time is a bit longer/;
 
 function formatSignalType(signalType: string | null): string {
   if (!signalType) return "Unknown";
@@ -38,14 +57,233 @@ function getPulseTone(pulseLevel: Recommendation["pulseLevel"]): { text: string;
   return { text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
 }
 
+function extractWaitMinutes(text: string): number | null {
+  const match = text.match(WAIT_MINUTES_PATTERN);
+  if (!match) return null;
+
+  const parsed = Number.parseFloat(match[1]);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function getEntryEaseSignal(item: Recommendation): EntryEaseSignal {
+  const lines = [item.why, item.sourceSummary, ...item.factors];
+  let waitMinutes: number | null = null;
+  let keywordScore: number | null = null;
+
+  for (const line of lines) {
+    const normalized = line.toLowerCase();
+    const hasEntryContext = /wait|line|entry/.test(normalized);
+    const minutes = extractWaitMinutes(line);
+
+    if (hasEntryContext && minutes !== null) {
+      waitMinutes = waitMinutes === null ? minutes : Math.min(waitMinutes, minutes);
+    }
+
+    if (POSITIVE_ENTRY_PATTERN.test(normalized)) {
+      keywordScore = keywordScore === null ? 2 : Math.max(keywordScore, 2);
+      continue;
+    }
+
+    if (NEGATIVE_ENTRY_PATTERN.test(normalized)) {
+      keywordScore = keywordScore === null ? 0 : Math.max(keywordScore, 0);
+      continue;
+    }
+
+    if (hasEntryContext) {
+      keywordScore = keywordScore === null ? 1 : Math.max(keywordScore, 1);
+    }
+  }
+
+  return { waitMinutes, keywordScore };
+}
+
+function compareDefault(left: Recommendation, right: Recommendation): number {
+  return right.score - left.score;
+}
+
+function compareEasiestEntry(left: PreparedRecommendation, right: PreparedRecommendation): number {
+  if (left.entryEase.waitMinutes !== null || right.entryEase.waitMinutes !== null) {
+    if (left.entryEase.waitMinutes === null) return 1;
+    if (right.entryEase.waitMinutes === null) return -1;
+    if (left.entryEase.waitMinutes !== right.entryEase.waitMinutes) {
+      return left.entryEase.waitMinutes - right.entryEase.waitMinutes;
+    }
+  }
+
+  if (left.entryEase.keywordScore !== null || right.entryEase.keywordScore !== null) {
+    if (left.entryEase.keywordScore === null) return 1;
+    if (right.entryEase.keywordScore === null) return -1;
+    if (left.entryEase.keywordScore !== right.entryEase.keywordScore) {
+      return right.entryEase.keywordScore - left.entryEase.keywordScore;
+    }
+  }
+
+  return compareDefault(left.item, right.item);
+}
+
 export default function RecommendationList({ items, onSignalSubmitted }: RecommendationListProps) {
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState<string>("all");
+  const [sortMode, setSortMode] = useState<SortMode>("default");
+
+  const neighborhoods = useMemo(() => {
+    return [...new Set(items.map((item) => item.neighborhood))].sort((left, right) =>
+      left.localeCompare(right)
+    );
+  }, [items]);
+
+  const preparedItems = useMemo<PreparedRecommendation[]>(
+    () =>
+      items.map((item) => ({
+        item,
+        entryEase: getEntryEaseSignal(item)
+      })),
+    [items]
+  );
+
+  const hasEasiestEntryData = useMemo(
+    () =>
+      preparedItems.some(
+        ({ entryEase }) => entryEase.waitMinutes !== null || entryEase.keywordScore !== null
+      ),
+    [preparedItems]
+  );
+
+  useEffect(() => {
+    if (selectedNeighborhood !== "all" && !neighborhoods.includes(selectedNeighborhood)) {
+      setSelectedNeighborhood("all");
+    }
+  }, [neighborhoods, selectedNeighborhood]);
+
+  useEffect(() => {
+    if (sortMode === "easiestEntry" && !hasEasiestEntryData) {
+      setSortMode("default");
+    }
+  }, [hasEasiestEntryData, sortMode]);
+
+  const visibleItems = useMemo(() => {
+    const filtered = preparedItems.filter(({ item }) => {
+      if (selectedNeighborhood === "all") return true;
+      return item.neighborhood === selectedNeighborhood;
+    });
+
+    filtered.sort((left, right) => {
+      if (sortMode === "highestPulse") {
+        if (right.item.pulseLevel !== left.item.pulseLevel) {
+          return right.item.pulseLevel - left.item.pulseLevel;
+        }
+        return compareDefault(left.item, right.item);
+      }
+
+      if (sortMode === "mostRecentActivity") {
+        if (left.item.lastUpdatedAgoMinutes !== right.item.lastUpdatedAgoMinutes) {
+          return left.item.lastUpdatedAgoMinutes - right.item.lastUpdatedAgoMinutes;
+        }
+        return compareDefault(left.item, right.item);
+      }
+
+      if (sortMode === "easiestEntry") {
+        return compareEasiestEntry(left, right);
+      }
+
+      return compareDefault(left.item, right.item);
+    });
+
+    return filtered.map(({ item }) => item);
+  }, [preparedItems, selectedNeighborhood, sortMode]);
+
+  const sortOptions: Array<{ value: SortMode; label: string }> = useMemo(() => {
+    const options: Array<{ value: SortMode; label: string }> = [
+      { value: "default", label: "Recommended" },
+      { value: "highestPulse", label: "Highest pulse" },
+      { value: "mostRecentActivity", label: "Most recent activity" }
+    ];
+
+    if (hasEasiestEntryData) {
+      options.push({ value: "easiestEntry", label: "Easiest entry" });
+    }
+
+    return options;
+  }, [hasEasiestEntryData]);
+
   if (items.length === 0) {
     return <p>No recommendations yet.</p>;
   }
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      {items.map((item) => {
+      <section
+        style={{
+          display: "grid",
+          gap: 10,
+          border: "1px solid #e5e7eb",
+          borderRadius: 12,
+          background: "#f9fafb",
+          padding: 12
+        }}
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#374151", fontSize: 14 }}>
+            Neighborhood
+            <select
+              aria-label="Filter by neighborhood"
+              value={selectedNeighborhood}
+              onChange={(event) => setSelectedNeighborhood(event.target.value)}
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: 8,
+                padding: "6px 10px",
+                background: "#ffffff",
+                color: "#111827",
+                fontSize: 14
+              }}
+            >
+              <option value="all">All neighborhoods</option>
+              {neighborhoods.map((neighborhood) => (
+                <option key={neighborhood} value={neighborhood}>
+                  {neighborhood}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {sortOptions.map((option) => {
+              const active = sortMode === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setSortMode(option.value)}
+                  style={{
+                    borderRadius: 999,
+                    border: active ? "1px solid #93c5fd" : "1px solid #d1d5db",
+                    background: active ? "#eff6ff" : "#ffffff",
+                    color: active ? "#1d4ed8" : "#374151",
+                    padding: "6px 12px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer"
+                  }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>
+          Showing {visibleItems.length} of {items.length} venues
+        </p>
+      </section>
+
+      {visibleItems.length === 0 && (
+        <p style={{ margin: 0, color: "#6b7280" }}>
+          No venues match this neighborhood right now.
+        </p>
+      )}
+
+      {visibleItems.map((item) => {
         const pulseTone = getPulseTone(item.pulseLevel);
         const provenanceLine = `${formatUpdatedAgo(item.lastUpdatedAgoMinutes)} • ${formatCount(
           item.userSignalCount,
