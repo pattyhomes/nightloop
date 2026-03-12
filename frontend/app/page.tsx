@@ -1,34 +1,92 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import RecommendationList from "../components/RecommendationList";
 import { fetchRecommendations } from "../lib/api";
 import { Recommendation } from "../types/recommendation";
+
+const LIVE_REFRESH_INTERVAL_MS = 2000;
+const LIVE_REFRESH_WINDOW_MS = 12000;
 
 export default function HomePage() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const refreshIntervalRef = useRef<number | null>(null);
+  const refreshFetchInFlightRef = useRef(false);
 
-  useEffect(() => {
-    const loadRecommendations = async () => {
+  const loadRecommendations = useCallback(
+    async ({ showLoading = false, surfaceError = true }: { showLoading?: boolean; surfaceError?: boolean } = {}) => {
       try {
-        setLoading(true);
-        setError(null);
+        if (showLoading) {
+          setLoading(true);
+        }
+
+        if (surfaceError) {
+          setError(null);
+        }
 
         const data = await fetchRecommendations();
         setRecommendations(data.recommendations);
         setGeneratedAt(data.generatedAt);
+        setError(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unknown error");
+        if (surfaceError) {
+          setError(err instanceof Error ? err.message : "Unknown error");
+        }
       } finally {
-        setLoading(false);
+        if (showLoading) {
+          setLoading(false);
+        }
+      }
+    },
+    []
+  );
+
+  const clearLiveRefresh = useCallback(() => {
+    if (refreshIntervalRef.current !== null) {
+      window.clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    }
+  }, []);
+
+  const scheduleLiveRefresh = useCallback(() => {
+    clearLiveRefresh();
+    const refreshUntil = Date.now() + LIVE_REFRESH_WINDOW_MS;
+
+    const tick = async () => {
+      if (refreshFetchInFlightRef.current) return;
+      refreshFetchInFlightRef.current = true;
+      try {
+        await loadRecommendations({ surfaceError: false });
+      } finally {
+        refreshFetchInFlightRef.current = false;
       }
     };
 
-    void loadRecommendations();
-  }, []);
+    void tick();
+    refreshIntervalRef.current = window.setInterval(() => {
+      if (Date.now() >= refreshUntil) {
+        clearLiveRefresh();
+        return;
+      }
+
+      void tick();
+    }, LIVE_REFRESH_INTERVAL_MS);
+  }, [clearLiveRefresh, loadRecommendations]);
+
+  useEffect(() => {
+    void loadRecommendations({ showLoading: true });
+
+    return () => {
+      clearLiveRefresh();
+    };
+  }, [clearLiveRefresh, loadRecommendations]);
+
+  const handleSignalSubmitted = useCallback(() => {
+    scheduleLiveRefresh();
+  }, [scheduleLiveRefresh]);
 
   return (
     <main
@@ -59,7 +117,9 @@ export default function HomePage() {
         <p style={{ color: "#b91c1c" }}>Couldn&apos;t load recommendations right now: {error}</p>
       )}
       {!loading && !error && recommendations.length === 0 && <p>No recommendations available yet.</p>}
-      {!loading && !error && recommendations.length > 0 && <RecommendationList items={recommendations} />}
+      {!loading && !error && recommendations.length > 0 && (
+        <RecommendationList items={recommendations} onSignalSubmitted={handleSignalSubmitted} />
+      )}
     </main>
   );
 }

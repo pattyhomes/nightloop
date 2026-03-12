@@ -3,6 +3,7 @@ import { submitSignal, SignalSubmission } from "../lib/api";
 
 type SignalButtonsProps = {
   venueId: string;
+  onSubmitted?: () => void;
 };
 
 type SignalOption = {
@@ -20,7 +21,7 @@ const SIGNAL_OPTIONS: SignalOption[] = [
   { emoji: "🎧", label: "Event happening", signal_type: "event_report", signal_strength: 80 }
 ];
 
-export default function SignalButtons({ venueId }: SignalButtonsProps) {
+export default function SignalButtons({ venueId, onSubmitted }: SignalButtonsProps) {
   const [submittingLabel, setSubmittingLabel] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -37,6 +38,7 @@ export default function SignalButtons({ venueId }: SignalButtonsProps) {
       });
 
       setStatusMessage(`Sent: ${option.emoji} ${option.label}`);
+      onSubmitted?.();
     } catch {
       setStatusMessage("Couldn’t send signal. Please try again.");
     } finally {

@@ -3,6 +3,7 @@ import { Recommendation } from "../types/recommendation";
 
 type RecommendationListProps = {
   items: Recommendation[];
+  onSignalSubmitted?: () => void;
 };
 
 function formatSignalType(signalType: string | null): string {
@@ -10,7 +11,7 @@ function formatSignalType(signalType: string | null): string {
   return signalType.replace(/_/g, " ");
 }
 
-export default function RecommendationList({ items }: RecommendationListProps) {
+export default function RecommendationList({ items, onSignalSubmitted }: RecommendationListProps) {
   if (items.length === 0) {
     return <p>No recommendations yet.</p>;
   }
@@ -61,7 +62,7 @@ export default function RecommendationList({ items }: RecommendationListProps) {
             ))}
           </ul>
 
-          <SignalButtons venueId={item.id} />
+          <SignalButtons venueId={item.id} onSubmitted={onSignalSubmitted} />
         </article>
       ))}
     </div>
