@@ -44,6 +44,9 @@ export default function HomePage() {
         <p style={{ marginTop: 8, color: "#4b5563", fontSize: 17 }}>
           Tonight&apos;s venue recommendations, ranked by live signals, recent check-ins, and signal provenance.
         </p>
+        <p style={{ marginTop: 8, color: "#6b7280", fontSize: 14 }}>
+          Tap a quick signal under any venue to share what it feels like right now.
+        </p>
         {generatedAt && !loading && (
           <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>
             Updated {new Date(generatedAt).toLocaleString()}

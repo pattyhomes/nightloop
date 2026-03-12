@@ -1,3 +1,4 @@
+import SignalButtons from "./SignalButtons";
 import { Recommendation } from "../types/recommendation";
 
 type RecommendationListProps = {
@@ -59,6 +60,8 @@ export default function RecommendationList({ items }: RecommendationListProps) {
               </li>
             ))}
           </ul>
+
+          <SignalButtons venueId={item.id} />
         </article>
       ))}
     </div>
