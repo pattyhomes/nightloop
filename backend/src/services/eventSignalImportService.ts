@@ -1,6 +1,6 @@
 import { readFile } from "fs/promises";
 import path from "path";
-import { ingestSignal, type IngestSignalResult, type SignalEventInput } from "../../../nightloop/backend/src/services/signalIngestionService";
+import { ingestSignal, type IngestSignalResult, type SignalEventInput, type SignalType, type SignalSource } from "./signalIngestionService";
 
 const ALLOWED_SIGNAL_TYPES = new Set(["crowd_report", "line_report", "event_report"]);
 const ALLOWED_SOURCES = new Set(["user", "scraper", "manual"]);
@@ -73,9 +73,9 @@ function validateSignalRecord(value: unknown, index: number): { valid: true; rec
     valid: true,
     record: {
       venue_id: venueId,
-      signal_type: signalType,
+      signal_type: signalType as SignalType,
       signal_strength: signalStrength,
-      source,
+      source: source as SignalSource,
       metadata: metadata as Record<string, unknown> | undefined,
       observed_at: observedAt as string | undefined,
       confidence: confidence as number | null | undefined
