@@ -1,0 +1,37 @@
+[
+  {
+    "venue_id": "venue_001",
+    "signal_type": "event_report",
+    "signal_strength": 82,
+    "source": "manual",
+    "metadata": {
+      "event_name": "DJ Night",
+      "expected_capacity": 280
+    },
+    "observed_at": "2026-03-10T03:30:00.000Z",
+    "confidence": 0.92
+  },
+  {
+    "venue_id": "venue_001",
+    "signal_type": "crowd_report",
+    "signal_strength": 68,
+    "source": "user",
+    "metadata": {
+      "section": "main_floor"
+    },
+    "observed_at": "2026-03-10T03:40:00.000Z",
+    "confidence": 0.81
+  },
+  {
+    "venue_id": "venue_014",
+    "signal_type": "line_report",
+    "signal_strength": 41,
+    "source": "scraper",
+    "metadata": {
+      "wait_minutes": 18,
+      "provider": "internal_feed"
+    },
+    "observed_at": "2026-03-10T03:45:00.000Z",
+    "confidence": 0.73
+  }
+]
