@@ -39,8 +39,8 @@ interface SnapshotMetrics {
   wait_time: number;
   activity: number;
   score: number;
-  pulseLevel: "low" | "medium" | "high";
-  confidenceLabel: "Low confidence" | "Medium confidence" | "High confidence";
+  pulseLevel: 1 | 2 | 3;
+  confidenceLabel: "Low" | "Medium" | "High";
   recentSignalCount: number;
   signalCount: number;
 }
@@ -83,16 +83,16 @@ function computeFreshnessWeight(ageMinutes: number | undefined): number {
   return Math.pow(0.5, ageMinutes / FRESHNESS_HALFLIFE_MINUTES);
 }
 
-function toPulseLevel(value: number): "low" | "medium" | "high" {
-  if (value >= 0.7) return "high";
-  if (value >= 0.4) return "medium";
-  return "low";
+function toPulseLevel(value: number): 1 | 2 | 3 {
+  if (value >= 0.7) return 3;
+  if (value >= 0.4) return 2;
+  return 1;
 }
 
-function toConfidenceLabel(value: number): "Low confidence" | "Medium confidence" | "High confidence" {
-  if (value >= 0.7) return "High confidence";
-  if (value >= 0.4) return "Medium confidence";
-  return "Low confidence";
+function toConfidenceLabel(value: number): "Low" | "Medium" | "High" {
+  if (value >= 0.7) return "High";
+  if (value >= 0.4) return "Medium";
+  return "Low";
 }
 
 function validateSignalEvent(input: SignalEventInput): void {

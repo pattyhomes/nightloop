@@ -12,14 +12,16 @@ function formatSignalType(signalType: string | null): string {
 }
 
 function formatPulseLevel(pulseLevel: Recommendation["pulseLevel"]): string {
-  return pulseLevel.charAt(0).toUpperCase() + pulseLevel.slice(1);
+  if (pulseLevel >= 3) return "High";
+  if (pulseLevel >= 2) return "Medium";
+  return "Low";
 }
 
 function getPulseTone(pulseLevel: Recommendation["pulseLevel"]): { text: string; background: string; border: string } {
-  if (pulseLevel === "high") {
+  if (pulseLevel >= 3) {
     return { text: "#92400e", background: "#fffbeb", border: "#fde68a" };
   }
-  if (pulseLevel === "medium") {
+  if (pulseLevel >= 2) {
     return { text: "#1f2937", background: "#f3f4f6", border: "#d1d5db" };
   }
   return { text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
