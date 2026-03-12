@@ -483,6 +483,26 @@ function toText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function isPlaceholderVenueName(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^Venue\s+v-\d+$/i.test(value.trim());
+}
+
+function isPlaceholderNeighborhood(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.trim().toLowerCase() === "unknown";
+}
+
+function chooseVenueName(...candidates: Array<string | undefined>): string | undefined {
+  const nonPlaceholder = candidates.find((candidate) => candidate && !isPlaceholderVenueName(candidate));
+  return nonPlaceholder ?? candidates.find(Boolean);
+}
+
+function chooseNeighborhood(...candidates: Array<string | undefined>): string | undefined {
+  const nonPlaceholder = candidates.find((candidate) => candidate && !isPlaceholderNeighborhood(candidate));
+  return nonPlaceholder ?? candidates.find(Boolean);
+}
+
 function humanizeSignalType(signalType: string | null): string | null {
   if (!signalType) return null;
   return signalType.replace(/_/g, " ");
@@ -556,19 +576,21 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
           ? (recommendationData.venue as Record<string, unknown>)
           : undefined;
       const venueName =
-        toText(recommendationData.venue_name) ??
-        toText(recommendationData.venueName) ??
-        toText(recommendationData.name) ??
-        toText(metadataVenue?.name) ??
-        venue?.name ??
-        `Venue ${snapshot.venueId.slice(0, 8)}`;
+        chooseVenueName(
+          toText(metadataVenue?.name),
+          venue?.name,
+          toText(recommendationData.venue_name),
+          toText(recommendationData.venueName),
+          toText(recommendationData.name)
+        ) ?? `Venue ${snapshot.venueId.slice(0, 8)}`;
       const neighborhood =
-        toText(recommendationData.neighborhood) ??
-        toText(recommendationData.venue_neighborhood) ??
-        toText(recommendationData.venueNeighborhood) ??
-        toText(metadataVenue?.neighborhood) ??
-        venue?.neighborhood ??
-        "Unknown";
+        chooseNeighborhood(
+          toText(metadataVenue?.neighborhood),
+          venue?.neighborhood,
+          toText(recommendationData.neighborhood),
+          toText(recommendationData.venue_neighborhood),
+          toText(recommendationData.venueNeighborhood)
+        ) ?? "Unknown";
       const snapshotRationale = toText(snapshot.rationale) ?? null;
       const factorDetails = Array.isArray(snapshot.factors)
         ? snapshot.factors.map(formatFactorEntry).filter((value): value is string => Boolean(value))

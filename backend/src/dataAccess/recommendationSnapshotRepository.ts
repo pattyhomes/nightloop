@@ -22,19 +22,38 @@ interface RecommendationSnapshotRow {
   updated_at: string;
 }
 
+function toText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isPlaceholderVenueName(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^Venue\s+v-\d+$/i.test(value.trim());
+}
+
+function isPlaceholderNeighborhood(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.trim().toLowerCase() === "unknown";
+}
+
 function toRecommendationSnapshot(row: RecommendationSnapshotRow): RecommendationSnapshot {
   const recommendationData = { ...row.recommendation_data };
 
-  if (row.venue_name && recommendationData.venue_name === undefined && recommendationData.venueName === undefined) {
+  const existingVenueName =
+    toText(recommendationData.venue_name) ??
+    toText(recommendationData.venueName) ??
+    toText(recommendationData.name);
+
+  if (row.venue_name && (!existingVenueName || isPlaceholderVenueName(existingVenueName))) {
     recommendationData.venue_name = row.venue_name;
   }
 
-  if (
-    row.venue_neighborhood &&
-    recommendationData.neighborhood === undefined &&
-    recommendationData.venue_neighborhood === undefined &&
-    recommendationData.venueNeighborhood === undefined
-  ) {
+  const existingNeighborhood =
+    toText(recommendationData.neighborhood) ??
+    toText(recommendationData.venue_neighborhood) ??
+    toText(recommendationData.venueNeighborhood);
+
+  if (row.venue_neighborhood && (!existingNeighborhood || isPlaceholderNeighborhood(existingNeighborhood))) {
     recommendationData.neighborhood = row.venue_neighborhood;
   }
 
