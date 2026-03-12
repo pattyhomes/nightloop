@@ -15,7 +15,10 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
         score: rec.score,
         why: rec.why,
         factors: rec.factors,
-        generatedAt: rec.generatedAt
+        generatedAt: rec.generatedAt,
+        lastSignalType: rec.lastSignalType,
+        signalCount: rec.signalCount,
+        sourceSummary: rec.sourceSummary
       }))
     });
   } catch (error) {

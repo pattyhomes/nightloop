@@ -4,6 +4,11 @@ type RecommendationListProps = {
   items: Recommendation[];
 };
 
+function formatSignalType(signalType: string | null): string {
+  if (!signalType) return "Unknown";
+  return signalType.replace(/_/g, " ");
+}
+
 export default function RecommendationList({ items }: RecommendationListProps) {
   if (items.length === 0) {
     return <p>No recommendations yet.</p>;
@@ -29,6 +34,23 @@ export default function RecommendationList({ items }: RecommendationListProps) {
 
           <p style={{ marginTop: 6, marginBottom: 10, color: "#4b5563" }}>{item.neighborhood}</p>
           <p style={{ marginTop: 0, marginBottom: 12, color: "#111827" }}>{item.why}</p>
+
+          <div
+            style={{
+              marginBottom: 12,
+              padding: "10px 12px",
+              borderRadius: 10,
+              background: "#f9fafb",
+              border: "1px solid #f3f4f6"
+            }}
+          >
+            <p style={{ margin: 0, color: "#111827", fontSize: 14 }}>
+              Last signal: <strong>{formatSignalType(item.lastSignalType)}</strong>
+              {" · "}
+              Count: <strong>{item.signalCount}</strong>
+            </p>
+            <p style={{ margin: "6px 0 0", color: "#4b5563", fontSize: 13 }}>{item.sourceSummary}</p>
+          </div>
 
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {item.factors.slice(0, 3).map((factor, idx) => (

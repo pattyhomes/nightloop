@@ -42,7 +42,7 @@ export default function HomePage() {
       <header style={{ marginBottom: 24 }}>
         <h1 style={{ margin: 0, fontSize: 34 }}>Nightloop</h1>
         <p style={{ marginTop: 8, color: "#4b5563", fontSize: 17 }}>
-          Tonight&apos;s venue recommendations, ranked by live signals and recent check-ins.
+          Tonight&apos;s venue recommendations, ranked by live signals, recent check-ins, and signal provenance.
         </p>
         {generatedAt && !loading && (
           <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>

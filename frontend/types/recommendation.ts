@@ -6,6 +6,9 @@ export type Recommendation = {
   why: string;
   factors: string[];
   generatedAt: string;
+  lastSignalType: string | null;
+  signalCount: number;
+  sourceSummary: string;
 };
 
 export type RecommendationsResponse = {

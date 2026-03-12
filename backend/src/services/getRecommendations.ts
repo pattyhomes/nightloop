@@ -11,6 +11,8 @@ import { MOCK_REPORTS } from "../data/mockReports";
 import { MOCK_SIGNALS } from "../data/mockSignals";
 import { MOCK_VENUES } from "../data/mockVenues";
 import { listLatestRecommendationSnapshots } from "../dataAccess/recommendationSnapshotRepository";
+import { listSignalsForVenue } from "../dataAccess/signalRepository";
+import type { Signal } from "../types/signal";
 
 const FIXED_NOW = "2026-03-09T04:00:00.000Z";
 const GENERATED_AT = "2026-03-09T04:00:00.000Z";
@@ -53,6 +55,9 @@ export interface ScoredRecommendation {
   topFactors: RecommendationFactor[];
   explanation: string;
   generatedAt: string;
+  lastSignalType: string | null;
+  signalCount: number;
+  sourceSummary: string;
 }
 
 export interface RecommendationsResponse {
@@ -62,6 +67,12 @@ export interface RecommendationsResponse {
 
 function toNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function toPositiveInt(value: unknown): number | undefined {
+  const numeric = toNumber(value);
+  if (numeric === undefined) return undefined;
+  return Math.max(0, Math.round(numeric));
 }
 
 function average(values: number[]): number | undefined {
@@ -192,7 +203,10 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       factors: topFactors.map((factor) => factor.detail),
       topFactors,
       explanation: why,
-      generatedAt: GENERATED_AT
+      generatedAt: GENERATED_AT,
+      lastSignalType: null,
+      signalCount: 0,
+      sourceSummary: "Snapshot provenance unavailable for mock recommendations."
     });
   }
 
@@ -203,6 +217,38 @@ function toText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function humanizeSignalType(signalType: string | null): string | null {
+  if (!signalType) return null;
+  return signalType.replace(/_/g, " ");
+}
+
+function buildSourceSummary(signals: Signal[], fallbackSignalCount: number, lastSignalType: string | null): string {
+  if (signals.length === 0) {
+    if (fallbackSignalCount > 0 && lastSignalType) {
+      const typeLabel = humanizeSignalType(lastSignalType) ?? "signal";
+      return `${fallbackSignalCount} recent ${typeLabel} signal${fallbackSignalCount === 1 ? "" : "s"}; source mix unavailable.`;
+    }
+
+    if (fallbackSignalCount > 0) {
+      return `${fallbackSignalCount} recent signal${fallbackSignalCount === 1 ? "" : "s"}; source mix unavailable.`;
+    }
+
+    return "No recent signal provenance found.";
+  }
+
+  const countsBySource = new Map<string, number>();
+  for (const signal of signals) {
+    const source = toText(signal.source) ?? "unknown";
+    countsBySource.set(source, (countsBySource.get(source) ?? 0) + 1);
+  }
+
+  const sourceParts = [...countsBySource.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([source, count]) => `${count} ${source}`);
+
+  return `Recent source mix: ${sourceParts.join(", ")}.`;
+}
+
 export async function getRecommendations(): Promise<RecommendationsResponse> {
   const snapshots = await listLatestRecommendationSnapshots(8);
 
@@ -210,38 +256,53 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
     return fallbackMockRecommendations();
   }
 
-  const recommendations: ScoredRecommendation[] = snapshots.map((snapshot, index) => {
-    const recommendationData = snapshot.recommendationData ?? {};
-    const venue = VENUES_BY_ID.get(snapshot.venueId);
-    const venueName = toText(recommendationData.venue_name) ?? venue?.name ?? `Venue ${snapshot.venueId.slice(0, 8)}`;
-    const neighborhood = toText(recommendationData.neighborhood) ?? venue?.neighborhood ?? "Unknown";
-    const why = toText(snapshot.rationale) ?? `${venueName} surfaced from fresh signal snapshots.`;
-    const factorDetails = Array.isArray(snapshot.factors)
-      ? snapshot.factors
-          .map((factor) => {
-            if (!factor || typeof factor !== "object") return undefined;
-            const detail = toText((factor as Record<string, unknown>).detail);
-            if (detail) return detail;
-            const factorName = toText((factor as Record<string, unknown>).factor);
-            const value = (factor as Record<string, unknown>).value;
-            if (factorName && typeof value === "number") return `${factorName}: ${value}`;
-            return factorName;
-          })
-          .filter((value): value is string => Boolean(value))
-      : [];
+  const recommendations: ScoredRecommendation[] = await Promise.all(
+    snapshots.map(async (snapshot, index) => {
+      const recommendationData = snapshot.recommendationData ?? {};
+      const venue = VENUES_BY_ID.get(snapshot.venueId);
+      const venueName = toText(recommendationData.venue_name) ?? venue?.name ?? `Venue ${snapshot.venueId.slice(0, 8)}`;
+      const neighborhood = toText(recommendationData.neighborhood) ?? venue?.neighborhood ?? "Unknown";
+      const why = toText(snapshot.rationale) ?? `${venueName} surfaced from fresh signal snapshots.`;
+      const factorDetails = Array.isArray(snapshot.factors)
+        ? snapshot.factors
+            .map((factor) => {
+              if (!factor || typeof factor !== "object") return undefined;
+              const detail = toText((factor as Record<string, unknown>).detail);
+              if (detail) return detail;
+              const factorName = toText((factor as Record<string, unknown>).factor);
+              const value = (factor as Record<string, unknown>).value;
+              if (factorName && typeof value === "number") return `${factorName}: ${value}`;
+              return factorName;
+            })
+            .filter((value): value is string => Boolean(value))
+        : [];
 
-    return {
-      id: `rec-snapshot-${index + 1}-${snapshot.id}`,
-      venueName,
-      neighborhood,
-      score: snapshot.score,
-      why,
-      factors: factorDetails,
-      topFactors: [],
-      explanation: why,
-      generatedAt: snapshot.generatedAt
-    };
-  });
+      const lastSignalType =
+        toText(recommendationData.last_signal_type) ?? toText(recommendationData.lastSignalType) ?? null;
+      const signalCount =
+        toPositiveInt(recommendationData.signal_count) ?? toPositiveInt(recommendationData.signalCount) ?? 0;
+      const signalsForSummary = signalCount > 0 ? await listSignalsForVenue(snapshot.venueId, Math.min(signalCount, 200)) : [];
+      const sourceSummary =
+        toText(recommendationData.source_summary) ??
+        toText(recommendationData.sourceSummary) ??
+        buildSourceSummary(signalsForSummary, signalCount, lastSignalType);
+
+      return {
+        id: `rec-snapshot-${index + 1}-${snapshot.id}`,
+        venueName,
+        neighborhood,
+        score: snapshot.score,
+        why,
+        factors: factorDetails,
+        topFactors: [],
+        explanation: why,
+        generatedAt: snapshot.generatedAt,
+        lastSignalType,
+        signalCount,
+        sourceSummary
+      };
+    })
+  );
 
   return {
     generatedAt: recommendations[0]?.generatedAt ?? new Date().toISOString(),
