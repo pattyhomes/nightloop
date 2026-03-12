@@ -14,6 +14,8 @@ interface RecommendationSnapshotRow {
   rationale: string | null;
   factors: unknown[];
   recommendation_data: Record<string, unknown>;
+  venue_name?: string | null;
+  venue_neighborhood?: string | null;
   generated_at: string;
   expires_at: string | null;
   created_at: string;
@@ -21,6 +23,21 @@ interface RecommendationSnapshotRow {
 }
 
 function toRecommendationSnapshot(row: RecommendationSnapshotRow): RecommendationSnapshot {
+  const recommendationData = { ...row.recommendation_data };
+
+  if (row.venue_name && recommendationData.venue_name === undefined && recommendationData.venueName === undefined) {
+    recommendationData.venue_name = row.venue_name;
+  }
+
+  if (
+    row.venue_neighborhood &&
+    recommendationData.neighborhood === undefined &&
+    recommendationData.venue_neighborhood === undefined &&
+    recommendationData.venueNeighborhood === undefined
+  ) {
+    recommendationData.neighborhood = row.venue_neighborhood;
+  }
+
   return {
     id: row.id,
     snapshotId: row.snapshot_id,
@@ -30,7 +47,7 @@ function toRecommendationSnapshot(row: RecommendationSnapshotRow): Recommendatio
     score: row.score,
     rationale: row.rationale,
     factors: row.factors,
-    recommendationData: row.recommendation_data,
+    recommendationData,
     generatedAt: row.generated_at,
     expiresAt: row.expires_at,
     createdAt: row.created_at,
@@ -128,22 +145,25 @@ export async function listLatestRecommendationSnapshots(limit = 8): Promise<Reco
   const result = await dbQuery<RecommendationSnapshotRow>(
     `
       WITH latest_per_venue AS (
-        SELECT DISTINCT ON (venue_id)
-          id,
-          snapshot_id,
-          venue_id,
-          report_id,
-          rank,
-          score,
-          rationale,
-          factors,
-          recommendation_data,
-          generated_at,
-          expires_at,
-          created_at,
-          updated_at
-        FROM recommendation_snapshots
-        ORDER BY venue_id, generated_at DESC, created_at DESC
+        SELECT DISTINCT ON (rs.venue_id)
+          rs.id,
+          rs.snapshot_id,
+          rs.venue_id,
+          rs.report_id,
+          rs.rank,
+          rs.score,
+          rs.rationale,
+          rs.factors,
+          rs.recommendation_data,
+          rs.generated_at,
+          rs.expires_at,
+          rs.created_at,
+          rs.updated_at,
+          v.name AS venue_name,
+          COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS venue_neighborhood
+        FROM recommendation_snapshots rs
+        LEFT JOIN venues v ON v.id = rs.venue_id
+        ORDER BY rs.venue_id, rs.generated_at DESC, rs.created_at DESC
       )
       SELECT
         id,
@@ -155,6 +175,8 @@ export async function listLatestRecommendationSnapshots(limit = 8): Promise<Reco
         rationale,
         factors,
         recommendation_data,
+        venue_name,
+        venue_neighborhood,
         generated_at,
         expires_at,
         created_at,

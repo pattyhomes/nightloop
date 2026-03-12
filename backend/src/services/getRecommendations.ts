@@ -267,8 +267,24 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
     snapshots.map(async (snapshot, index) => {
       const recommendationData = snapshot.recommendationData ?? {};
       const venue = VENUES_BY_ID.get(snapshot.venueId);
-      const venueName = toText(recommendationData.venue_name) ?? venue?.name ?? `Venue ${snapshot.venueId.slice(0, 8)}`;
-      const neighborhood = toText(recommendationData.neighborhood) ?? venue?.neighborhood ?? "Unknown";
+      const metadataVenue =
+        recommendationData.venue && typeof recommendationData.venue === "object"
+          ? (recommendationData.venue as Record<string, unknown>)
+          : undefined;
+      const venueName =
+        toText(recommendationData.venue_name) ??
+        toText(recommendationData.venueName) ??
+        toText(recommendationData.name) ??
+        toText(metadataVenue?.name) ??
+        venue?.name ??
+        `Venue ${snapshot.venueId.slice(0, 8)}`;
+      const neighborhood =
+        toText(recommendationData.neighborhood) ??
+        toText(recommendationData.venue_neighborhood) ??
+        toText(recommendationData.venueNeighborhood) ??
+        toText(metadataVenue?.neighborhood) ??
+        venue?.neighborhood ??
+        "Unknown";
       const why = toText(snapshot.rationale) ?? `${venueName} surfaced from fresh signal snapshots.`;
       const factorDetails = Array.isArray(snapshot.factors)
         ? snapshot.factors
