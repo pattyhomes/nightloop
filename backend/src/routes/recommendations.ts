@@ -27,6 +27,9 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
         userSignalCount: rec.userSignalCount,
         platformSignalCount: rec.platformSignalCount,
         lastUpdatedAgoMinutes: rec.lastUpdatedAgoMinutes,
+        energyStatus: rec.energyStatus,
+        entryStatus: rec.entryStatus,
+        trendStatus: rec.trendStatus,
         recentActivity: rec.recentActivity
       }))
     });

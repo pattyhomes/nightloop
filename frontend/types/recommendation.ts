@@ -4,6 +4,10 @@ export type RecentActivity = {
   minutesAgo: number;
 };
 
+export type EnergyStatus = "High Energy" | "Steady Energy" | "Low-Key Energy";
+export type EntryStatus = "Easy Entry" | "Manageable Line" | "Long Line";
+export type TrendStatus = "Rising" | "Steady" | "Cooling";
+
 export type Recommendation = {
   id: string;
   venueId: string;
@@ -22,6 +26,9 @@ export type Recommendation = {
   userSignalCount: number;
   platformSignalCount: number;
   lastUpdatedAgoMinutes: number;
+  energyStatus: EnergyStatus;
+  entryStatus: EntryStatus;
+  trendStatus: TrendStatus;
   recentActivity: RecentActivity[];
 };
 

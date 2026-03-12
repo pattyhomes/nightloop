@@ -57,6 +57,36 @@ function getPulseTone(pulseLevel: Recommendation["pulseLevel"]): { text: string;
   return { text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
 }
 
+function getEnergyTone(status: Recommendation["energyStatus"]): { text: string; background: string; border: string } {
+  if (status === "High Energy") {
+    return { text: "#9a3412", background: "#fff7ed", border: "#fdba74" };
+  }
+  if (status === "Steady Energy") {
+    return { text: "#374151", background: "#f3f4f6", border: "#d1d5db" };
+  }
+  return { text: "#155e75", background: "#ecfeff", border: "#67e8f9" };
+}
+
+function getEntryTone(status: Recommendation["entryStatus"]): { text: string; background: string; border: string } {
+  if (status === "Easy Entry") {
+    return { text: "#166534", background: "#f0fdf4", border: "#86efac" };
+  }
+  if (status === "Manageable Line") {
+    return { text: "#92400e", background: "#fffbeb", border: "#fcd34d" };
+  }
+  return { text: "#991b1b", background: "#fef2f2", border: "#fca5a5" };
+}
+
+function getTrendTone(status: Recommendation["trendStatus"]): { text: string; background: string; border: string } {
+  if (status === "Rising") {
+    return { text: "#166534", background: "#f0fdf4", border: "#86efac" };
+  }
+  if (status === "Steady") {
+    return { text: "#374151", background: "#f3f4f6", border: "#d1d5db" };
+  }
+  return { text: "#334155", background: "#f8fafc", border: "#cbd5e1" };
+}
+
 function extractWaitMinutes(text: string): number | null {
   const match = text.match(WAIT_MINUTES_PATTERN);
   if (!match) return null;
@@ -67,7 +97,7 @@ function extractWaitMinutes(text: string): number | null {
 }
 
 function getEntryEaseSignal(item: Recommendation): EntryEaseSignal {
-  const lines = [item.why, item.sourceSummary, ...item.factors];
+  const lines = [item.entryStatus, item.why, item.sourceSummary, ...item.factors];
   let waitMinutes: number | null = null;
   let keywordScore: number | null = null;
 
@@ -285,6 +315,9 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
 
       {visibleItems.map((item) => {
         const pulseTone = getPulseTone(item.pulseLevel);
+        const energyTone = getEnergyTone(item.energyStatus);
+        const entryTone = getEntryTone(item.entryStatus);
+        const trendTone = getTrendTone(item.trendStatus);
         const provenanceLine = `${formatUpdatedAgo(item.lastUpdatedAgoMinutes)} • ${formatCount(
           item.userSignalCount,
           "user report"
@@ -317,6 +350,48 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
             <p style={{ marginTop: 6, marginBottom: 10, color: "#4b5563" }}>{item.neighborhood}</p>
             <p style={{ marginTop: 0, marginBottom: 12, color: "#111827" }}>{item.why}</p>
             <p style={{ marginTop: -4, marginBottom: 12, color: "#6b7280", fontSize: 13 }}>{provenanceLine}</p>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+              <span
+                style={{
+                  borderRadius: 999,
+                  border: `1px solid ${energyTone.border}`,
+                  background: energyTone.background,
+                  color: energyTone.text,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  fontWeight: 600
+                }}
+              >
+                Energy: {item.energyStatus}
+              </span>
+              <span
+                style={{
+                  borderRadius: 999,
+                  border: `1px solid ${entryTone.border}`,
+                  background: entryTone.background,
+                  color: entryTone.text,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  fontWeight: 600
+                }}
+              >
+                Entry: {item.entryStatus}
+              </span>
+              <span
+                style={{
+                  borderRadius: 999,
+                  border: `1px solid ${trendTone.border}`,
+                  background: trendTone.background,
+                  color: trendTone.text,
+                  padding: "4px 10px",
+                  fontSize: 12,
+                  fontWeight: 600
+                }}
+              >
+                Trend: {item.trendStatus}
+              </span>
+            </div>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
               <span

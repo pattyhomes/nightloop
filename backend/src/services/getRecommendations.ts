@@ -19,6 +19,7 @@ const GENERATED_AT = "2026-03-09T04:00:00.000Z";
 const TOP_FACTOR_COUNT = 3;
 const RECENT_SIGNAL_WINDOW_MINUTES = 180;
 const RECENT_ACTIVITY_LIMIT = 6;
+const ENTRY_MINUTES_PRESSURE_CAP = 60;
 
 type SignalFactorKey = "crowdLevel" | "lineLengthMinutes" | "socialActivity" | "popularity";
 
@@ -38,6 +39,16 @@ const FACTOR_LABELS: Record<ScoreFactorKey, string> = {
   confidence: "Reliable check-ins"
 };
 
+const ENERGY_SIGNAL_TYPES = new Set([
+  "event_report",
+  "social_activity",
+  "popularity",
+  "crowd_report",
+  "crowd_level"
+]);
+
+const ENTRY_SIGNAL_TYPES = new Set(["line_report", "line_length_minutes"]);
+
 const VENUES_BY_ID = new Map(MOCK_VENUES.map((venue) => [venue.id, venue]));
 
 export interface RecommendationFactor {
@@ -53,7 +64,17 @@ export interface RecentSignalActivity {
   minutesAgo: number;
 }
 
-export interface ScoredRecommendation {
+export type EnergyStatus = "High Energy" | "Steady Energy" | "Low-Key Energy";
+export type EntryStatus = "Easy Entry" | "Manageable Line" | "Long Line";
+export type TrendStatus = "Rising" | "Steady" | "Cooling";
+
+export interface RecommendationStatuses {
+  energyStatus: EnergyStatus;
+  entryStatus: EntryStatus;
+  trendStatus: TrendStatus;
+}
+
+export interface ScoredRecommendation extends RecommendationStatuses {
   id: string;
   venueId: string;
   venueName: string;
@@ -409,6 +430,153 @@ function getFallbackConfidenceLabel(
   return "Low";
 }
 
+interface RecommendationStatusInput {
+  recommendationData: Record<string, unknown>;
+  signals: Signal[];
+  score: number;
+  pulseLevel: 1 | 2 | 3;
+  signalCount: number;
+  recentSignalCount: number;
+  lastUpdatedAgoMinutes: number;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSignalStrength(value: number): number {
+  if (value >= 0 && value <= 1) {
+    return value * 100;
+  }
+
+  return clamp(value, 0, 100);
+}
+
+function toMinutesPressure(value: number): number {
+  return clamp((Math.max(0, value) / ENTRY_MINUTES_PRESSURE_CAP) * 100, 0, 100);
+}
+
+function averageDefined(values: Array<number | undefined>): number | undefined {
+  const numbers = values.filter((value): value is number => value !== undefined);
+  return average(numbers);
+}
+
+function pickNumber(source: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = toNumber(source[key]);
+    if (value !== undefined) return value;
+  }
+
+  return undefined;
+}
+
+function getAverageEnergyFromSignals(signals: Signal[]): number | undefined {
+  const values: number[] = [];
+
+  for (const signal of signals) {
+    if (!ENERGY_SIGNAL_TYPES.has(signal.signalType)) continue;
+    const signalValue = toNumber(signal.signalValue);
+    if (signalValue === undefined) continue;
+    values.push(normalizeSignalStrength(signalValue));
+  }
+
+  return average(values);
+}
+
+function getAverageEntryPressureFromSignals(signals: Signal[]): number | undefined {
+  const values: number[] = [];
+
+  for (const signal of signals) {
+    if (!ENTRY_SIGNAL_TYPES.has(signal.signalType)) continue;
+    const signalValue = toNumber(signal.signalValue);
+    if (signalValue === undefined) continue;
+
+    if (signal.signalType === "line_length_minutes") {
+      values.push(toMinutesPressure(signalValue));
+      continue;
+    }
+
+    values.push(normalizeSignalStrength(signalValue));
+  }
+
+  return average(values);
+}
+
+function deriveEnergyStatus(input: RecommendationStatusInput): EnergyStatus {
+  const activityScore = pickNumber(input.recommendationData, ["activity"]);
+  const socialScore = pickNumber(input.recommendationData, ["social_activity", "socialActivity"]);
+  const popularityScore = pickNumber(input.recommendationData, ["popularity"]);
+  const dataEnergyScore = averageDefined(
+    [activityScore, socialScore, popularityScore].map((value) =>
+      value === undefined ? undefined : normalizeSignalStrength(value)
+    )
+  );
+  const signalEnergyScore = getAverageEnergyFromSignals(input.signals);
+  const fallbackEnergyScore = averageDefined([
+    input.pulseLevel === 3 ? 82 : input.pulseLevel === 2 ? 58 : 34,
+    normalizeSignalStrength(input.score)
+  ]);
+  const energyScore = dataEnergyScore ?? signalEnergyScore ?? fallbackEnergyScore ?? 0;
+
+  if (energyScore >= 70) return "High Energy";
+  if (energyScore >= 45) return "Steady Energy";
+  return "Low-Key Energy";
+}
+
+function deriveEntryStatus(input: RecommendationStatusInput): EntryStatus {
+  const waitTimeScore = pickNumber(input.recommendationData, ["wait_time", "waitTime"]);
+  const lineLengthMinutes = pickNumber(input.recommendationData, [
+    "line_length_minutes",
+    "lineLengthMinutes"
+  ]);
+  const dataEntryPressure =
+    (waitTimeScore !== undefined ? normalizeSignalStrength(waitTimeScore) : undefined) ??
+    (lineLengthMinutes !== undefined ? toMinutesPressure(lineLengthMinutes) : undefined);
+  const signalEntryPressure = getAverageEntryPressureFromSignals(input.signals);
+  const fallbackEntryPressure = averageDefined([
+    input.pulseLevel === 3 ? 35 : input.pulseLevel === 2 ? 50 : 65,
+    100 - normalizeSignalStrength(input.score)
+  ]);
+  const entryPressure = dataEntryPressure ?? signalEntryPressure ?? fallbackEntryPressure ?? 0;
+
+  if (entryPressure <= 35) return "Easy Entry";
+  if (entryPressure <= 65) return "Manageable Line";
+  return "Long Line";
+}
+
+function deriveTrendStatus(input: RecommendationStatusInput): TrendStatus {
+  if (input.signalCount <= 0) return "Cooling";
+
+  const recentRatio = input.recentSignalCount / Math.max(1, input.signalCount);
+  const isFresh = input.lastUpdatedAgoMinutes <= 20;
+
+  if (
+    input.recentSignalCount >= 5 &&
+    recentRatio >= 0.5 &&
+    isFresh &&
+    input.pulseLevel >= 2
+  ) {
+    return "Rising";
+  }
+
+  if (
+    (input.recentSignalCount >= 2 && recentRatio >= 0.25 && input.lastUpdatedAgoMinutes <= 90) ||
+    isFresh
+  ) {
+    return "Steady";
+  }
+
+  return "Cooling";
+}
+
+function deriveRecommendationStatuses(input: RecommendationStatusInput): RecommendationStatuses {
+  return {
+    energyStatus: deriveEnergyStatus(input),
+    entryStatus: deriveEntryStatus(input),
+    trendStatus: deriveTrendStatus(input)
+  };
+}
+
 function fallbackMockRecommendations(): RecommendationsResponse {
   const scoringInput = buildScoringInput();
   const engineOutput = scoreAndRankVenues(scoringInput, {
@@ -432,6 +600,20 @@ function fallbackMockRecommendations(): RecommendationsResponse {
     const recentSignalCount = countRecentSignals(mockSignals, nowMs) + userSignalCount;
     const confidenceLabel = getFallbackConfidenceLabel(signalCount, recentSignalCount);
     const lastSignalType = mockSignals[0]?.signalType ?? null;
+    const pulseLevel = scoreToPulseLevel(recommendation.score);
+    const lastUpdatedAgoMinutes = toMinutesAgo(
+      getLatestTimestamp(mockSignals.map((signal) => signal.observedAt)) ?? GENERATED_AT,
+      nowMs
+    );
+    const statuses = deriveRecommendationStatuses({
+      recommendationData: {},
+      signals: mockSignals,
+      score: recommendation.score,
+      pulseLevel,
+      signalCount,
+      recentSignalCount,
+      lastUpdatedAgoMinutes
+    });
     const why = buildSignalMixWhy(
       venue.name,
       signalCount,
@@ -457,7 +639,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       lastSignalType,
       signalCount,
       recentSignalCount,
-      pulseLevel: scoreToPulseLevel(recommendation.score),
+      pulseLevel,
       confidenceLabel,
       sourceSummary: buildSourceSummary(
         mockSignals,
@@ -468,10 +650,8 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       ),
       userSignalCount,
       platformSignalCount,
-      lastUpdatedAgoMinutes: toMinutesAgo(
-        getLatestTimestamp(mockSignals.map((signal) => signal.observedAt)) ?? GENERATED_AT,
-        nowMs
-      ),
+      lastUpdatedAgoMinutes,
+      ...statuses,
       recentActivity: buildRecentActivity(mockSignals, nowMs)
     });
   }
@@ -647,6 +827,15 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         toPositiveInt(recommendationData.last_updated_ago_minutes) ??
         toPositiveInt(recommendationData.lastUpdatedAgoMinutes) ??
         toMinutesAgo(latestSignalObservedAt ?? snapshot.generatedAt);
+      const statuses = deriveRecommendationStatuses({
+        recommendationData,
+        signals: signalsForSummary,
+        score: snapshot.score,
+        pulseLevel,
+        signalCount,
+        recentSignalCount,
+        lastUpdatedAgoMinutes
+      });
       const sourceSummary =
         toText(recommendationData.source_summary) ??
         toText(recommendationData.sourceSummary) ??
@@ -673,6 +862,7 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         userSignalCount,
         platformSignalCount,
         lastUpdatedAgoMinutes,
+        ...statuses,
         recentActivity
       };
     })

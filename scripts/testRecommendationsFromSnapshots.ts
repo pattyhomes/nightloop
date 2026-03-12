@@ -177,6 +177,18 @@ async function main(): Promise<void> {
     throw new Error("Recommendation shape is missing required snapshot-backed fields.");
   }
 
+  const allowedEnergyStatuses = new Set(["High Energy", "Steady Energy", "Low-Key Energy"]);
+  const allowedEntryStatuses = new Set(["Easy Entry", "Manageable Line", "Long Line"]);
+  const allowedTrendStatuses = new Set(["Rising", "Steady", "Cooling"]);
+
+  if (
+    !allowedEnergyStatuses.has(first.energyStatus) ||
+    !allowedEntryStatuses.has(first.entryStatus) ||
+    !allowedTrendStatuses.has(first.trendStatus)
+  ) {
+    throw new Error("Recommendation shape is missing deterministic venue status labels.");
+  }
+
   const hasSnapshotWhy = recommendations.recommendations.some((item) =>
     item.why.toLowerCase().includes("signal snapshot updated")
   );

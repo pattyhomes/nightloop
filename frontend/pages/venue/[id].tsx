@@ -40,6 +40,36 @@ function getFreshness(minutes: number): { label: string; text: string; backgroun
   return { label: "Aging", text: "#991b1b", background: "#fef2f2", border: "#fecaca" };
 }
 
+function getEnergyTone(status: Recommendation["energyStatus"]): { text: string; background: string; border: string } {
+  if (status === "High Energy") {
+    return { text: "#9a3412", background: "#fff7ed", border: "#fdba74" };
+  }
+  if (status === "Steady Energy") {
+    return { text: "#374151", background: "#f3f4f6", border: "#d1d5db" };
+  }
+  return { text: "#155e75", background: "#ecfeff", border: "#67e8f9" };
+}
+
+function getEntryTone(status: Recommendation["entryStatus"]): { text: string; background: string; border: string } {
+  if (status === "Easy Entry") {
+    return { text: "#166534", background: "#f0fdf4", border: "#86efac" };
+  }
+  if (status === "Manageable Line") {
+    return { text: "#92400e", background: "#fffbeb", border: "#fcd34d" };
+  }
+  return { text: "#991b1b", background: "#fef2f2", border: "#fca5a5" };
+}
+
+function getTrendTone(status: Recommendation["trendStatus"]): { text: string; background: string; border: string } {
+  if (status === "Rising") {
+    return { text: "#166534", background: "#f0fdf4", border: "#86efac" };
+  }
+  if (status === "Steady") {
+    return { text: "#374151", background: "#f3f4f6", border: "#d1d5db" };
+  }
+  return { text: "#334155", background: "#f8fafc", border: "#cbd5e1" };
+}
+
 export const getServerSideProps: GetServerSideProps<VenueDetailPageProps> = async (context) => {
   const id = typeof context.params?.id === "string" ? context.params.id : null;
 
@@ -99,6 +129,9 @@ export default function VenueDetailPage({
   }
 
   const freshness = getFreshness(recommendation.lastUpdatedAgoMinutes);
+  const energyTone = getEnergyTone(recommendation.energyStatus);
+  const entryTone = getEntryTone(recommendation.entryStatus);
+  const trendTone = getTrendTone(recommendation.trendStatus);
   const generatedAtDisplay = new Date(recommendation.generatedAt).toLocaleString();
 
   return (
@@ -120,6 +153,59 @@ export default function VenueDetailPage({
         <h1 style={{ marginTop: 0, marginBottom: 8, fontSize: 34 }}>{recommendation.venueName}</h1>
         <p style={{ marginTop: 0, color: "#4b5563", fontSize: 18 }}>{recommendation.neighborhood}</p>
       </header>
+
+      <section
+        style={{
+          marginBottom: 14,
+          padding: "12px 14px",
+          borderRadius: 12,
+          border: "1px solid #e5e7eb",
+          background: "#ffffff"
+        }}
+      >
+        <p style={{ margin: 0, color: "#111827", fontWeight: 600, fontSize: 14 }}>Decision-ready status</p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+          <span
+            style={{
+              borderRadius: 999,
+              border: `1px solid ${energyTone.border}`,
+              background: energyTone.background,
+              color: energyTone.text,
+              padding: "4px 10px",
+              fontSize: 13,
+              fontWeight: 600
+            }}
+          >
+            Energy: {recommendation.energyStatus}
+          </span>
+          <span
+            style={{
+              borderRadius: 999,
+              border: `1px solid ${entryTone.border}`,
+              background: entryTone.background,
+              color: entryTone.text,
+              padding: "4px 10px",
+              fontSize: 13,
+              fontWeight: 600
+            }}
+          >
+            Entry: {recommendation.entryStatus}
+          </span>
+          <span
+            style={{
+              borderRadius: 999,
+              border: `1px solid ${trendTone.border}`,
+              background: trendTone.background,
+              color: trendTone.text,
+              padding: "4px 10px",
+              fontSize: 13,
+              fontWeight: 600
+            }}
+          >
+            Trend: {recommendation.trendStatus}
+          </span>
+        </div>
+      </section>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <span
