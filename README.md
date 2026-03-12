@@ -79,6 +79,11 @@ The seed upserts venues by `slug` and stores `neighborhood` + `category` in `ven
 - `GET http://localhost:4000/health`
 - `GET http://localhost:4000/api/recommendations`
 
+Recommendations behavior:
+
+- When `DATABASE_URL` is configured and snapshots are available, `/api/recommendations` serves snapshot-backed recommendations from Postgres.
+- In local/dev environments where the DB is unavailable or unconfigured, `/api/recommendations` safely falls back to demo/mock recommendations (no crash/500).
+
 ## Signal ingestion pipeline
 
 `backend/src/services/signalIngestionService.ts` provides `ingestSignal(signalEvent)` and persists both raw signals and a lightweight recommendation snapshot per venue.

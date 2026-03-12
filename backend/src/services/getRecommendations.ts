@@ -250,7 +250,14 @@ function buildSourceSummary(signals: Signal[], fallbackSignalCount: number, last
 }
 
 export async function getRecommendations(): Promise<RecommendationsResponse> {
-  const snapshots = await listLatestRecommendationSnapshots(8);
+  let snapshots: Awaited<ReturnType<typeof listLatestRecommendationSnapshots>>;
+
+  try {
+    snapshots = await listLatestRecommendationSnapshots(8);
+  } catch (error) {
+    console.warn("[recommendations] Falling back to mock recommendations:", error);
+    return fallbackMockRecommendations();
+  }
 
   if (snapshots.length === 0) {
     return fallbackMockRecommendations();
@@ -281,7 +288,13 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         toText(recommendationData.last_signal_type) ?? toText(recommendationData.lastSignalType) ?? null;
       const signalCount =
         toPositiveInt(recommendationData.signal_count) ?? toPositiveInt(recommendationData.signalCount) ?? 0;
-      const signalsForSummary = signalCount > 0 ? await listSignalsForVenue(snapshot.venueId, Math.min(signalCount, 200)) : [];
+      const signalsForSummary =
+        signalCount > 0
+          ? await listSignalsForVenue(snapshot.venueId, Math.min(signalCount, 200)).catch((error) => {
+              console.warn("[recommendations] Failed to load signal provenance; continuing without it:", error);
+              return [];
+            })
+          : [];
       const sourceSummary =
         toText(recommendationData.source_summary) ??
         toText(recommendationData.sourceSummary) ??
