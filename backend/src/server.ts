@@ -2,6 +2,7 @@ import express from "express";
 import { loadConfig } from "./lib/config";
 import healthRouter from "./routes/health";
 import recommendationsRouter from "./routes/recommendations";
+import signalsRouter from "./routes/signals";
 
 const app = express();
 const config = loadConfig();
@@ -32,9 +33,11 @@ app.use("/", healthRouter);
 
 // API routes
 app.use("/api", recommendationsRouter);
+app.use("/api", signalsRouter);
 
 app.listen(config.port, () => {
   console.log(`nightloop-backend listening on port ${config.port}`);
   console.log(`health: http://localhost:${config.port}/health`);
   console.log(`recommendations: http://localhost:${config.port}/api/recommendations`);
+  console.log(`signals: POST http://localhost:${config.port}/api/signals`);
 });

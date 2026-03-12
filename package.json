@@ -8,6 +8,7 @@
     "build:backend": "npm run --prefix backend build",
     "build:frontend": "npm run --prefix frontend build",
     "test:signal-ingestion": "npm --prefix backend exec -- tsx scripts/testSignalIngestion.ts",
+    "test:signal-submission": "npm --prefix backend exec -- tsx scripts/testSignalSubmission.ts",
     "test:event-signal-import": "npm --prefix backend exec -- tsx scripts/testEventSignalImport.ts"
   }
 }
