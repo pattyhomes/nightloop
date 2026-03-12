@@ -55,6 +55,7 @@ export interface RecentSignalActivity {
 
 export interface ScoredRecommendation {
   id: string;
+  venueId: string;
   venueName: string;
   neighborhood: string;
   score: number;
@@ -444,6 +445,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
 
     recommendations.push({
       id: `rec-${recommendation.rank}-${venue.id}`,
+      venueId: venue.id,
       venueName: venue.name,
       neighborhood: venue.neighborhood,
       score: recommendation.score,
@@ -631,6 +633,7 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
 
       return {
         id: `rec-snapshot-${index + 1}-${snapshot.id}`,
+        venueId: snapshot.venueId,
         venueName,
         neighborhood,
         score: snapshot.score,

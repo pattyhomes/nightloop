@@ -6,6 +6,7 @@ export type RecentActivity = {
 
 export type Recommendation = {
   id: string;
+  venueId: string;
   venueName: string;
   neighborhood: string;
   score: number;

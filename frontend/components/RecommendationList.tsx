@@ -307,7 +307,7 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
               <h3 style={{ margin: 0, fontSize: 22 }}>
-                <Link href={`/venue/${encodeURIComponent(item.id)}`} style={{ color: "#111827", textDecoration: "none" }}>
+                <Link href={`/venue/${encodeURIComponent(item.venueId)}`} style={{ color: "#111827", textDecoration: "none" }}>
                   {item.venueName}
                 </Link>
               </h3>
@@ -385,12 +385,12 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
             </ul>
 
             <p style={{ marginTop: 12, marginBottom: 0 }}>
-              <Link href={`/venue/${encodeURIComponent(item.id)}`} style={{ color: "#1d4ed8", fontWeight: 600 }}>
+              <Link href={`/venue/${encodeURIComponent(item.venueId)}`} style={{ color: "#1d4ed8", fontWeight: 600 }}>
                 View full venue details
               </Link>
             </p>
 
-            <SignalButtons venueId={item.id} onSubmitted={onSignalSubmitted} />
+            <SignalButtons venueId={item.venueId} onSubmitted={onSignalSubmitted} />
           </article>
         );
       })}

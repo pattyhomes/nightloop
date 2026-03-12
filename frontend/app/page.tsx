@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RecommendationList from "../components/RecommendationList";
 import { fetchRecommendations } from "../lib/api";
@@ -104,6 +105,11 @@ export default function HomePage() {
         </p>
         <p style={{ marginTop: 8, color: "#6b7280", fontSize: 14 }}>
           Tap a quick signal under any venue to share what it feels like right now.
+        </p>
+        <p style={{ marginTop: 8, marginBottom: 0 }}>
+          <Link href="/admin/signals" style={{ color: "#1d4ed8", fontWeight: 600 }}>
+            Open admin signal entry
+          </Link>
         </p>
         {generatedAt && !loading && (
           <p style={{ marginTop: 10, color: "#6b7280", fontSize: 13 }}>

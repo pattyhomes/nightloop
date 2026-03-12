@@ -49,7 +49,7 @@ export const getServerSideProps: GetServerSideProps<VenueDetailPageProps> = asyn
 
   try {
     const data = await fetchRecommendations();
-    const recommendation = data.recommendations.find((item) => item.id === id) ?? null;
+    const recommendation = data.recommendations.find((item) => item.venueId === id) ?? null;
 
     if (!recommendation) {
       return { notFound: true };

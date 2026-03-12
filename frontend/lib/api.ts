@@ -4,7 +4,7 @@ export type SignalSubmission = {
   venue_id: string;
   signal_type: "crowd_report" | "line_report" | "event_report";
   signal_strength: number;
-  source: "user";
+  source?: "user" | "manual";
 };
 
 function getBackendBaseUrl(): string {
