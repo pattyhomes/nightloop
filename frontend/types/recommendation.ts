@@ -1,3 +1,9 @@
+export type RecentActivity = {
+  signalType: string;
+  timestamp: string;
+  minutesAgo: number;
+};
+
 export type Recommendation = {
   id: string;
   venueName: string;
@@ -15,6 +21,7 @@ export type Recommendation = {
   userSignalCount: number;
   platformSignalCount: number;
   lastUpdatedAgoMinutes: number;
+  recentActivity: RecentActivity[];
 };
 
 export type RecommendationsResponse = {

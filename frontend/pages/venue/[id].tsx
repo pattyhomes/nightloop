@@ -20,6 +20,16 @@ function formatUpdatedAgo(minutes: number): string {
   return `${minutes} minutes ago`;
 }
 
+function formatSignalType(signalType: string): string {
+  return signalType.replace(/_/g, " ");
+}
+
+function formatTimestamp(value: string): string {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return value;
+  return new Date(parsed).toLocaleString();
+}
+
 function getFreshness(minutes: number): { label: string; text: string; background: string; border: string } {
   if (minutes <= 5) {
     return { label: "Live", text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
@@ -179,6 +189,33 @@ export default function VenueDetailPage({
       >
         <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: 20 }}>Why this venue right now</h2>
         <p style={{ margin: 0, color: "#1f2937" }}>{recommendation.why}</p>
+      </section>
+
+      <section
+        style={{
+          marginBottom: 16,
+          padding: "14px 16px",
+          borderRadius: 12,
+          border: "1px solid #e5e7eb",
+          background: "#ffffff"
+        }}
+      >
+        <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: 20 }}>Recent activity</h2>
+        {recommendation.recentActivity.length === 0 ? (
+          <p style={{ margin: 0, color: "#6b7280" }}>No recent signal activity.</p>
+        ) : (
+          <ul style={{ marginTop: 0, marginBottom: 0, paddingLeft: 18 }}>
+            {recommendation.recentActivity.map((entry, idx) => (
+              <li key={`${recommendation.id}-activity-${idx}`} style={{ marginBottom: 6, color: "#374151" }}>
+                <strong>{formatSignalType(entry.signalType)}</strong>
+                {" · "}
+                {formatTimestamp(entry.timestamp)}
+                {" · "}
+                {formatUpdatedAgo(entry.minutesAgo)}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section

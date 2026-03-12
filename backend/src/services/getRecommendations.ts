@@ -18,6 +18,7 @@ const FIXED_NOW = "2026-03-09T04:00:00.000Z";
 const GENERATED_AT = "2026-03-09T04:00:00.000Z";
 const TOP_FACTOR_COUNT = 3;
 const RECENT_SIGNAL_WINDOW_MINUTES = 180;
+const RECENT_ACTIVITY_LIMIT = 6;
 
 type SignalFactorKey = "crowdLevel" | "lineLengthMinutes" | "socialActivity" | "popularity";
 
@@ -46,6 +47,12 @@ export interface RecommendationFactor {
   detail: string;
 }
 
+export interface RecentSignalActivity {
+  signalType: string;
+  timestamp: string;
+  minutesAgo: number;
+}
+
 export interface ScoredRecommendation {
   id: string;
   venueName: string;
@@ -65,6 +72,7 @@ export interface ScoredRecommendation {
   userSignalCount: number;
   platformSignalCount: number;
   lastUpdatedAgoMinutes: number;
+  recentActivity: RecentSignalActivity[];
 }
 
 export interface RecommendationsResponse {
@@ -102,6 +110,21 @@ function toMinutesAgo(timestamp: string | null | undefined, nowMs = Date.now()):
   const parsed = Date.parse(timestamp);
   if (Number.isNaN(parsed)) return 0;
   return Math.max(0, Math.floor((nowMs - parsed) / 60_000));
+}
+
+function buildRecentActivity(
+  signals: Signal[],
+  nowMs = Date.now(),
+  limit = RECENT_ACTIVITY_LIMIT
+): RecentSignalActivity[] {
+  return [...signals]
+    .sort((left, right) => Date.parse(right.observedAt) - Date.parse(left.observedAt))
+    .slice(0, limit)
+    .map((signal) => ({
+      signalType: signal.signalType,
+      timestamp: signal.observedAt,
+      minutesAgo: toMinutesAgo(signal.observedAt, nowMs)
+    }));
 }
 
 function getSignalsForVenue(venueId: string): RawVenueSignalsInput | undefined {
@@ -446,7 +469,8 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       lastUpdatedAgoMinutes: toMinutesAgo(
         getLatestTimestamp(mockSignals.map((signal) => signal.observedAt)) ?? GENERATED_AT,
         nowMs
-      )
+      ),
+      recentActivity: buildRecentActivity(mockSignals, nowMs)
     });
   }
 
@@ -603,6 +627,7 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         toText(recommendationData.source_summary) ??
         toText(recommendationData.sourceSummary) ??
         buildSourceSummary(signalsForSummary, signalCount, lastSignalType, userSignalCount, platformSignalCount);
+      const recentActivity = buildRecentActivity(signalsForSummary);
 
       return {
         id: `rec-snapshot-${index + 1}-${snapshot.id}`,
@@ -622,7 +647,8 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         sourceSummary,
         userSignalCount,
         platformSignalCount,
-        lastUpdatedAgoMinutes
+        lastUpdatedAgoMinutes,
+        recentActivity
       };
     })
   );
