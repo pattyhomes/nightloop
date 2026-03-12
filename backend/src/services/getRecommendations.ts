@@ -17,6 +17,7 @@ import type { Signal } from "../types/signal";
 const FIXED_NOW = "2026-03-09T04:00:00.000Z";
 const GENERATED_AT = "2026-03-09T04:00:00.000Z";
 const TOP_FACTOR_COUNT = 3;
+const RECENT_SIGNAL_WINDOW_MINUTES = 180;
 
 type SignalFactorKey = "crowdLevel" | "lineLengthMinutes" | "socialActivity" | "popularity";
 
@@ -57,6 +58,9 @@ export interface ScoredRecommendation {
   generatedAt: string;
   lastSignalType: string | null;
   signalCount: number;
+  recentSignalCount: number;
+  pulseLevel: "low" | "medium" | "high";
+  confidenceLabel: "Low confidence" | "Medium confidence" | "High confidence";
   sourceSummary: string;
 }
 
@@ -178,6 +182,54 @@ function buildWhySentence(venueName: string, topFactors: RecommendationFactor[])
   return `${venueName} is recommended because it has ${strongest}.`;
 }
 
+function normalizePulseLevel(value: unknown): "low" | "medium" | "high" | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high" || normalized === "medium" || normalized === "low") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function scoreToPulseLevel(score: number): "low" | "medium" | "high" {
+  if (score >= 0.7) return "high";
+  if (score >= 0.4) return "medium";
+  return "low";
+}
+
+function normalizeConfidenceLabel(
+  value: unknown
+): "Low confidence" | "Medium confidence" | "High confidence" | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high confidence") return "High confidence";
+  if (normalized === "medium confidence") return "Medium confidence";
+  if (normalized === "low confidence") return "Low confidence";
+  return undefined;
+}
+
+function countRecentSignals(signals: Signal[], nowMs = Date.now()): number {
+  return signals.reduce((count, signal) => {
+    const observedMs = Date.parse(signal.observedAt);
+    if (Number.isNaN(observedMs)) return count;
+    const ageMinutes = Math.max(0, (nowMs - observedMs) / 60_000);
+    return ageMinutes <= RECENT_SIGNAL_WINDOW_MINUTES ? count + 1 : count;
+  }, 0);
+}
+
+function getFallbackConfidenceLabel(
+  signalCount: number,
+  recentSignalCount: number
+): "Low confidence" | "Medium confidence" | "High confidence" {
+  if (recentSignalCount >= 8 || (recentSignalCount >= 5 && signalCount >= 8)) {
+    return "High confidence";
+  }
+  if (recentSignalCount >= 3 || signalCount >= 5) {
+    return "Medium confidence";
+  }
+  return "Low confidence";
+}
+
 function fallbackMockRecommendations(): RecommendationsResponse {
   const scoringInput = buildScoringInput();
   const engineOutput = scoreAndRankVenues(scoringInput, {
@@ -206,6 +258,9 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       generatedAt: GENERATED_AT,
       lastSignalType: null,
       signalCount: 0,
+      recentSignalCount: 0,
+      pulseLevel: scoreToPulseLevel(recommendation.score),
+      confidenceLabel: "Low confidence",
       sourceSummary: "Snapshot provenance unavailable for mock recommendations."
     });
   }
@@ -311,6 +366,18 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
               return [];
             })
           : [];
+      const recentSignalCount =
+        toPositiveInt(recommendationData.recent_signal_count) ??
+        toPositiveInt(recommendationData.recentSignalCount) ??
+        countRecentSignals(signalsForSummary);
+      const pulseLevel =
+        normalizePulseLevel(recommendationData.pulse_level) ??
+        normalizePulseLevel(recommendationData.pulseLevel) ??
+        scoreToPulseLevel(snapshot.score);
+      const confidenceLabel =
+        normalizeConfidenceLabel(recommendationData.confidence_label) ??
+        normalizeConfidenceLabel(recommendationData.confidenceLabel) ??
+        getFallbackConfidenceLabel(signalCount, recentSignalCount);
       const sourceSummary =
         toText(recommendationData.source_summary) ??
         toText(recommendationData.sourceSummary) ??
@@ -328,6 +395,9 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         generatedAt: snapshot.generatedAt,
         lastSignalType,
         signalCount,
+        recentSignalCount,
+        pulseLevel,
+        confidenceLabel,
         sourceSummary
       };
     })

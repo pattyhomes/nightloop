@@ -12,6 +12,9 @@ const ALLOWED_SIGNAL_TYPES = new Set(["crowd_report", "line_report", "event_repo
 const ALLOWED_SOURCES = new Set(["user", "scraper", "manual"]);
 
 const SNAPSHOT_SCALE = 0.25;
+const FRESHNESS_HALFLIFE_MINUTES = 90;
+const RECENT_SIGNAL_WINDOW_MINUTES = 180;
+const DEFAULT_SIGNAL_CONFIDENCE = 0.6;
 
 export type SignalType = "crowd_report" | "line_report" | "event_report";
 export type SignalSource = "user" | "scraper" | "manual";
@@ -36,6 +39,10 @@ interface SnapshotMetrics {
   wait_time: number;
   activity: number;
   score: number;
+  pulseLevel: "low" | "medium" | "high";
+  confidenceLabel: "Low confidence" | "Medium confidence" | "High confidence";
+  recentSignalCount: number;
+  signalCount: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,6 +67,32 @@ function round2(value: number): number {
 
 function round5(value: number): number {
   return Math.round(value * 100_000) / 100_000;
+}
+
+function toAgeMinutes(observedAt: string, nowMs: number): number | undefined {
+  const observedMs = Date.parse(observedAt);
+  if (Number.isNaN(observedMs)) {
+    return undefined;
+  }
+
+  return Math.max(0, (nowMs - observedMs) / 60_000);
+}
+
+function computeFreshnessWeight(ageMinutes: number | undefined): number {
+  if (ageMinutes === undefined) return 0;
+  return Math.pow(0.5, ageMinutes / FRESHNESS_HALFLIFE_MINUTES);
+}
+
+function toPulseLevel(value: number): "low" | "medium" | "high" {
+  if (value >= 0.7) return "high";
+  if (value >= 0.4) return "medium";
+  return "low";
+}
+
+function toConfidenceLabel(value: number): "Low confidence" | "Medium confidence" | "High confidence" {
+  if (value >= 0.7) return "High confidence";
+  if (value >= 0.4) return "Medium confidence";
+  return "Low confidence";
 }
 
 function validateSignalEvent(input: SignalEventInput): void {
@@ -103,10 +136,28 @@ function computeMetrics(signals: Signal[]): SnapshotMetrics {
   let popularity = 0;
   let waitTime = 0;
   let activity = 0;
+  let recentSignalCount = 0;
+  let freshnessWeightTotal = 0;
+  let confidenceWeightTotal = 0;
+  let weightedConfidenceTotal = 0;
+  const signalCount = signals.length;
+  const nowMs = Date.now();
 
   for (const signal of signals) {
+    const ageMinutes = toAgeMinutes(signal.observedAt, nowMs);
+    const freshnessWeight = computeFreshnessWeight(ageMinutes);
     const baseStrength = normalizeStrength(signal.signalValue ?? 0);
-    const weightedStrength = baseStrength * SNAPSHOT_SCALE;
+    const weightedStrength = baseStrength * SNAPSHOT_SCALE * freshnessWeight;
+
+    if (ageMinutes !== undefined && ageMinutes <= RECENT_SIGNAL_WINDOW_MINUTES) {
+      recentSignalCount += 1;
+    }
+
+    freshnessWeightTotal += freshnessWeight;
+
+    const signalConfidence = clamp(signal.confidence ?? DEFAULT_SIGNAL_CONFIDENCE, 0, 1);
+    weightedConfidenceTotal += signalConfidence * freshnessWeight;
+    confidenceWeightTotal += freshnessWeight;
 
     if (signal.signalType === "crowd_report") {
       popularity = clamp(popularity + weightedStrength, 0, 100);
@@ -124,12 +175,26 @@ function computeMetrics(signals: Signal[]): SnapshotMetrics {
   }
 
   const score = round5(clamp((popularity * 0.45 + activity * 0.35 + (100 - waitTime) * 0.2) / 100, 0, 1));
+  const pulseScore = clamp((popularity * 0.45 + activity * 0.45 + waitTime * 0.1) / 100, 0, 1);
+  const averageFreshness = signalCount > 0 ? clamp(freshnessWeightTotal / signalCount, 0, 1) : 0;
+  const averageConfidence =
+    confidenceWeightTotal > 0 ? clamp(weightedConfidenceTotal / confidenceWeightTotal, 0, 1) : 0;
+  const sampleScore = Math.min(1, recentSignalCount / 8);
+  const confidenceScore = clamp(
+    averageFreshness * 0.45 + averageConfidence * 0.35 + sampleScore * 0.2,
+    0,
+    1
+  );
 
   return {
     popularity: round2(popularity),
     wait_time: round2(waitTime),
     activity: round2(activity),
-    score
+    score,
+    pulseLevel: toPulseLevel(pulseScore),
+    confidenceLabel: toConfidenceLabel(confidenceScore),
+    recentSignalCount,
+    signalCount
   };
 }
 
@@ -170,8 +235,11 @@ export async function ingestSignal(signalEvent: SignalEventInput): Promise<Inges
       popularity: metrics.popularity,
       wait_time: metrics.wait_time,
       activity: metrics.activity,
+      pulse_level: metrics.pulseLevel,
+      confidence_label: metrics.confidenceLabel,
       last_signal_type: signalEvent.signal_type,
-      signal_count: recentSignals.length
+      signal_count: metrics.signalCount,
+      recent_signal_count: metrics.recentSignalCount
     },
     generatedAt
   });

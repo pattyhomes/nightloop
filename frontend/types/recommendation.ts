@@ -8,6 +8,9 @@ export type Recommendation = {
   generatedAt: string;
   lastSignalType: string | null;
   signalCount: number;
+  recentSignalCount: number;
+  pulseLevel: "low" | "medium" | "high";
+  confidenceLabel: "Low confidence" | "Medium confidence" | "High confidence";
   sourceSummary: string;
 };
 

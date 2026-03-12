@@ -19,6 +19,9 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
         generatedAt: rec.generatedAt,
         lastSignalType: rec.lastSignalType,
         signalCount: rec.signalCount,
+        recentSignalCount: rec.recentSignalCount,
+        pulseLevel: rec.pulseLevel,
+        confidenceLabel: rec.confidenceLabel,
         sourceSummary: rec.sourceSummary
       }))
     });
