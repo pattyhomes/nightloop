@@ -1,7 +1,13 @@
 import type { Signal } from "../types/signal";
 
-const FIXED_CREATED_AT = "2026-03-09T03:40:00.000Z";
-const FIXED_UPDATED_AT = "2026-03-09T03:40:00.000Z";
+// Override via NIGHTLOOP_FIXED_NOW env var (dev/test only, off by default).
+function getNowMs(): number {
+  return process.env.NIGHTLOOP_FIXED_NOW ? Date.parse(process.env.NIGHTLOOP_FIXED_NOW) : Date.now();
+}
+
+function minsAgo(n: number): string {
+  return new Date(getNowMs() - n * 60_000).toISOString();
+}
 
 type SignalBundle = {
   venueId: string;
@@ -32,8 +38,8 @@ function buildSignal(
       signalType,
       units: signalType === "line_length_minutes" ? "minutes" : "index_0_100"
     },
-    createdAt: FIXED_CREATED_AT,
-    updatedAt: FIXED_UPDATED_AT
+    createdAt: minsAgo(20),
+    updatedAt: minsAgo(20)
   };
 }
 
@@ -55,7 +61,7 @@ function buildVenueSignals(bundle: SignalBundle): Signal[] {
 export const MOCK_SIGNALS: Signal[] = [
   ...buildVenueSignals({
     venueId: "venue-monarch",
-    observedAt: "2026-03-09T03:55:00.000Z",
+    observedAt: minsAgo(5),
     confidence: 0.92,
     crowdLevel: 40,
     lineLengthMinutes: 14,
@@ -64,7 +70,7 @@ export const MOCK_SIGNALS: Signal[] = [
   }),
   ...buildVenueSignals({
     venueId: "venue-public-works",
-    observedAt: "2026-03-09T03:53:00.000Z",
+    observedAt: minsAgo(7),
     confidence: 0.9,
     crowdLevel: 48,
     lineLengthMinutes: 19,
@@ -73,7 +79,7 @@ export const MOCK_SIGNALS: Signal[] = [
   }),
   ...buildVenueSignals({
     venueId: "venue-audio-sf",
-    observedAt: "2026-03-09T03:52:00.000Z",
+    observedAt: minsAgo(8),
     confidence: 0.88,
     crowdLevel: 55,
     lineLengthMinutes: 23,
@@ -82,7 +88,7 @@ export const MOCK_SIGNALS: Signal[] = [
   }),
   ...buildVenueSignals({
     venueId: "venue-1015-folsom",
-    observedAt: "2026-03-09T03:51:00.000Z",
+    observedAt: minsAgo(9),
     confidence: 0.86,
     crowdLevel: 62,
     lineLengthMinutes: 30,
@@ -91,7 +97,7 @@ export const MOCK_SIGNALS: Signal[] = [
   }),
   ...buildVenueSignals({
     venueId: "venue-the-midway",
-    observedAt: "2026-03-09T03:50:00.000Z",
+    observedAt: minsAgo(10),
     confidence: 0.87,
     crowdLevel: 68,
     lineLengthMinutes: 36,
@@ -100,7 +106,7 @@ export const MOCK_SIGNALS: Signal[] = [
   }),
   ...buildVenueSignals({
     venueId: "venue-temple",
-    observedAt: "2026-03-09T03:49:00.000Z",
+    observedAt: minsAgo(11),
     confidence: 0.9,
     crowdLevel: 80,
     lineLengthMinutes: 52,

@@ -1,7 +1,13 @@
 import type { Report } from "../types/report";
 
-const FIXED_CREATED_AT = "2026-03-09T03:40:00.000Z";
-const FIXED_UPDATED_AT = "2026-03-09T03:40:00.000Z";
+// Override via NIGHTLOOP_FIXED_NOW env var (dev/test only, off by default).
+function getNowMs(): number {
+  return process.env.NIGHTLOOP_FIXED_NOW ? Date.parse(process.env.NIGHTLOOP_FIXED_NOW) : Date.now();
+}
+
+function minsAgo(n: number): string {
+  return new Date(getNowMs() - n * 60_000).toISOString();
+}
 
 type ReportSnapshot = {
   venueId: string;
@@ -32,8 +38,8 @@ function buildReport(snapshot: ReportSnapshot): Report {
       confidence: snapshot.confidence
     },
     reportedAt: snapshot.reportedAt,
-    createdAt: FIXED_CREATED_AT,
-    updatedAt: FIXED_UPDATED_AT
+    createdAt: minsAgo(20),
+    updatedAt: minsAgo(20)
   };
 }
 
@@ -41,7 +47,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-monarch",
     suffix: "a",
-    reportedAt: "2026-03-09T03:54:00.000Z",
+    reportedAt: minsAgo(6),
     status: "reviewed",
     crowdLevel: 38,
     lineLengthMinutes: 12,
@@ -53,7 +59,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-monarch",
     suffix: "b",
-    reportedAt: "2026-03-09T03:46:00.000Z",
+    reportedAt: minsAgo(14),
     status: "submitted",
     crowdLevel: 42,
     lineLengthMinutes: 15,
@@ -65,7 +71,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-public-works",
     suffix: "a",
-    reportedAt: "2026-03-09T03:52:00.000Z",
+    reportedAt: minsAgo(8),
     status: "reviewed",
     crowdLevel: 46,
     lineLengthMinutes: 18,
@@ -77,7 +83,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-public-works",
     suffix: "b",
-    reportedAt: "2026-03-09T03:44:00.000Z",
+    reportedAt: minsAgo(16),
     status: "submitted",
     crowdLevel: 50,
     lineLengthMinutes: 21,
@@ -89,7 +95,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-audio-sf",
     suffix: "a",
-    reportedAt: "2026-03-09T03:51:00.000Z",
+    reportedAt: minsAgo(9),
     status: "reviewed",
     crowdLevel: 53,
     lineLengthMinutes: 22,
@@ -101,7 +107,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-audio-sf",
     suffix: "b",
-    reportedAt: "2026-03-09T03:43:00.000Z",
+    reportedAt: minsAgo(17),
     status: "submitted",
     crowdLevel: 56,
     lineLengthMinutes: 24,
@@ -113,7 +119,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-1015-folsom",
     suffix: "a",
-    reportedAt: "2026-03-09T03:50:00.000Z",
+    reportedAt: minsAgo(10),
     status: "reviewed",
     crowdLevel: 60,
     lineLengthMinutes: 28,
@@ -125,7 +131,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-1015-folsom",
     suffix: "b",
-    reportedAt: "2026-03-09T03:42:00.000Z",
+    reportedAt: minsAgo(18),
     status: "submitted",
     crowdLevel: 64,
     lineLengthMinutes: 32,
@@ -137,7 +143,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-the-midway",
     suffix: "a",
-    reportedAt: "2026-03-09T03:49:00.000Z",
+    reportedAt: minsAgo(11),
     status: "reviewed",
     crowdLevel: 66,
     lineLengthMinutes: 34,
@@ -149,7 +155,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-the-midway",
     suffix: "b",
-    reportedAt: "2026-03-09T03:41:00.000Z",
+    reportedAt: minsAgo(19),
     status: "submitted",
     crowdLevel: 69,
     lineLengthMinutes: 37,
@@ -161,7 +167,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-temple",
     suffix: "a",
-    reportedAt: "2026-03-09T03:48:00.000Z",
+    reportedAt: minsAgo(12),
     status: "reviewed",
     crowdLevel: 78,
     lineLengthMinutes: 49,
@@ -173,7 +179,7 @@ export const MOCK_REPORTS: Report[] = [
   buildReport({
     venueId: "venue-temple",
     suffix: "b",
-    reportedAt: "2026-03-09T03:40:00.000Z",
+    reportedAt: minsAgo(20),
     status: "submitted",
     crowdLevel: 82,
     lineLengthMinutes: 54,
