@@ -40,6 +40,8 @@ function toSignal(row: SignalRow): Signal {
 }
 
 export async function insertSignal(input: CreateSignalInput): Promise<Signal> {
+  // venue_id must be a UUID when using real Postgres (FK: signals.venue_id → venues.id UUID).
+  // The in-memory client accepts any string (e.g. "venue-audio") and bypasses this cast.
   const result = await dbQuery<SignalRow>(
     `
       INSERT INTO signals (
@@ -51,7 +53,7 @@ export async function insertSignal(input: CreateSignalInput): Promise<Signal> {
         source,
         payload
       )
-      VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7::jsonb)
+      VALUES ($1::uuid, $2, $3, $4, $5::timestamptz, $6, $7::jsonb)
       RETURNING
         id,
         venue_id,

@@ -1,5 +1,9 @@
 -- MVP San Francisco nightlife venue seed data (best-effort real venues + approximate coordinates)
 -- Source file: data/venues/sf_seed.csv
+--
+-- ID note: each row receives a UUID primary key from gen_random_uuid().
+-- The mock/in-memory layer uses slug-style IDs (e.g. "venue-audio"); those are stored
+-- in metadata->>'seed_id' to bridge mock IDs to DB UUIDs during future migration.
 
 INSERT INTO venues (slug, name, city, state, country_code, latitude, longitude, source, metadata)
 VALUES
