@@ -30,6 +30,9 @@ function parseSignalSubmissionBody(input: unknown): SignalSubmissionBody {
   if (typeof venue_id !== "string" || venue_id.trim().length === 0) {
     throw new Error("venue_id must be a non-empty string.");
   }
+  // NOTE: When using real Postgres, venue_id must be a UUID matching a seeded venue
+  // (see db/seed_venues.sql — metadata->>'seed_id' maps mock IDs to DB UUIDs).
+  // In-memory / mock mode accepts slug-style IDs (e.g. "venue-audio") without validation.
 
   if (typeof signal_type !== "string" || !ALLOWED_SIGNAL_TYPES.has(signal_type as SignalType)) {
     throw new Error("signal_type must be one of crowd_report, line_report, event_report.");

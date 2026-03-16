@@ -14,8 +14,11 @@ import { listLatestRecommendationSnapshots } from "../dataAccess/recommendationS
 import { listSignalsForVenue } from "../dataAccess/signalRepository";
 import type { Signal } from "../types/signal";
 
-const FIXED_NOW = "2026-03-09T04:00:00.000Z";
-const GENERATED_AT = "2026-03-09T04:00:00.000Z";
+// Override via NIGHTLOOP_FIXED_NOW env var (dev/test only, off by default).
+function getNow(): string {
+  return process.env.NIGHTLOOP_FIXED_NOW ?? new Date().toISOString();
+}
+
 const RECOMMENDATION_LIMIT = 8;
 const TOP_FACTOR_COUNT = 3;
 const RECENT_SIGNAL_WINDOW_MINUTES = 180;
@@ -50,6 +53,9 @@ const ENERGY_SIGNAL_TYPES = new Set([
 
 const ENTRY_SIGNAL_TYPES = new Set(["line_report", "line_length_minutes"]);
 
+// Keyed on mock string IDs (e.g. "venue-audio"). DB-backed snapshots store UUID venue_id;
+// lookups against this map will miss until a UUID→mock-ID index is built using
+// metadata->>'seed_id' from seed_venues.sql, or venue data is fetched directly from DB.
 const VENUES_BY_ID = new Map(MOCK_VENUES.map((venue) => [venue.id, venue]));
 
 export interface RecommendationFactor {
@@ -580,13 +586,14 @@ function deriveRecommendationStatuses(input: RecommendationStatusInput): Recomme
 
 function fallbackMockRecommendations(): RecommendationsResponse {
   const scoringInput = buildScoringInput();
+  const now = getNow();
   const engineOutput = scoreAndRankVenues(scoringInput, {
-    now: FIXED_NOW,
+    now,
     ranking: { limit: RECOMMENDATION_LIMIT, minScore: 0 }
   });
 
   const recommendations: ScoredRecommendation[] = [];
-  const nowMs = Date.parse(FIXED_NOW);
+  const nowMs = Date.parse(now);
 
   for (const recommendation of engineOutput.recommendations) {
     const venue = VENUES_BY_ID.get(recommendation.venueId);
@@ -603,7 +610,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
     const lastSignalType = mockSignals[0]?.signalType ?? null;
     const pulseLevel = scoreToPulseLevel(recommendation.score);
     const lastUpdatedAgoMinutes = toMinutesAgo(
-      getLatestTimestamp(mockSignals.map((signal) => signal.observedAt)) ?? GENERATED_AT,
+      getLatestTimestamp(mockSignals.map((signal) => signal.observedAt)) ?? now,
       nowMs
     );
     const statuses = deriveRecommendationStatuses({
@@ -636,7 +643,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       factors: topFactors.map((factor) => factor.detail),
       topFactors,
       explanation: why,
-      generatedAt: GENERATED_AT,
+      generatedAt: now,
       lastSignalType,
       signalCount,
       recentSignalCount,
@@ -657,7 +664,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
     });
   }
 
-  return { generatedAt: GENERATED_AT, recommendations };
+  return { generatedAt: now, recommendations };
 }
 
 function toText(value: unknown): string | undefined {
