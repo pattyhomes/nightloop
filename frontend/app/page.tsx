@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import RecommendationList from "../components/RecommendationList";
 import { fetchRecommendations } from "../lib/api";
 import { Recommendation } from "../types/recommendation";
+
+// Leaflet requires the browser window — load client-side only.
+const VenueMap = dynamic(() => import("../components/VenueMap"), { ssr: false });
 
 const LIVE_REFRESH_INTERVAL_MS = 2000;
 const LIVE_REFRESH_WINDOW_MS = 12000;
@@ -14,6 +18,7 @@ export default function HomePage() {
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null);
   const refreshIntervalRef = useRef<number | null>(null);
   const refreshFetchInFlightRef = useRef(false);
 
@@ -118,13 +123,34 @@ export default function HomePage() {
         )}
       </header>
 
+      {/* ── Map section ───────────────────────────────────────────────────────── */}
+      {!loading && !error && recommendations.length > 0 && (
+        <section style={{ marginBottom: 36 }}>
+          <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 600, color: "#111827" }}>
+            Venues on the map
+          </h2>
+          <VenueMap
+            recommendations={recommendations}
+            activeVenueId={selectedVenueId}
+            onVenueSelect={setSelectedVenueId}
+            onSignalSubmitted={handleSignalSubmitted}
+          />
+        </section>
+      )}
+
+      {/* ── Recommendation list ───────────────────────────────────────────────── */}
       {loading && <p>Finding the best spots for tonight…</p>}
       {!loading && error && (
         <p style={{ color: "#b91c1c" }}>Couldn&apos;t load recommendations right now: {error}</p>
       )}
       {!loading && !error && recommendations.length === 0 && <p>No recommendations available yet.</p>}
       {!loading && !error && recommendations.length > 0 && (
-        <RecommendationList items={recommendations} onSignalSubmitted={handleSignalSubmitted} />
+        <RecommendationList
+          items={recommendations}
+          onSignalSubmitted={handleSignalSubmitted}
+          activeVenueId={selectedVenueId}
+          onVenueActive={setSelectedVenueId}
+        />
       )}
     </main>
   );
