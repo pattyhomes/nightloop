@@ -78,7 +78,7 @@ export const MOCK_SIGNALS: Signal[] = [
     popularity: 74
   }),
   ...buildVenueSignals({
-    venueId: "venue-audio-sf",
+    venueId: "venue-audio",
     observedAt: minsAgo(8),
     confidence: 0.88,
     crowdLevel: 55,
@@ -105,7 +105,7 @@ export const MOCK_SIGNALS: Signal[] = [
     popularity: 83
   }),
   ...buildVenueSignals({
-    venueId: "venue-temple",
+    venueId: "venue-temple-nightclub",
     observedAt: minsAgo(11),
     confidence: 0.9,
     crowdLevel: 80,

@@ -102,6 +102,8 @@ export interface ScoredRecommendation extends RecommendationStatuses {
   platformSignalCount: number;
   lastUpdatedAgoMinutes: number;
   recentActivity: RecentSignalActivity[];
+  latitude: number;
+  longitude: number;
 }
 
 export interface RecommendationsResponse {
@@ -660,7 +662,9 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       platformSignalCount,
       lastUpdatedAgoMinutes,
       ...statuses,
-      recentActivity: buildRecentActivity(mockSignals, nowMs)
+      recentActivity: buildRecentActivity(mockSignals, nowMs),
+      latitude: venue.latitude,
+      longitude: venue.longitude
     });
   }
 
@@ -883,7 +887,9 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         platformSignalCount,
         lastUpdatedAgoMinutes,
         ...statuses,
-        recentActivity
+        recentActivity,
+        latitude: venue?.latitude ?? 0,
+        longitude: venue?.longitude ?? 0
       };
     })
   );

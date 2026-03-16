@@ -30,6 +30,8 @@ export type Recommendation = {
   entryStatus: EntryStatus;
   trendStatus: TrendStatus;
   recentActivity: RecentActivity[];
+  latitude: number;
+  longitude: number;
 };
 
 export type RecommendationsResponse = {

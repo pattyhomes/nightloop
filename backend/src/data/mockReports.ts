@@ -93,7 +93,7 @@ export const MOCK_REPORTS: Report[] = [
     notes: "Moderate crowd and easy bar access."
   }),
   buildReport({
-    venueId: "venue-audio-sf",
+    venueId: "venue-audio",
     suffix: "a",
     reportedAt: minsAgo(9),
     status: "reviewed",
@@ -105,7 +105,7 @@ export const MOCK_REPORTS: Report[] = [
     notes: "Very active room with manageable wait."
   }),
   buildReport({
-    venueId: "venue-audio-sf",
+    venueId: "venue-audio",
     suffix: "b",
     reportedAt: minsAgo(17),
     status: "submitted",
@@ -165,7 +165,7 @@ export const MOCK_REPORTS: Report[] = [
     notes: "Steady foot traffic between rooms."
   }),
   buildReport({
-    venueId: "venue-temple",
+    venueId: "venue-temple-nightclub",
     suffix: "a",
     reportedAt: minsAgo(12),
     status: "reviewed",
@@ -177,7 +177,7 @@ export const MOCK_REPORTS: Report[] = [
     notes: "Great vibe but entry line is long right now."
   }),
   buildReport({
-    venueId: "venue-temple",
+    venueId: "venue-temple-nightclub",
     suffix: "b",
     reportedAt: minsAgo(20),
     status: "submitted",
