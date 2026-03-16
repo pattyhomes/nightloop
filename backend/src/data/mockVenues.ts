@@ -143,6 +143,25 @@ export const MOCK_VENUES: MockVenue[] = [
     updatedAt: FIXED_UPDATED_AT
   },
   {
+    id: "venue-the-midway",
+    slug: "the-midway",
+    name: "The Midway",
+    neighborhood: "Dogpatch",
+    category: "live_music",
+    city: "San Francisco",
+    state: "CA",
+    countryCode: "US",
+    latitude: 37.760716,
+    longitude: -122.395285,
+    source: "seed:mvp",
+    metadata: {
+      coordinateAccuracy: "approximate",
+      seedVersion: "mvp_sf_2026_03"
+    },
+    createdAt: FIXED_CREATED_AT,
+    updatedAt: FIXED_UPDATED_AT
+  },
+  {
     id: "venue-great-northern",
     slug: "great-northern",
     name: "Great Northern",

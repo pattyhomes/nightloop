@@ -30,7 +30,9 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
         energyStatus: rec.energyStatus,
         entryStatus: rec.entryStatus,
         trendStatus: rec.trendStatus,
-        recentActivity: rec.recentActivity
+        recentActivity: rec.recentActivity,
+        latitude: rec.latitude,
+        longitude: rec.longitude
       }))
     });
   } catch (error) {

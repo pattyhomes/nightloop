@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { useRouter } from "next/router";
 import type { GetServerSideProps, InferGetServerSidePropsType } from "next";
 import { fetchRecommendations } from "../../lib/api";
 import { Recommendation } from "../../types/recommendation";
+import SignalButtons from "../../components/SignalButtons";
 
 type VenueDetailPageProps = {
   recommendation: Recommendation | null;
@@ -105,6 +107,8 @@ export default function VenueDetailPage({
   recommendation,
   requestError
 }: InferGetServerSidePropsType<typeof getServerSideProps>) {
+  const router = useRouter();
+
   if (!recommendation) {
     return (
       <main
@@ -275,6 +279,25 @@ export default function VenueDetailPage({
       >
         <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: 20 }}>Why this venue right now</h2>
         <p style={{ margin: 0, color: "#1f2937" }}>{recommendation.why}</p>
+      </section>
+
+      <section
+        style={{
+          marginBottom: 16,
+          padding: "14px 16px",
+          borderRadius: 12,
+          border: "1px solid #e5e7eb",
+          background: "#ffffff"
+        }}
+      >
+        <h2 style={{ marginTop: 0, marginBottom: 6, fontSize: 20 }}>Submit a signal</h2>
+        <p style={{ margin: "0 0 12px", color: "#6b7280", fontSize: 14 }}>
+          Share what it&apos;s like right now — it updates the live ranking.
+        </p>
+        <SignalButtons
+          venueId={recommendation.venueId}
+          onSubmitted={() => void router.replace(router.asPath)}
+        />
       </section>
 
       <section

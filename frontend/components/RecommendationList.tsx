@@ -1,11 +1,15 @@
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import SignalButtons from "./SignalButtons";
 import { Recommendation } from "../types/recommendation";
 
 type RecommendationListProps = {
   items: Recommendation[];
   onSignalSubmitted?: () => void;
+  /** venueId of the currently selected venue (from map interaction). */
+  activeVenueId?: string | null;
+  /** Called when the user asks to focus a venue on the map (e.g. "show on map" button). */
+  onVenueActive?: (venueId: string) => void;
 };
 
 type SortMode = "default" | "highestPulse" | "mostRecentActivity" | "easiestEntry";
@@ -152,9 +156,15 @@ function compareEasiestEntry(left: PreparedRecommendation, right: PreparedRecomm
   return compareDefault(left.item, right.item);
 }
 
-export default function RecommendationList({ items, onSignalSubmitted }: RecommendationListProps) {
+export default function RecommendationList({
+  items,
+  onSignalSubmitted,
+  activeVenueId,
+  onVenueActive
+}: RecommendationListProps) {
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<string>("all");
   const [sortMode, setSortMode] = useState<SortMode>("default");
+  const cardRefs = useRef(new Map<string, HTMLElement>());
 
   const neighborhoods = useMemo(() => {
     return [...new Set(items.map((item) => item.neighborhood))].sort((left, right) =>
@@ -190,6 +200,13 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
       setSortMode("default");
     }
   }, [hasEasiestEntryData, sortMode]);
+
+  // Scroll the active card into view when activeVenueId changes (map → list sync).
+  useEffect(() => {
+    if (!activeVenueId) return;
+    const el = cardRefs.current.get(activeVenueId);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [activeVenueId]);
 
   const visibleItems = useMemo(() => {
     const filtered = preparedItems.filter(({ item }) => {
@@ -327,15 +344,22 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
             : ""
         }`;
 
+        const isActive = item.venueId === activeVenueId;
+
         return (
           <article
             key={item.id}
+            ref={(el) => {
+              if (el) cardRefs.current.set(item.venueId, el);
+            }}
             style={{
-              border: "1px solid #e5e7eb",
+              border: isActive ? "2px solid #4f46e5" : "1px solid #e5e7eb",
               borderRadius: 14,
-              padding: 16,
-              background: "#ffffff",
-              boxShadow: "0 1px 2px rgba(15, 23, 42, 0.05)"
+              padding: isActive ? 15 : 16,
+              background: isActive ? "#fafaf9" : "#ffffff",
+              boxShadow: isActive
+                ? "0 0 0 3px rgba(79,70,229,0.1)"
+                : "0 1px 2px rgba(15, 23, 42, 0.05)"
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
@@ -344,7 +368,27 @@ export default function RecommendationList({ items, onSignalSubmitted }: Recomme
                   {item.venueName}
                 </Link>
               </h3>
-              <span style={{ fontWeight: 600, color: "#111827" }}>Score {item.score.toFixed(2)}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {onVenueActive && (
+                  <button
+                    type="button"
+                    title="Show on map"
+                    onClick={() => onVenueActive(item.venueId)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: 16,
+                      padding: "2px 4px",
+                      color: isActive ? "#4f46e5" : "#9ca3af",
+                      lineHeight: 1
+                    }}
+                  >
+                    📍
+                  </button>
+                )}
+                <span style={{ fontWeight: 600, color: "#111827" }}>Score {item.score.toFixed(2)}</span>
+              </div>
             </div>
 
             <p style={{ marginTop: 6, marginBottom: 10, color: "#4b5563" }}>{item.neighborhood}</p>
