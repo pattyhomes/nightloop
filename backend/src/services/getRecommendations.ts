@@ -866,6 +866,18 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         buildSourceSummary(signalsForSummary, signalCount, lastSignalType, userSignalCount, platformSignalCount);
       const recentActivity = buildRecentActivity(signalsForSummary);
 
+      // Coordinates: prefer recommendationData (populated by DB JOIN in repository),
+      // then fall back to mock venue lookup, then log a warning if genuinely missing.
+      // The mock venue map is keyed by slug IDs and will miss when snapshot.venueId is a UUID.
+      const resolvedLatitude = toNumber(recommendationData.latitude) ?? venue?.latitude;
+      const resolvedLongitude = toNumber(recommendationData.longitude) ?? venue?.longitude;
+      if (resolvedLatitude == null || resolvedLongitude == null) {
+        console.warn(
+          `[recommendations] No coordinates for venue ${snapshot.venueId} — ` +
+          "UUID/mock-ID mismatch. Map marker will render at (0, 0) and should be filtered by the client."
+        );
+      }
+
       return {
         id: `rec-snapshot-${index + 1}-${snapshot.id}`,
         venueId: snapshot.venueId,
@@ -888,8 +900,8 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         lastUpdatedAgoMinutes,
         ...statuses,
         recentActivity,
-        latitude: venue?.latitude ?? 0,
-        longitude: venue?.longitude ?? 0
+        latitude: resolvedLatitude ?? 0,
+        longitude: resolvedLongitude ?? 0
       };
     })
   );
