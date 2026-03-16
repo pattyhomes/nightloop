@@ -10,6 +10,14 @@ type VenueDetailPageProps = {
   requestError: string | null;
 };
 
+function formatCategory(category: string): string {
+  if (category === "live_music") return "Live Music";
+  if (category === "club") return "Nightclub";
+  if (category === "bar") return "Bar";
+  if (category === "lounge") return "Lounge";
+  return category;
+}
+
 function formatPulseLevel(pulseLevel: Recommendation["pulseLevel"]): string {
   if (pulseLevel >= 3) return "High";
   if (pulseLevel >= 2) return "Medium";
@@ -155,7 +163,24 @@ export default function VenueDetailPage({
 
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ marginTop: 0, marginBottom: 8, fontSize: 34 }}>{recommendation.venueName}</h1>
-        <p style={{ marginTop: 0, color: "#4b5563", fontSize: 18 }}>{recommendation.neighborhood}</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 0 }}>
+          <p style={{ margin: 0, color: "#4b5563", fontSize: 18 }}>{recommendation.neighborhood}</p>
+          {recommendation.category && (
+            <span
+              style={{
+                borderRadius: 999,
+                border: "1px solid #e5e7eb",
+                background: "#f9fafb",
+                color: "#6b7280",
+                padding: "3px 10px",
+                fontSize: 14,
+                fontWeight: 500
+              }}
+            >
+              {formatCategory(recommendation.category)}
+            </span>
+          )}
+        </div>
       </header>
 
       <section
