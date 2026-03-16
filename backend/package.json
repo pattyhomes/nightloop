@@ -8,7 +8,8 @@
     "dev:local": "npm run dev",
     "dev:watch": "npm run dev",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "ingest:ra": "tsx src/scripts/fetchRAEvents.ts"
   },
   "dependencies": {
     "@types/pg": "^8.18.0",
