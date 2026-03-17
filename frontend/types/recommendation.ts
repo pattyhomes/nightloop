@@ -40,6 +40,12 @@ export type Recommendation = {
    * Absent when live signals dominate or time window has no useful context.
    */
   baselineNote?: string;
+  /** Foursquare popularity score 0–1 (present when enrichment data exists). */
+  foursquarePopularity?: number;
+  /** Human-readable hours from Foursquare (e.g. "Mon-Sat 10pm–4am"). */
+  foursquareHours?: string;
+  /** Whether the venue is currently open per Foursquare hours data. */
+  foursquareOpenNow?: boolean;
 };
 
 export type RecommendationsResponse = {
