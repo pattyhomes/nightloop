@@ -34,6 +34,12 @@ export type Recommendation = {
   recentActivity: RecentActivity[];
   latitude: number;
   longitude: number;
+  /**
+   * Time-of-week context note, present only when the baseline signal is actively
+   * contributing to the score (sparse live data + active time window).
+   * Absent when live signals dominate or time window has no useful context.
+   */
+  baselineNote?: string;
 };
 
 export type RecommendationsResponse = {

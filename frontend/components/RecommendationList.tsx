@@ -452,6 +452,11 @@ export default function RecommendationList({
                 </span>
               )}
             </div>
+            {item.baselineNote && item.recentSignalCount === 0 && (
+              <p style={{ margin: "0 0 8px", color: "#9ca3af", fontSize: 11, fontStyle: "italic" }}>
+                {item.baselineNote}
+              </p>
+            )}
             <p style={{ marginTop: 0, marginBottom: 12, color: "#111827" }}>{item.why}</p>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
