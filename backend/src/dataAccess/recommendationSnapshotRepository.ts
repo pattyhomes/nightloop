@@ -16,6 +16,8 @@ interface RecommendationSnapshotRow {
   recommendation_data: Record<string, unknown>;
   venue_name?: string | null;
   venue_neighborhood?: string | null;
+  venue_latitude?: number | null;
+  venue_longitude?: number | null;
   generated_at: string;
   expires_at: string | null;
   created_at: string;
@@ -55,6 +57,16 @@ function toRecommendationSnapshot(row: RecommendationSnapshotRow): Recommendatio
 
   if (row.venue_neighborhood && (!existingNeighborhood || isPlaceholderNeighborhood(existingNeighborhood))) {
     recommendationData.neighborhood = row.venue_neighborhood;
+  }
+
+  // Inject venue coordinates from the DB JOIN when not already present in recommendation_data.
+  // This ensures the DB-backed path has real coordinates instead of relying on the mock
+  // VENUES_BY_ID map (which only holds mock string IDs and always misses on UUID venue_id).
+  if (row.venue_latitude != null && recommendationData.latitude == null) {
+    recommendationData.latitude = row.venue_latitude;
+  }
+  if (row.venue_longitude != null && recommendationData.longitude == null) {
+    recommendationData.longitude = row.venue_longitude;
   }
 
   return {
@@ -179,7 +191,9 @@ export async function listLatestRecommendationSnapshots(limit = 8): Promise<Reco
           rs.created_at,
           rs.updated_at,
           v.name AS venue_name,
-          COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS venue_neighborhood
+          COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS venue_neighborhood,
+          v.latitude AS venue_latitude,
+          v.longitude AS venue_longitude
         FROM recommendation_snapshots rs
         LEFT JOIN venues v ON v.id = rs.venue_id
         ORDER BY rs.venue_id, rs.generated_at DESC, rs.created_at DESC
@@ -196,6 +210,8 @@ export async function listLatestRecommendationSnapshots(limit = 8): Promise<Reco
         recommendation_data,
         venue_name,
         venue_neighborhood,
+        venue_latitude,
+        venue_longitude,
         generated_at,
         expires_at,
         created_at,
