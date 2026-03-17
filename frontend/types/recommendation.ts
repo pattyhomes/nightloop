@@ -13,6 +13,8 @@ export type Recommendation = {
   venueId: string;
   venueName: string;
   neighborhood: string;
+  /** Venue category: "club", "bar", "lounge", or "live_music" */
+  category: string;
   score: number;
   why: string;
   factors: string[];

@@ -16,6 +16,7 @@ interface RecommendationSnapshotRow {
   recommendation_data: Record<string, unknown>;
   venue_name?: string | null;
   venue_neighborhood?: string | null;
+  venue_category?: string | null;
   venue_latitude?: number | null;
   venue_longitude?: number | null;
   generated_at: string;
@@ -57,6 +58,12 @@ function toRecommendationSnapshot(row: RecommendationSnapshotRow): Recommendatio
 
   if (row.venue_neighborhood && (!existingNeighborhood || isPlaceholderNeighborhood(existingNeighborhood))) {
     recommendationData.neighborhood = row.venue_neighborhood;
+  }
+
+  // Inject venue category from the DB JOIN when not already present in recommendation_data.
+  // Assumes category is stored in venues.metadata->>'category' (see seed_venues.sql).
+  if (row.venue_category && recommendationData.category == null) {
+    recommendationData.category = row.venue_category;
   }
 
   // Inject venue coordinates from the DB JOIN when not already present in recommendation_data.
@@ -192,6 +199,7 @@ export async function listLatestRecommendationSnapshots(limit = 8): Promise<Reco
           rs.updated_at,
           v.name AS venue_name,
           COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS venue_neighborhood,
+          v.metadata->>'category' AS venue_category,
           v.latitude AS venue_latitude,
           v.longitude AS venue_longitude
         FROM recommendation_snapshots rs
@@ -210,6 +218,7 @@ export async function listLatestRecommendationSnapshots(limit = 8): Promise<Reco
         recommendation_data,
         venue_name,
         venue_neighborhood,
+        venue_category,
         venue_latitude,
         venue_longitude,
         generated_at,

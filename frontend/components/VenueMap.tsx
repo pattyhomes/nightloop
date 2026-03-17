@@ -112,8 +112,25 @@ export default function VenueMap({ recommendations, activeVenueId, onVenueSelect
                   </Link>
                 </div>
 
-                {/* Neighborhood */}
-                <div style={{ color: "#6b7280", marginBottom: 8 }}>{rec.neighborhood}</div>
+                {/* Neighborhood + category */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ color: "#6b7280" }}>{rec.neighborhood}</span>
+                  {rec.category && (
+                    <span
+                      style={{
+                        borderRadius: 999,
+                        border: "1px solid #e5e7eb",
+                        background: "#f9fafb",
+                        color: "#9ca3af",
+                        padding: "1px 6px",
+                        fontSize: 11,
+                        fontWeight: 500
+                      }}
+                    >
+                      {rec.category === "live_music" ? "Live Music" : rec.category === "club" ? "Nightclub" : rec.category === "bar" ? "Bar" : rec.category === "lounge" ? "Lounge" : rec.category}
+                    </span>
+                  )}
+                </div>
 
                 {/* Status badges */}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>

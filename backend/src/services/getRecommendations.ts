@@ -86,6 +86,7 @@ export interface ScoredRecommendation extends RecommendationStatuses {
   venueId: string;
   venueName: string;
   neighborhood: string;
+  category: string;
   score: number;
   why: string;
   factors: string[];
@@ -640,6 +641,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       venueId: venue.id,
       venueName: venue.name,
       neighborhood: venue.neighborhood,
+      category: venue.category,
       score: recommendation.score,
       why,
       factors: topFactors.map((factor) => factor.detail),
@@ -866,6 +868,10 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         buildSourceSummary(signalsForSummary, signalCount, lastSignalType, userSignalCount, platformSignalCount);
       const recentActivity = buildRecentActivity(signalsForSummary);
 
+      // Category: prefer recommendationData (populated by DB JOIN in repository),
+      // then fall back to mock venue lookup.
+      const resolvedCategory = toText(recommendationData.category) ?? venue?.category ?? "";
+
       // Coordinates: prefer recommendationData (populated by DB JOIN in repository),
       // then fall back to mock venue lookup, then log a warning if genuinely missing.
       // The mock venue map is keyed by slug IDs and will miss when snapshot.venueId is a UUID.
@@ -883,6 +889,7 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         venueId: snapshot.venueId,
         venueName,
         neighborhood,
+        category: resolvedCategory,
         score: snapshot.score,
         why,
         factors: factorDetails,

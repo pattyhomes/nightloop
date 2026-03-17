@@ -14,6 +14,7 @@ recommendationsRouter.get("/recommendations", async (_req, res, next) => {
         venueId: rec.venueId,
         venueName: rec.venueName,
         neighborhood: rec.neighborhood,
+        category: rec.category,
         score: rec.score,
         why: rec.why,
         factors: rec.factors,

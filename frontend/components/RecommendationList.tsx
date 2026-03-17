@@ -30,6 +30,14 @@ const POSITIVE_ENTRY_PATTERN =
 const NEGATIVE_ENTRY_PATTERN =
   /long wait|longer wait|line is long|long line|hard to get in|crowded entry|wait time is a bit longer/;
 
+function formatCategory(category: string): string {
+  if (category === "live_music") return "Live Music";
+  if (category === "club") return "Nightclub";
+  if (category === "bar") return "Bar";
+  if (category === "lounge") return "Lounge";
+  return category;
+}
+
 function formatSignalType(signalType: string | null): string {
   if (!signalType) return "Unknown";
   return signalType.replace(/_/g, " ");
@@ -391,7 +399,24 @@ export default function RecommendationList({
               </div>
             </div>
 
-            <p style={{ marginTop: 6, marginBottom: 10, color: "#4b5563" }}>{item.neighborhood}</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, marginBottom: 10 }}>
+              <span style={{ color: "#4b5563" }}>{item.neighborhood}</span>
+              {item.category && (
+                <span
+                  style={{
+                    borderRadius: 999,
+                    border: "1px solid #e5e7eb",
+                    background: "#f9fafb",
+                    color: "#6b7280",
+                    padding: "2px 8px",
+                    fontSize: 12,
+                    fontWeight: 500
+                  }}
+                >
+                  {formatCategory(item.category)}
+                </span>
+              )}
+            </div>
             <p style={{ marginTop: 0, marginBottom: 12, color: "#111827" }}>{item.why}</p>
             <p style={{ marginTop: -4, marginBottom: 12, color: "#6b7280", fontSize: 13 }}>{provenanceLine}</p>
 
