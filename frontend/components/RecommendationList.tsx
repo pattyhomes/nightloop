@@ -43,16 +43,6 @@ function formatSignalType(signalType: string | null): string {
   return signalType.replace(/_/g, " ");
 }
 
-function formatCount(value: number, singular: string, plural = `${singular}s`): string {
-  return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function formatUpdatedAgo(minutes: number): string {
-  if (minutes <= 0) return "Updated just now";
-  if (minutes === 1) return "Updated 1 min ago";
-  return `Updated ${minutes} min ago`;
-}
-
 function formatPulseLevel(pulseLevel: Recommendation["pulseLevel"]): string {
   if (pulseLevel >= 3) return "High";
   if (pulseLevel >= 2) return "Medium";
@@ -97,6 +87,17 @@ function getTrendTone(status: Recommendation["trendStatus"]): { text: string; ba
     return { text: "#374151", background: "#f3f4f6", border: "#d1d5db" };
   }
   return { text: "#334155", background: "#f8fafc", border: "#cbd5e1" };
+}
+
+function getFreshnessPill(minutes: number): { label: string; text: string; background: string; border: string } {
+  if (minutes <= 5) return { label: "Live", text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
+  if (minutes <= 30) return { label: `${minutes}m ago`, text: "#92400e", background: "#fffbeb", border: "#fde68a" };
+  if (minutes <= 90) return { label: `${minutes}m ago`, text: "#6b7280", background: "#f9fafb", border: "#e5e7eb" };
+  return { label: `${Math.round(minutes / 60)}h ago`, text: "#9ca3af", background: "#f9fafb", border: "#f3f4f6" };
+}
+
+function hasEventSignalTonight(recentActivity: Recommendation["recentActivity"]): boolean {
+  return recentActivity.some((a) => a.signalType === "event_report" && a.minutesAgo < 24 * 60);
 }
 
 function extractWaitMinutes(text: string): number | null {
@@ -343,15 +344,8 @@ export default function RecommendationList({
         const energyTone = getEnergyTone(item.energyStatus);
         const entryTone = getEntryTone(item.entryStatus);
         const trendTone = getTrendTone(item.trendStatus);
-        const provenanceLine = `${formatUpdatedAgo(item.lastUpdatedAgoMinutes)} • ${formatCount(
-          item.userSignalCount,
-          "user report"
-        )}${
-          item.platformSignalCount > 0
-            ? ` • ${formatCount(item.platformSignalCount, "platform signal")}`
-            : ""
-        }`;
-
+        const freshnessPill = getFreshnessPill(item.lastUpdatedAgoMinutes);
+        const eventTonight = hasEventSignalTonight(item.recentActivity);
         const isActive = item.venueId === activeVenueId;
 
         return (
@@ -417,8 +411,48 @@ export default function RecommendationList({
                 </span>
               )}
             </div>
+            {/* Trust bar: freshness · event detected · signal count · user reports */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: -4, marginBottom: 10, alignItems: "center" }}>
+              <span
+                style={{
+                  borderRadius: 999,
+                  border: `1px solid ${freshnessPill.border}`,
+                  background: freshnessPill.background,
+                  color: freshnessPill.text,
+                  padding: "3px 8px",
+                  fontSize: 12,
+                  fontWeight: 700
+                }}
+              >
+                {freshnessPill.label}
+              </span>
+              {item.recentSignalCount > 0 && (
+                <span style={{ color: "#6b7280", fontSize: 12 }}>
+                  {item.recentSignalCount} recent signal{item.recentSignalCount === 1 ? "" : "s"}
+                </span>
+              )}
+              {eventTonight && (
+                <span
+                  style={{
+                    borderRadius: 999,
+                    border: "1px solid #ddd6fe",
+                    background: "#f5f3ff",
+                    color: "#6d28d9",
+                    padding: "3px 8px",
+                    fontSize: 12,
+                    fontWeight: 600
+                  }}
+                >
+                  Event tonight
+                </span>
+              )}
+              {item.userSignalCount > 0 && (
+                <span style={{ color: "#9ca3af", fontSize: 11 }}>
+                  {item.userSignalCount} user report{item.userSignalCount === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
             <p style={{ marginTop: 0, marginBottom: 12, color: "#111827" }}>{item.why}</p>
-            <p style={{ marginTop: -4, marginBottom: 12, color: "#6b7280", fontSize: 13 }}>{provenanceLine}</p>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
               <span
@@ -487,38 +521,18 @@ export default function RecommendationList({
                   fontWeight: 600
                 }}
               >
-                {item.confidenceLabel}
-              </span>
-              <span
-                style={{
-                  borderRadius: 999,
-                  border: "1px solid #e5e7eb",
-                  background: "#f9fafb",
-                  color: "#374151",
-                  padding: "4px 10px",
-                  fontSize: 12
-                }}
-              >
-                {item.recentSignalCount} recent signal{item.recentSignalCount === 1 ? "" : "s"}
+                {item.confidenceLabel} confidence
               </span>
             </div>
 
-            <div
-              style={{
-                marginBottom: 10,
-                padding: "10px 12px",
-                borderRadius: 10,
-                background: "#f9fafb",
-                border: "1px solid #f3f4f6"
-              }}
-            >
-              <p style={{ margin: 0, color: "#111827", fontSize: 14 }}>
-                Last signal: <strong>{formatSignalType(item.lastSignalType)}</strong>
-                {" · "}
-                Count: <strong>{item.signalCount}</strong>
+            {item.signalCount > 0 && (
+              <p style={{ margin: "0 0 10px", color: "#6b7280", fontSize: 12 }}>
+                {item.signalCount} signal{item.signalCount === 1 ? "" : "s"} total
+                {item.lastSignalType ? ` · last: ${formatSignalType(item.lastSignalType)}` : ""}
+                {item.userSignalCount > 0 ? ` · ${item.userSignalCount} from users` : ""}
+                {item.platformSignalCount > 0 ? ` · ${item.platformSignalCount} platform` : ""}
               </p>
-              <p style={{ margin: "6px 0 0", color: "#4b5563", fontSize: 13 }}>{item.sourceSummary}</p>
-            </div>
+            )}
 
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {item.factors.slice(0, 3).map((factor, idx) => (
