@@ -34,8 +34,8 @@ export default function HomePage() {
         }
 
         const data = await fetchRecommendations();
-        setRecommendations(data.recommendations);
-        setGeneratedAt(data.generatedAt);
+        setRecommendations(data.recommendations ?? []);
+        setGeneratedAt(data.generatedAt ?? null);
         setError(null);
       } catch (err) {
         if (surfaceError) {
