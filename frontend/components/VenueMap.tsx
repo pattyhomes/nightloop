@@ -9,6 +9,19 @@ import { useEffect } from "react";
 import SignalButtons from "./SignalButtons";
 import type { Recommendation } from "../types/recommendation";
 
+// ─── trust signal helpers ─────────────────────────────────────────────────────
+
+function getFreshnessLabel(minutes: number): { label: string; text: string; background: string; border: string } {
+  if (minutes <= 5) return { label: "Live", text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
+  if (minutes <= 30) return { label: `${minutes}m ago`, text: "#92400e", background: "#fffbeb", border: "#fde68a" };
+  if (minutes <= 90) return { label: `${minutes}m ago`, text: "#6b7280", background: "#f9fafb", border: "#e5e7eb" };
+  return { label: `${Math.round(minutes / 60)}h ago`, text: "#9ca3af", background: "#f9fafb", border: "#f3f4f6" };
+}
+
+function hasEventTonight(recentActivity: Recommendation["recentActivity"]): boolean {
+  return recentActivity.some((a) => a.signalType === "event_report" && a.minutesAgo < 24 * 60);
+}
+
 // ─── pulse → marker color ─────────────────────────────────────────────────────
 
 const PULSE_COLORS: Record<1 | 2 | 3, string> = {
@@ -177,10 +190,48 @@ export default function VenueMap({ recommendations, activeVenueId, onVenueSelect
 
                 {/* Why snippet */}
                 {rec.why && (
-                  <p style={{ margin: "0 0 10px", color: "#374151", fontSize: 12 }}>
+                  <p style={{ margin: "0 0 8px", color: "#374151", fontSize: 12 }}>
                     {rec.why.length > 110 ? rec.why.slice(0, 110) + "…" : rec.why}
                   </p>
                 )}
+
+                {/* Trust bar: freshness + event tonight */}
+                {(() => {
+                  const fp = getFreshnessLabel(rec.lastUpdatedAgoMinutes);
+                  const evt = hasEventTonight(rec.recentActivity);
+                  return (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8, alignItems: "center" }}>
+                      <span
+                        style={{
+                          borderRadius: 999,
+                          border: `1px solid ${fp.border}`,
+                          background: fp.background,
+                          color: fp.text,
+                          padding: "2px 6px",
+                          fontSize: 11,
+                          fontWeight: 700
+                        }}
+                      >
+                        {fp.label}
+                      </span>
+                      {evt && (
+                        <span
+                          style={{
+                            borderRadius: 999,
+                            border: "1px solid #ddd6fe",
+                            background: "#f5f3ff",
+                            color: "#6d28d9",
+                            padding: "2px 6px",
+                            fontSize: 11,
+                            fontWeight: 600
+                          }}
+                        >
+                          Event tonight
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Signal buttons */}
                 <SignalButtons venueId={rec.venueId} onSubmitted={onSignalSubmitted} />

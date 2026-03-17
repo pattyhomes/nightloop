@@ -40,6 +40,10 @@ function formatTimestamp(value: string): string {
   return new Date(parsed).toLocaleString();
 }
 
+function hasEventSignalTonight(recentActivity: Recommendation["recentActivity"]): boolean {
+  return recentActivity.some((a) => a.signalType === "event_report" && a.minutesAgo < 24 * 60);
+}
+
 function getFreshness(minutes: number): { label: string; text: string; background: string; border: string } {
   if (minutes <= 5) {
     return { label: "Live", text: "#065f46", background: "#ecfdf5", border: "#a7f3d0" };
@@ -145,6 +149,7 @@ export default function VenueDetailPage({
   const entryTone = getEntryTone(recommendation.entryStatus);
   const trendTone = getTrendTone(recommendation.trendStatus);
   const generatedAtDisplay = new Date(recommendation.generatedAt).toLocaleString();
+  const eventTonight = hasEventSignalTonight(recommendation.recentActivity);
 
   return (
     <main
@@ -276,6 +281,21 @@ export default function VenueDetailPage({
         >
           Recent signals: {recommendation.recentSignalCount}
         </span>
+        {eventTonight && (
+          <span
+            style={{
+              borderRadius: 999,
+              border: "1px solid #ddd6fe",
+              background: "#f5f3ff",
+              color: "#6d28d9",
+              padding: "4px 10px",
+              fontSize: 13,
+              fontWeight: 600
+            }}
+          >
+            Event tonight
+          </span>
+        )}
       </div>
 
       <div
