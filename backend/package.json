@@ -9,7 +9,8 @@
     "dev:watch": "npm run dev",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "ingest:ra": "tsx src/scripts/fetchRAEvents.ts"
+    "ingest:ra": "tsx src/scripts/fetchRAEvents.ts",
+    "enrich:foursquare": "tsx src/scripts/enrichVenuesFoursquare.ts"
   },
   "dependencies": {
     "@types/pg": "^8.18.0",

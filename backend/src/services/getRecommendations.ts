@@ -13,7 +13,9 @@ import { MOCK_SIGNALS } from "../data/mockSignals";
 import { MOCK_VENUES } from "../data/mockVenues";
 import { listLatestRecommendationSnapshots } from "../dataAccess/recommendationSnapshotRepository";
 import { listSignalsForVenue } from "../dataAccess/signalRepository";
+import { getVenueEnrichments } from "../dataAccess/venueEnrichmentRepository";
 import type { Signal } from "../types/signal";
+import type { FoursquareEnrichmentData } from "../types/venueEnrichment";
 
 // Override via NIGHTLOOP_FIXED_NOW env var (dev/test only, off by default).
 function getNow(): string {
@@ -113,6 +115,20 @@ export interface ScoredRecommendation extends RecommendationStatuses {
    * time window has no useful baseline context.
    */
   baselineNote?: string;
+  /**
+   * Foursquare-derived popularity score (0–1). Present when enrichment data
+   * exists for this venue. Used as a secondary signal reference; live user
+   * signals always dominate.
+   */
+  foursquarePopularity?: number;
+  /**
+   * Human-readable hours string from Foursquare (e.g. "Mon-Sat 10pm–4am").
+   */
+  foursquareHours?: string;
+  /**
+   * Whether the venue is currently open per Foursquare hours data.
+   */
+  foursquareOpenNow?: boolean;
 }
 
 export interface RecommendationsResponse {
@@ -687,6 +703,9 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       latitude: venue.latitude,
       longitude: venue.longitude,
       baselineNote: baselineResult.baselineNote
+      // Foursquare enrichment is not available for mock-path venues (slug IDs don't
+      // map to DB UUIDs). Run `npm run enrich:foursquare` with DATABASE_URL set to
+      // populate enrichments for the snapshot path.
     });
   }
 
@@ -793,6 +812,19 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
     return fallbackMockRecommendations();
   }
 
+  // Load Foursquare enrichment data for all snapshot venue IDs in one batch.
+  // Failures are non-fatal — enrichment is supplementary; recommendations still work without it.
+  const snapshotVenueIds = snapshots.map((s) => s.venueId);
+  let enrichmentMap = new Map<string, FoursquareEnrichmentData>();
+  try {
+    const enrichments = await getVenueEnrichments(snapshotVenueIds);
+    for (const e of enrichments) {
+      enrichmentMap.set(e.venueId, e.enrichmentData);
+    }
+  } catch {
+    // Enrichment table may not exist yet (pre-migration) — proceed without it.
+  }
+
   const recommendations: ScoredRecommendation[] = await Promise.all(
     snapshots.map(async (snapshot, index) => {
       const recommendationData = snapshot.recommendationData ?? {};
@@ -892,10 +924,9 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
       // then fall back to mock venue lookup.
       const resolvedCategory = toText(recommendationData.category) ?? venue?.category ?? "";
 
-      // Blend the snapshot score with the time-of-week baseline.
-      // When recentSignalCount is 0 (no live signals for this venue), the baseline
-      // contributes up to 30% of the final score, keeping rankings sensible.
-      const baselineResult = blendWithBaseline(snapshot.score, resolvedCategory, recentSignalCount);
+      // Foursquare enrichment — look up pre-fetched enrichment for this venue.
+      // Absent when the enrichment script hasn't run or the table doesn't exist yet.
+      const enrichment = enrichmentMap.get(snapshot.venueId);
 
       // Coordinates: prefer recommendationData (populated by DB JOIN in repository),
       // then fall back to mock venue lookup, then log a warning if genuinely missing.
@@ -908,6 +939,11 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
           "UUID/mock-ID mismatch. Map marker will render at (0, 0) and should be filtered by the client."
         );
       }
+
+      // Blend the snapshot score with the time-of-week baseline.
+      // When recentSignalCount is 0 (no live signals for this venue), the baseline
+      // contributes up to 30% of the final score, keeping rankings sensible.
+      const baselineResult = blendWithBaseline(snapshot.score, resolvedCategory, recentSignalCount);
 
       return {
         id: `rec-snapshot-${index + 1}-${snapshot.id}`,
@@ -934,7 +970,10 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         recentActivity,
         latitude: resolvedLatitude ?? 0,
         longitude: resolvedLongitude ?? 0,
-        baselineNote: baselineResult.baselineNote
+        baselineNote: baselineResult.baselineNote,
+        foursquarePopularity: enrichment?.popularity,
+        foursquareHours: enrichment?.hoursDisplay,
+        foursquareOpenNow: enrichment?.openNow
       };
     })
   );

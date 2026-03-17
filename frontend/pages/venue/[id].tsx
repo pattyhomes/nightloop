@@ -168,7 +168,7 @@ export default function VenueDetailPage({
 
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ marginTop: 0, marginBottom: 8, fontSize: 34 }}>{recommendation.venueName}</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 0, flexWrap: "wrap" }}>
           <p style={{ margin: 0, color: "#4b5563", fontSize: 18 }}>{recommendation.neighborhood}</p>
           {recommendation.category && (
             <span
@@ -183,6 +183,21 @@ export default function VenueDetailPage({
               }}
             >
               {formatCategory(recommendation.category)}
+            </span>
+          )}
+          {recommendation.foursquareOpenNow === true && (
+            <span style={{ borderRadius: 999, border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#15803d", padding: "3px 10px", fontSize: 13, fontWeight: 600 }}>
+              Open now
+            </span>
+          )}
+          {recommendation.foursquareOpenNow === false && (
+            <span style={{ borderRadius: 999, border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", padding: "3px 10px", fontSize: 13, fontWeight: 600 }}>
+              Likely closed
+            </span>
+          )}
+          {recommendation.foursquareHours && (
+            <span style={{ color: "#6b7280", fontSize: 13 }}>
+              {recommendation.foursquareHours}
             </span>
           )}
         </div>
