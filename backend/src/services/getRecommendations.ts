@@ -7,6 +7,7 @@ import {
   type RawVenueSignalsInput,
   type ScoreFactorKey
 } from "../scoring";
+import { blendWithBaseline } from "../scoring/baselineSignal";
 import { MOCK_REPORTS } from "../data/mockReports";
 import { MOCK_SIGNALS } from "../data/mockSignals";
 import { MOCK_VENUES } from "../data/mockVenues";
@@ -105,6 +106,13 @@ export interface ScoredRecommendation extends RecommendationStatuses {
   recentActivity: RecentSignalActivity[];
   latitude: number;
   longitude: number;
+  /**
+   * Optional time-of-week context note, populated only when the baseline
+   * is actively contributing to the score (recentSignalCount ≤ 2, non-off
+   * time window). Absent when live signals dominate or when the current
+   * time window has no useful baseline context.
+   */
+  baselineNote?: string;
 }
 
 export interface RecommendationsResponse {
@@ -611,7 +619,18 @@ function fallbackMockRecommendations(): RecommendationsResponse {
     const recentSignalCount = countRecentSignals(mockSignals, nowMs) + userSignalCount;
     const confidenceLabel = getFallbackConfidenceLabel(signalCount, recentSignalCount);
     const lastSignalType = mockSignals[0]?.signalType ?? null;
-    const pulseLevel = scoreToPulseLevel(recommendation.score);
+
+    // Blend the raw scoring-engine score with the time-of-week baseline.
+    // When mock signals are recent, baselineWeight approaches 0 and live data
+    // fully dominates. The baseline only lifts rankings during sparse windows.
+    const baselineResult = blendWithBaseline(
+      recommendation.score,
+      venue.category,
+      recentSignalCount,
+      new Date(now)
+    );
+
+    const pulseLevel = scoreToPulseLevel(baselineResult.score);
     const lastUpdatedAgoMinutes = toMinutesAgo(
       getLatestTimestamp(mockSignals.map((signal) => signal.observedAt)) ?? now,
       nowMs
@@ -619,7 +638,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
     const statuses = deriveRecommendationStatuses({
       recommendationData: {},
       signals: mockSignals,
-      score: recommendation.score,
+      score: baselineResult.score,
       pulseLevel,
       signalCount,
       recentSignalCount,
@@ -642,7 +661,7 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       venueName: venue.name,
       neighborhood: venue.neighborhood,
       category: venue.category,
-      score: recommendation.score,
+      score: baselineResult.score,
       why,
       factors: topFactors.map((factor) => factor.detail),
       topFactors,
@@ -666,7 +685,8 @@ function fallbackMockRecommendations(): RecommendationsResponse {
       ...statuses,
       recentActivity: buildRecentActivity(mockSignals, nowMs),
       latitude: venue.latitude,
-      longitude: venue.longitude
+      longitude: venue.longitude,
+      baselineNote: baselineResult.baselineNote
     });
   }
 
@@ -872,6 +892,11 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
       // then fall back to mock venue lookup.
       const resolvedCategory = toText(recommendationData.category) ?? venue?.category ?? "";
 
+      // Blend the snapshot score with the time-of-week baseline.
+      // When recentSignalCount is 0 (no live signals for this venue), the baseline
+      // contributes up to 30% of the final score, keeping rankings sensible.
+      const baselineResult = blendWithBaseline(snapshot.score, resolvedCategory, recentSignalCount);
+
       // Coordinates: prefer recommendationData (populated by DB JOIN in repository),
       // then fall back to mock venue lookup, then log a warning if genuinely missing.
       // The mock venue map is keyed by slug IDs and will miss when snapshot.venueId is a UUID.
@@ -890,7 +915,7 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         venueName,
         neighborhood,
         category: resolvedCategory,
-        score: snapshot.score,
+        score: baselineResult.score,
         why,
         factors: factorDetails,
         topFactors: [],
@@ -908,7 +933,8 @@ export async function getRecommendations(): Promise<RecommendationsResponse> {
         ...statuses,
         recentActivity,
         latitude: resolvedLatitude ?? 0,
-        longitude: resolvedLongitude ?? 0
+        longitude: resolvedLongitude ?? 0,
+        baselineNote: baselineResult.baselineNote
       };
     })
   );
