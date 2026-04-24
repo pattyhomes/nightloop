@@ -8,6 +8,7 @@ export interface QueryResult<T = unknown> {
 
 export interface DBClient {
   query<T = unknown>(text: string, params?: unknown[]): Promise<QueryResult<T>>;
+  transaction?<T>(fn: (client: DBClient) => Promise<T>): Promise<T>;
   close?(): Promise<void>;
 }
 
@@ -24,6 +25,31 @@ class PgDBClient implements DBClient {
       rows: result.rows as T[],
       rowCount: result.rowCount ?? 0
     };
+  }
+
+  async transaction<T>(fn: (client: DBClient) => Promise<T>): Promise<T> {
+    const pgClient = await this.pool.connect();
+    const txClient: DBClient = {
+      async query<U = unknown>(text: string, params: unknown[] = []): Promise<QueryResult<U>> {
+        const result: PgQueryResult<QueryResultRow> = await pgClient.query(text, params);
+        return {
+          rows: result.rows as U[],
+          rowCount: result.rowCount ?? 0
+        };
+      }
+    };
+
+    try {
+      await pgClient.query("BEGIN");
+      const value = await fn(txClient);
+      await pgClient.query("COMMIT");
+      return value;
+    } catch (error) {
+      await pgClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      pgClient.release();
+    }
   }
 
   async close(): Promise<void> {
@@ -180,15 +206,21 @@ class InMemoryDBClient implements DBClient {
 
     throw new Error(`Unsupported in-memory query. Set DATABASE_URL for full SQL support. Query: ${normalized}`);
   }
+
+  async transaction<T>(fn: (client: DBClient) => Promise<T>): Promise<T> {
+    return fn(this);
+  }
 }
 
-let client: DBClient;
+let client: DBClient | undefined;
 
-if (process.env.DATABASE_URL) {
-  client = new PgDBClient(process.env.DATABASE_URL);
-} else {
+function createDefaultClient(): DBClient {
+  if (process.env.DATABASE_URL) {
+    return new PgDBClient(process.env.DATABASE_URL);
+  }
+
   console.warn("[db] DATABASE_URL is not set; using in-memory DB client for local development.");
-  client = new InMemoryDBClient();
+  return new InMemoryDBClient();
 }
 
 export function setDBClient(nextClient: DBClient): void {
@@ -196,9 +228,22 @@ export function setDBClient(nextClient: DBClient): void {
 }
 
 export function getDBClient(): DBClient {
+  if (!client) {
+    client = createDefaultClient();
+  }
+
   return client;
 }
 
 export async function dbQuery<T = unknown>(text: string, params: unknown[] = []): Promise<QueryResult<T>> {
-  return client.query<T>(text, params);
+  return getDBClient().query<T>(text, params);
+}
+
+export async function dbTransaction<T>(fn: (client: DBClient) => Promise<T>): Promise<T> {
+  const client = getDBClient();
+  if (!client.transaction) {
+    return fn(client);
+  }
+
+  return client.transaction(fn);
 }

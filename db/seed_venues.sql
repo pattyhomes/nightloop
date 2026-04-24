@@ -5,6 +5,78 @@
 -- The mock/in-memory layer uses slug-style IDs (e.g. "venue-audio"); those are stored
 -- in metadata->>'seed_id' to bridge mock IDs to DB UUIDs during future migration.
 
+INSERT INTO markets (
+  slug,
+  display_name,
+  short_label,
+  timezone,
+  country_code,
+  center_latitude,
+  center_longitude,
+  bounds,
+  default_zoom,
+  launch_status,
+  provider_config
+)
+VALUES (
+  'san-francisco',
+  'San Francisco',
+  'SF',
+  'America/Los_Angeles',
+  'US',
+  37.773972,
+  -122.431297,
+  '{"southwest": {"latitude": 37.708, "longitude": -122.516}, "northeast": {"latitude": 37.812, "longitude": -122.356}}'::jsonb,
+  12.5,
+  'active',
+  '{"foursquare": {"enabled": true}, "resident_advisor": {"enabled": true}}'::jsonb
+)
+ON CONFLICT (slug) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  short_label = EXCLUDED.short_label,
+  timezone = EXCLUDED.timezone,
+  country_code = EXCLUDED.country_code,
+  center_latitude = EXCLUDED.center_latitude,
+  center_longitude = EXCLUDED.center_longitude,
+  bounds = EXCLUDED.bounds,
+  default_zoom = EXCLUDED.default_zoom,
+  launch_status = EXCLUDED.launch_status,
+  provider_config = EXCLUDED.provider_config,
+  updated_at = NOW();
+
+INSERT INTO market_neighborhoods (
+  market_id,
+  slug,
+  display_name,
+  label_latitude,
+  label_longitude,
+  polygon
+)
+SELECT
+  m.id,
+  n.slug,
+  n.display_name,
+  n.label_latitude,
+  n.label_longitude,
+  '{}'::jsonb
+FROM markets m
+CROSS JOIN (
+  VALUES
+    ('soma', 'SoMa', 37.778, -122.407),
+    ('mission', 'Mission', 37.760, -122.414),
+    ('castro', 'Castro', 37.762, -122.435),
+    ('north-beach', 'North Beach', 37.802, -122.410),
+    ('marina', 'Marina', 37.802, -122.438),
+    ('lower-nob-hill-polk', 'Lower Nob Hill/Polk', 37.789, -122.421),
+    ('hayes-valley', 'Hayes Valley', 37.776, -122.425)
+) AS n(slug, display_name, label_latitude, label_longitude)
+WHERE m.slug = 'san-francisco'
+ON CONFLICT (market_id, slug) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  label_latitude = EXCLUDED.label_latitude,
+  label_longitude = EXCLUDED.label_longitude,
+  updated_at = NOW();
+
 INSERT INTO venues (slug, name, city, state, country_code, latitude, longitude, source, metadata)
 VALUES
   ('audio', 'Audio', 'San Francisco', 'CA', 'US', 37.780591, -122.41405, 'seed:mvp', '{"seed_id": "venue-audio", "neighborhood": "SoMa", "category": "club", "seed_version": "mvp_sf_2026_03"}'::jsonb),
@@ -116,4 +188,64 @@ ON CONFLICT (slug) DO UPDATE SET
   longitude = EXCLUDED.longitude,
   source = EXCLUDED.source,
   metadata = EXCLUDED.metadata,
+  updated_at = NOW();
+
+UPDATE venues v
+SET
+  market_id = m.id,
+  canonical_type = COALESCE(v.metadata->>'category', v.canonical_type),
+  is_active = true,
+  admin_status = 'approved',
+  updated_at = NOW()
+FROM markets m
+WHERE m.slug = 'san-francisco'
+  AND v.source = 'seed:mvp'
+  AND v.city = 'San Francisco';
+
+INSERT INTO venue_live_states (
+  venue_id,
+  market_id,
+  pulse_level,
+  energy_score,
+  energy_label,
+  trend,
+  wait_minutes,
+  signal_count,
+  recent_signal_count,
+  confidence,
+  computed_at,
+  expires_at,
+  source_summary
+)
+SELECT
+  v.id,
+  v.market_id,
+  1,
+  28,
+  'Chill',
+  'steady',
+  NULL,
+  0,
+  0,
+  0.25,
+  NOW(),
+  NOW() + INTERVAL '90 minutes',
+  '{"seed": "baseline"}'::jsonb
+FROM venues v
+JOIN markets m ON m.id = v.market_id
+WHERE m.slug = 'san-francisco'
+  AND v.source = 'seed:mvp'
+ON CONFLICT (venue_id) DO UPDATE SET
+  market_id = EXCLUDED.market_id,
+  pulse_level = EXCLUDED.pulse_level,
+  energy_score = EXCLUDED.energy_score,
+  energy_label = EXCLUDED.energy_label,
+  trend = EXCLUDED.trend,
+  wait_minutes = EXCLUDED.wait_minutes,
+  signal_count = EXCLUDED.signal_count,
+  recent_signal_count = EXCLUDED.recent_signal_count,
+  confidence = EXCLUDED.confidence,
+  computed_at = EXCLUDED.computed_at,
+  expires_at = EXCLUDED.expires_at,
+  source_summary = EXCLUDED.source_summary,
   updated_at = NOW();

@@ -159,5 +159,13 @@ npm --prefix backend exec -- tsx scripts/testRecommendationsFromSnapshots.ts
 
 The script ingests sample signals, verifies latest recommendation snapshot rows exist, and asserts `getRecommendations()` returns snapshot-backed output.
 
+## Planning docs
+
+- `PROJECT_STATE.md`
+- `NEXT_STEP.md`
+- `docs/API_CONTRACTS.md`
+- `docs/MVP_TICKETS.md`
+- `docs/VENUES_API_PORT_PLAN.md`
+
 ## Codex path verification
 Nightloop codex path verification marker.

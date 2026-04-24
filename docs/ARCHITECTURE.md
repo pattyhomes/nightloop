@@ -14,3 +14,9 @@
 - Establish backend service entrypoint and configuration
 - Add API contract stubs and initial tests
 - Stand up a minimal frontend dashboard shell
+
+## Current planning anchors
+
+- Product-facing API targets live in `docs/API_CONTRACTS.md`
+- MVP sequencing lives in `docs/MVP_TICKETS.md`
+- Legacy-to-current porting guidance lives in `docs/VENUES_API_PORT_PLAN.md`
