@@ -1,0 +1,6 @@
+// Copy this file to NightloopConfig.xcconfig and fill in local values.
+// Keep NightloopConfig.xcconfig untracked. Never place backend-only secrets here.
+
+API_BASE_URL = http:/$()/127.0.0.1:4000/api/v1
+SUPABASE_URL = https:/$()/vvpfgxpxsxuhgbqeosqg.supabase.co
+SUPABASE_PUBLISHABLE_KEY = paste_publishable_or_anon_key_here

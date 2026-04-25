@@ -28,3 +28,8 @@ dist/
 *.tmp
 data/raw/
 data/processed/
+
+# iOS / Xcode
+ios/Nightloop/Nightloop.xcodeproj/
+ios/Nightloop/DerivedData/
+ios/Nightloop/Config/NightloopConfig.xcconfig
