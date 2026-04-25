@@ -389,33 +389,68 @@ struct VenueFallbackArt: View {
     let subtitle: String
     let score: Int
     var height: CGFloat = 160
+    var cornerRadius: CGFloat = NightloopTheme.cornerLarge
+    var symbol: String = "sparkles"
 
     private var tone: EnergyTone {
         EnergyTone.from(score: score)
     }
 
+    private var initials: String {
+        let words = title
+            .split(separator: " ")
+            .filter { !$0.isEmpty }
+        let letters = words.prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "NL" : String(letters).uppercased()
+    }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             LinearGradient(
-                colors: [tone.color.opacity(0.36), NightloopTheme.purple.opacity(0.18), NightloopTheme.surface],
+                colors: [
+                    tone.color.opacity(0.42),
+                    NightloopTheme.purple.opacity(0.20),
+                    Color(hex: "#12051d")
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
 
             diagonalStripes
-                .opacity(0.18)
+                .opacity(0.12)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("[ venue photo ]")
-                    .font(.caption2.monospaced().weight(.semibold))
-                    .tracking(1.3)
-                    .foregroundStyle(NightloopTheme.inkMuted)
-                Text(title.lowercased().replacingOccurrences(of: " ", with: "_") + ".jpg")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(NightloopTheme.inkDim)
+            Circle()
+                .fill(tone.color.opacity(0.16))
+                .frame(width: height * 0.72, height: height * 0.72)
+                .blur(radius: 26)
+                .offset(x: height * 0.32, y: -height * 0.28)
+
+            Circle()
+                .stroke(tone.color.opacity(0.22), lineWidth: 1)
+                .frame(width: height * 0.58, height: height * 0.58)
+                .offset(x: height * 0.42, y: -height * 0.35)
+
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color.black.opacity(0.28))
+                        .frame(width: min(height * 0.34, 68), height: min(height * 0.34, 68))
+                    Circle()
+                        .stroke(tone.color.opacity(0.6), lineWidth: 1)
+                        .frame(width: min(height * 0.34, 68), height: min(height * 0.34, 68))
+                    Text(initials)
+                        .font(.system(size: min(height * 0.12, 24), weight: .black))
+                        .foregroundStyle(NightloopTheme.ink)
+                }
+
+                Image(systemName: symbol)
+                    .font(.system(size: min(height * 0.18, 34), weight: .black))
+                    .foregroundStyle(tone.color.opacity(0.72))
+                    .shadow(color: tone.color.opacity(0.55), radius: 18)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .multilineTextAlignment(.center)
+            .padding(.bottom, height > 80 ? 18 : 6)
+            .opacity(height > 80 ? 1 : 0.9)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(subtitle.uppercased())
@@ -431,9 +466,9 @@ struct VenueFallbackArt: View {
             .padding(14)
         }
         .frame(height: height)
-        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerLarge, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: NightloopTheme.cornerLarge, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(NightloopTheme.hairline)
         }
     }

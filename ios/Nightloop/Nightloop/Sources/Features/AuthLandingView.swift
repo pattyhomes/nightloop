@@ -180,6 +180,17 @@ struct AuthLandingView: View {
                         Task { await verifyPhoneCode() }
                     }
                 }
+
+                #if DEBUG
+                PhoneAuthDebugHelper(config: authStore.config) { number, code in
+                    phoneNumber = number
+                    normalizedPhone = USPhoneNumber.normalize(number)
+                    if let code {
+                        verificationCode = code
+                    }
+                    authMessage = code == nil ? "Test phone loaded. Send a code when ready." : "Test phone and code loaded."
+                }
+                #endif
             }
         }
     }
@@ -252,3 +263,72 @@ struct AuthLandingView: View {
         return message
     }
 }
+
+#if DEBUG
+private struct PhoneAuthDebugHelper: View {
+    let config: NightloopConfig
+    let apply: (String, String?) -> Void
+
+    private var testNumber: String? {
+        config.debugPhoneTestNumber
+    }
+
+    private var testCode: String? {
+        config.debugPhoneTestCode
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .overlay(NightloopTheme.hairlineSoft)
+                .padding(.vertical, 2)
+
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: "testtube.2")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.amber)
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Phone test helper")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+
+                    if let testNumber {
+                        Text("Configured for \(maskedPhone(testNumber)). Use only Supabase test numbers or a controlled dev number.")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+
+                        Button {
+                            apply(testNumber, testCode)
+                        } label: {
+                            Label(testCode == nil ? "Fill test phone" : "Fill test phone + code", systemImage: "wand.and.stars")
+                                .font(.caption.weight(.black))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(NightloopTheme.ink)
+                        .padding(.vertical, 9)
+                        .background(NightloopTheme.purpleSoft)
+                        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous)
+                                .stroke(NightloopTheme.purpleEdge)
+                        }
+                    } else {
+                        Text("Optional: set DEBUG_PHONE_TEST_NUMBER and DEBUG_PHONE_TEST_CODE in your ignored iOS config after Supabase phone testing is configured.")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                    }
+                }
+            }
+        }
+    }
+
+    private func maskedPhone(_ phone: String) -> String {
+        let digits = phone.filter(\.isNumber)
+        let suffix = digits.suffix(4)
+        return "(***) ***-\(suffix)"
+    }
+}
+#endif

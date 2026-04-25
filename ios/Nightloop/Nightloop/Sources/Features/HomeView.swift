@@ -376,7 +376,14 @@ struct VenueArtView: View {
 
     private var fallback: some View {
         ZStack(alignment: .bottomLeading) {
-            VenueFallbackArt(title: venue.name, subtitle: venue.neighborhood, score: venue.pulse.score, height: height)
+            VenueFallbackArt(
+                title: venue.name,
+                subtitle: venue.neighborhood,
+                score: venue.pulse.score,
+                height: height,
+                cornerRadius: cornerRadius,
+                symbol: symbol(for: venue.category)
+            )
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }

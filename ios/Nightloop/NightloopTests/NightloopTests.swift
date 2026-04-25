@@ -23,6 +23,32 @@ final class NightloopTests: XCTestCase {
         XCTAssertFalse(config.isSupabaseConfigured)
     }
 
+    func testConfigLoadsOptionalDebugPhoneHelperValues() throws {
+        let config = try NightloopConfig(info: [
+            "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
+            "NightloopSupabaseURL": "https://example.supabase.co",
+            "NightloopSupabasePublishableKey": "sb_publishable_test",
+            "NightloopDebugPhoneTestNumber": " (415) 555-0134 ",
+            "NightloopDebugPhoneTestCode": " 123456 "
+        ])
+
+        XCTAssertEqual(config.debugPhoneTestNumber, "(415) 555-0134")
+        XCTAssertEqual(config.debugPhoneTestCode, "123456")
+    }
+
+    func testConfigIgnoresUnresolvedDebugPhoneBuildSettings() throws {
+        let config = try NightloopConfig(info: [
+            "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
+            "NightloopSupabaseURL": "https://example.supabase.co",
+            "NightloopSupabasePublishableKey": "sb_publishable_test",
+            "NightloopDebugPhoneTestNumber": "$(DEBUG_PHONE_TEST_NUMBER)",
+            "NightloopDebugPhoneTestCode": "paste_code_here"
+        ])
+
+        XCTAssertNil(config.debugPhoneTestNumber)
+        XCTAssertNil(config.debugPhoneTestCode)
+    }
+
     func testRequestBuildsURLAndBearerHeader() throws {
         let client = NightloopAPIClient(baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!)
         let request = try client.makeRequest(

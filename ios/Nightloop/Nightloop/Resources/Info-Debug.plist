@@ -24,6 +24,10 @@
 	<true/>
 	<key>NightloopAPIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
+	<key>NightloopDebugPhoneTestCode</key>
+	<string>$(DEBUG_PHONE_TEST_CODE)</string>
+	<key>NightloopDebugPhoneTestNumber</key>
+	<string>$(DEBUG_PHONE_TEST_NUMBER)</string>
 	<key>NightloopSupabasePublishableKey</key>
 	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
 	<key>NightloopSupabaseURL</key>

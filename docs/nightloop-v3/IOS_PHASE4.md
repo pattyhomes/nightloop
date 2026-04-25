@@ -20,6 +20,9 @@ Before live Phase 4 user testing:
 - Configure phone auth/SMS provider before live phone OTP testing.
 - Configure Sign in with Apple in Apple Developer and Supabase before live Apple
   auth testing.
+- Phase 4.6 adds a Debug-only phone auth helper. It may autofill only local
+  `DEBUG_PHONE_TEST_NUMBER` / `DEBUG_PHONE_TEST_CODE` values from the ignored
+  iOS config file. Never commit real phone numbers or OTPs.
 
 The iOS app may contain only the Supabase URL and publishable/anon key. It must
 not contain service-role keys, database URLs, provider API keys, or admin
