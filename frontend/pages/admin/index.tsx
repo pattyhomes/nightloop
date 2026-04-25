@@ -2,6 +2,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AdminVenue,
+  FoursquareEnrichmentTarget,
   Market,
   ModerationReport,
   ProviderName,
@@ -101,6 +102,22 @@ function formatDate(value: string | null | undefined): string {
   return new Date(value).toLocaleString();
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
 function nextLocalDateTime(): string {
   const value = new Date(Date.now() + 60 * 60 * 1000);
   value.setMinutes(0, 0, 0);
@@ -126,12 +143,14 @@ export default function AdminOpsPage() {
   const [providerRunForm, setProviderRunForm] = useState<{
     provider: ProviderName;
     mode: ProviderRunMode;
-    googleRunKind: "existing_qa" | "discovery";
+    googleRunKind: "existing_qa" | "discovery" | "curated_qa";
+    foursquareTarget: FoursquareEnrichmentTarget;
     cap: number;
   }>({
     provider: "google_places",
     mode: "fixture",
     googleRunKind: "existing_qa",
+    foursquareTarget: "default",
     cap: 10
   });
 
@@ -276,12 +295,18 @@ export default function AdminOpsPage() {
   const handleCreateRun = useCallback(() => {
     void withWork("Creating run", async () => {
       if (!token || !selectedMarketId) return;
-      const maxCap = providerRunForm.provider === "foursquare" ? 20 : 100;
+      const maxCap =
+        providerRunForm.provider === "foursquare"
+          ? 20
+          : providerRunForm.googleRunKind === "curated_qa"
+            ? 50
+            : 100;
       const result = await createProviderRun(token, {
         marketId: selectedMarketId,
         provider: providerRunForm.provider,
         mode: providerRunForm.mode,
         googleRunKind: providerRunForm.googleRunKind,
+        foursquareTarget: providerRunForm.foursquareTarget,
         cap: Math.max(1, Math.min(maxCap, providerRunForm.cap))
       });
       setMessage(`Created ${result.run.provider} run ${result.run.id.slice(0, 8)}.`);
@@ -491,21 +516,54 @@ export default function AdminOpsPage() {
                         onChange={(event) =>
                           setProviderRunForm((current) => ({
                             ...current,
-                            googleRunKind: event.target.value as "existing_qa" | "discovery"
+                            googleRunKind: event.target.value as "existing_qa" | "discovery" | "curated_qa"
                           }))
                         }
                         style={inputStyle}
                       >
                         <option value="existing_qa">Existing venue QA</option>
+                        <option value="curated_qa">Curated candidate QA</option>
                         <option value="discovery">Nightlife discovery</option>
                       </select>
                     </Field>
                   )}
-                  <Field label={`Cap (${providerRunForm.provider === "foursquare" ? "max 20" : "max 100"})`}>
+                  {providerRunForm.provider === "foursquare" && (
+                    <Field label="Foursquare target">
+                      <select
+                        value={providerRunForm.foursquareTarget}
+                        onChange={(event) =>
+                          setProviderRunForm((current) => ({
+                            ...current,
+                            foursquareTarget: event.target.value as FoursquareEnrichmentTarget
+                          }))
+                        }
+                        style={inputStyle}
+                      >
+                        <option value="default">Approved venues</option>
+                        <option value="curated_sf_notable">Curated SF notable</option>
+                        <option value="google_discovery_approved">Google discovery approved</option>
+                      </select>
+                    </Field>
+                  )}
+                  <Field
+                    label={`Cap (${
+                      providerRunForm.provider === "foursquare"
+                        ? "max 20"
+                        : providerRunForm.googleRunKind === "curated_qa"
+                          ? "max 50"
+                          : "max 100"
+                    })`}
+                  >
                     <input
                       type="number"
                       min={1}
-                      max={providerRunForm.provider === "foursquare" ? 20 : 100}
+                      max={
+                        providerRunForm.provider === "foursquare"
+                          ? 20
+                          : providerRunForm.googleRunKind === "curated_qa"
+                            ? 50
+                            : 100
+                      }
                       value={providerRunForm.cap}
                       onChange={(event) =>
                         setProviderRunForm((current) => ({
@@ -537,6 +595,13 @@ export default function AdminOpsPage() {
                       Records: {String(run.summary.provider_records_created ?? 0)} · Reviews:{" "}
                       {String(run.summary.review_items_created ?? 0)} · Skipped:{" "}
                       {String(run.summary.skipped_duplicates ?? 0)}
+                      {run.summary.skipped_non_nightlife !== undefined
+                        ? ` · Non-nightlife: ${String(run.summary.skipped_non_nightlife)}`
+                        : ""}
+                      {run.summary.skipped_fresh_cache !== undefined
+                        ? ` · Fresh cache: ${String(run.summary.skipped_fresh_cache)}`
+                        : ""}
+                      {run.summary.google_run_kind ? ` · ${String(run.summary.google_run_kind)}` : ""}
                     </p>
                     {run.status === "pending" && (
                       <button type="button" onClick={() => handleRunProvider(run.id)} disabled={working !== null} style={secondaryButtonStyle}>
@@ -554,10 +619,74 @@ export default function AdminOpsPage() {
               <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
                 {reviewItems.map((item) => (
                   <div key={item.id} style={{ borderTop: "1px solid #e5e7eb", paddingTop: 10 }}>
+                    {(() => {
+                      const proposed = asRecord(item.proposed_changes);
+                      const createVenue = asRecord(proposed.create_venue);
+                      const discoveryContext = asRecord(proposed.discovery_context);
+                      const reviewContext = asRecord(proposed.review_context);
+                      const curatedCandidate = asRecord(proposed.curated_candidate);
+                      const duplicateWarnings = stringList(proposed.duplicate_warnings);
+                      const normalized = asRecord(item.normalized_payload);
+                      const searchTerm = asString(discoveryContext.search_term);
+                      const neighborhood = asString(discoveryContext.neighborhood);
+                      const includedReason = asString(discoveryContext.included_reason);
+                      const actionBucket = asString(reviewContext.action_bucket);
+                      const holdReason = asString(reviewContext.hold_reason);
+                      const sourceNote = asString(curatedCandidate.source_note);
+                      const notabilityReason = asString(curatedCandidate.notability_reason);
+                      const businessStatus = asString(normalized.business_status);
+                      return (
+                        <>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                      <strong>{item.venue_name ?? "Unmatched venue"}</strong>
+                      <strong>{item.venue_name ?? asString(createVenue.name) ?? "Unmatched venue"}</strong>
                       <span>{item.provider}</span>
                     </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginTop: 8, fontSize: 13 }}>
+                      <p style={{ margin: 0, color: "#4b5563" }}>
+                        <strong>Google:</strong> {asString(normalized.name) ?? asString(createVenue.name) ?? "--"}
+                      </p>
+                      <p style={{ margin: 0, color: "#4b5563" }}>
+                        <strong>Type:</strong>{" "}
+                        {asString(discoveryContext.primary_type) ?? asString(normalized.primary_type) ?? "--"}
+                      </p>
+                      {searchTerm && (
+                        <p style={{ margin: 0, color: "#4b5563" }}>
+                          <strong>Search:</strong> {searchTerm}
+                          {neighborhood ? ` / ${neighborhood}` : ""}
+                        </p>
+                      )}
+                      {includedReason && (
+                        <p style={{ margin: 0, color: "#4b5563" }}>
+                          <strong>Reason:</strong> {includedReason}
+                        </p>
+                      )}
+                      {actionBucket && (
+                        <p style={{ margin: 0, color: "#4b5563" }}>
+                          <strong>Action:</strong> {actionBucket}
+                          {holdReason ? ` / ${holdReason}` : ""}
+                        </p>
+                      )}
+                      {businessStatus && (
+                        <p style={{ margin: 0, color: "#4b5563" }}>
+                          <strong>Status:</strong> {businessStatus}
+                        </p>
+                      )}
+                      {notabilityReason && (
+                        <p style={{ margin: 0, color: "#4b5563" }}>
+                          <strong>Notable:</strong> {notabilityReason}
+                        </p>
+                      )}
+                      {sourceNote && (
+                        <p style={{ margin: 0, color: "#4b5563" }}>
+                          <strong>Source:</strong> {sourceNote}
+                        </p>
+                      )}
+                    </div>
+                    {duplicateWarnings.length > 0 && (
+                      <div style={{ marginTop: 8, padding: 8, borderRadius: 6, background: "#fef3c7", color: "#92400e", fontSize: 13, fontWeight: 700 }}>
+                        Duplicate warning: {duplicateWarnings.join("; ")}
+                      </div>
+                    )}
                     <pre style={{ whiteSpace: "pre-wrap", background: "#f9fafb", padding: 10, borderRadius: 6, fontSize: 12 }}>
                       {JSON.stringify(item.proposed_changes, null, 2)}
                     </pre>
@@ -569,6 +698,9 @@ export default function AdminOpsPage() {
                         Reject
                       </button>
                     </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 ))}
                 {reviewItems.length === 0 && <p style={{ color: "#6b7280" }}>No pending venue reviews.</p>}

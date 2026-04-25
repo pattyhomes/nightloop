@@ -40,7 +40,8 @@ export type ProviderImportRun = {
 
 export type ProviderName = "foursquare" | "google_places";
 export type ProviderRunMode = "fixture" | "dry_run" | "live";
-export type GoogleRunKind = "existing_qa" | "discovery";
+export type GoogleRunKind = "existing_qa" | "discovery" | "curated_qa";
+export type FoursquareEnrichmentTarget = "default" | "google_discovery_approved" | "curated_sf_notable";
 
 export type VenueReviewItem = {
   id: string;
@@ -53,6 +54,7 @@ export type VenueReviewItem = {
   market_id: string;
   status: "pending" | "approved" | "rejected";
   proposed_changes: Record<string, unknown>;
+  normalized_payload: Record<string, unknown>;
   review_notes: string | null;
   created_at: string;
 };
@@ -162,6 +164,7 @@ export function createProviderRun(
     mode: ProviderRunMode;
     cap: number;
     googleRunKind?: GoogleRunKind;
+    foursquareTarget?: FoursquareEnrichmentTarget;
   }
 ) {
   return adminFetch<{ run: ProviderImportRun }>(token, "/api/v1/admin/provider-import-runs", {
@@ -174,7 +177,9 @@ export function createProviderRun(
       summary:
         input.provider === "google_places"
           ? { google_run_kind: input.googleRunKind ?? "existing_qa" }
-          : {}
+          : input.foursquareTarget && input.foursquareTarget !== "default"
+            ? { enrichment_target: input.foursquareTarget }
+            : {}
     })
   });
 }

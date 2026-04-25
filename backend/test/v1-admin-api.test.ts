@@ -177,6 +177,82 @@ describe("Nightloop v1 admin/data ops API", () => {
     return result.rows[0]?.id ?? "";
   }
 
+  async function createManualCuratedCandidate(marketId: string, name = "Phase 2 Curated Venue"): Promise<string> {
+    const providerRecord = await pool.query<{ id: string }>(
+      `
+        INSERT INTO provider_records (
+          provider,
+          provider_record_id,
+          record_type,
+          market_id,
+          venue_id,
+          raw_payload,
+          normalized_payload,
+          match_confidence,
+          match_status
+        )
+        VALUES (
+          'manual',
+          $1,
+          'venue',
+          $2::uuid,
+          NULL,
+          $3::jsonb,
+          $4::jsonb,
+          NULL,
+          'candidate'
+        )
+        RETURNING id
+      `,
+      [
+        `sf-notable-test-${randomUUID()}`,
+        marketId,
+        JSON.stringify({ test_run_id: testRunId, source: "sf_notable_curated_csv" }),
+        JSON.stringify({
+          name,
+          canonical_type: "club",
+          neighborhood: "SoMa",
+          notability_reason: "test notable nightlife venue",
+          source_note: "test curated source"
+        })
+      ]
+    );
+
+    const review = await pool.query<{ id: string }>(
+      `
+        INSERT INTO venue_review_items (
+          provider_record_id,
+          venue_id,
+          market_id,
+          proposed_changes
+        )
+        VALUES ($1::uuid, NULL, $2::uuid, $3::jsonb)
+        RETURNING id
+      `,
+      [
+        providerRecord.rows[0]?.id,
+        marketId,
+        JSON.stringify({
+          test_run_id: testRunId,
+          curated_candidate: {
+            name,
+            canonical_type: "club",
+            neighborhood: "SoMa",
+            notability_reason: "test notable nightlife venue",
+            source_note: "test curated source"
+          },
+          review_context: {
+            action_bucket: "missing_coordinates",
+            next_step: "run_google_curated_qa_or_manually_verify"
+          },
+          duplicate_warnings: []
+        })
+      ]
+    );
+
+    return review.rows[0]?.id ?? "";
+  }
+
   async function tableExists(tableName: string): Promise<boolean> {
     const result = await pool.query<{ exists: boolean }>(
       "select to_regclass($1) is not null as exists",
@@ -240,6 +316,10 @@ describe("Nightloop v1 admin/data ops API", () => {
     }
     await pool.query(
       "delete from venues where source = 'provider:google_places' and metadata->>'test_run_id' = $1",
+      [testRunId]
+    );
+    await pool.query(
+      "delete from venues where source = 'curated:sf_notable' and metadata->>'test_run_id' = $1",
       [testRunId]
     );
 
@@ -395,6 +475,289 @@ describe("Nightloop v1 admin/data ops API", () => {
     );
   });
 
+  it("creates Google discovery review items with quality metadata and duplicate guards", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    const duplicateVenueId = await createTempVenue(marketId, "Phase 2 Existing Discovery");
+    await pool.query(
+      `
+        UPDATE venues
+        SET latitude = 37.7811,
+            longitude = -122.4121,
+            metadata = metadata || $2::jsonb
+        WHERE id = $1::uuid
+      `,
+      [
+        duplicateVenueId,
+        JSON.stringify({
+          google_place_id: "ChIJ-existing-discovery-duplicate",
+          test_run_id: testRunId
+        })
+      ]
+    );
+
+    const googleApp = createApp({
+      config: {
+        ...testConfig,
+        googlePlacesApiKey: "test-google-key"
+      },
+      authAdmin
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) !== "https://places.googleapis.com/v1/places:searchText") {
+        return originalFetch(url, init);
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          places: [
+            {
+              id: "ChIJ-existing-discovery-duplicate",
+              displayName: { text: "Phase 2 Existing Discovery", languageCode: "en" },
+              formattedAddress: "2 Existing Way, San Francisco, CA 94103",
+              location: { latitude: 37.7811, longitude: -122.4121 },
+              types: ["bar", "establishment"],
+              primaryType: "bar",
+              businessStatus: "OPERATIONAL",
+              googleMapsUri: "https://maps.google.com/?cid=duplicate"
+            },
+            {
+              id: "ChIJ-new-discovery-lounge",
+              displayName: { text: "Phase 2 Discovery Lounge", languageCode: "en" },
+              formattedAddress: "1 Discovery Way, San Francisco, CA 94103",
+              location: { latitude: 37.782, longitude: -122.413 },
+              types: ["cocktail_bar", "bar", "establishment"],
+              primaryType: "cocktail_bar",
+              businessStatus: "OPERATIONAL",
+              googleMapsUri: "https://maps.google.com/?cid=discovery"
+            },
+            {
+              id: "ChIJ-generic-store",
+              displayName: { text: "Phase 2 Discovery Store", languageCode: "en" },
+              formattedAddress: "3 Store Way, San Francisco, CA 94103",
+              location: { latitude: 37.783, longitude: -122.414 },
+              types: ["store", "establishment"],
+              primaryType: "store",
+              businessStatus: "OPERATIONAL",
+              googleMapsUri: "https://maps.google.com/?cid=store"
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    const created = await request(googleApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "google_places",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 3,
+        summary: { test_run_id: testRunId, google_run_kind: "discovery" }
+      })
+      .expect(201);
+
+    const run = await request(googleApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(run.body.summary.provider_records_created).toBe(1);
+    expect(run.body.summary.skipped_duplicates).toBeGreaterThanOrEqual(1);
+    expect(run.body.summary.skipped_non_nightlife).toBeGreaterThanOrEqual(1);
+    expect(run.body.summary.discovery_terms).toContain("cocktail bars");
+    expect(run.body.summary.discovery_terms).not.toContain("bars");
+
+    const reviewItems = await request(googleApp)
+      .get(`/api/v1/admin/venue-review-items?status=pending&import_run_id=${created.body.run.id}`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(reviewItems.body.items).toHaveLength(1);
+    const proposed = reviewItems.body.items[0].proposed_changes;
+    expect(proposed.discovery_context).toEqual(
+      expect.objectContaining({
+        provider: "google_places",
+        google_run_kind: "discovery",
+        included_reason: expect.stringContaining("nightlife")
+      })
+    );
+    expect(proposed.duplicate_warnings).toEqual([]);
+    expect(proposed.create_venue.name).toBe("Phase 2 Discovery Lounge");
+
+    const googleCalls = fetchSpy.mock.calls.filter(
+      ([url]) => String(url) === "https://places.googleapis.com/v1/places:searchText"
+    );
+    expect(googleCalls.length).toBeGreaterThan(0);
+    const firstBody = JSON.parse(String((googleCalls[0]?.[1] as RequestInit).body));
+    expect(firstBody.textQuery).toMatch(/cocktail bars|nightclubs|dance clubs|live music venues|lounges|gay bars|karaoke bars|late night bars/);
+    expect(firstBody.textQuery).not.toMatch(/^bars in/i);
+  });
+
+  it("runs Google curated candidate QA without auto-approving public venues", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    await createManualCuratedCandidate(marketId, "Phase 2 Curated Club");
+
+    const googleApp = createApp({
+      config: {
+        ...testConfig,
+        googlePlacesApiKey: "test-google-key"
+      },
+      authAdmin
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) !== "https://places.googleapis.com/v1/places:searchText") {
+        return originalFetch(url, init);
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          places: [
+            {
+              id: "ChIJ-curated-club",
+              displayName: { text: "Phase 2 Curated Club - Provider Name", languageCode: "en" },
+              formattedAddress: "10 Curated Way, San Francisco, CA 94103",
+              location: { latitude: 37.7823, longitude: -122.4112 },
+              types: ["night_club", "bar", "establishment"],
+              primaryType: "night_club",
+              businessStatus: "OPERATIONAL",
+              googleMapsUri: "https://maps.google.com/?cid=curated"
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    const created = await request(googleApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "google_places",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 1,
+        summary: { test_run_id: testRunId, google_run_kind: "curated_qa" }
+      })
+      .expect(201);
+
+    const run = await request(googleApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(run.body.summary.provider_records_created).toBe(1);
+    expect(run.body.summary.google_run_kind).toBe("curated_qa");
+    expect(
+      fetchSpy.mock.calls.filter(([url]) => String(url) === "https://places.googleapis.com/v1/places:searchText")
+    ).toHaveLength(1);
+
+    const reviewItems = await request(googleApp)
+      .get(`/api/v1/admin/venue-review-items?status=pending&import_run_id=${created.body.run.id}`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(reviewItems.body.items).toHaveLength(1);
+    const proposed = reviewItems.body.items[0].proposed_changes;
+    expect(proposed.create_venue.name).toBe("Phase 2 Curated Club");
+    expect(proposed.create_venue.provider_display_name).toBe("Phase 2 Curated Club - Provider Name");
+    expect(proposed.review_context.action_bucket).toBe("google_verified_curated_candidate");
+    expect(proposed.metadata_patch.notability_reason).toBe("test notable nightlife venue");
+
+    const publicVenue = await pool.query<{ count: string }>(
+      "select count(*)::text from venues where metadata->>'google_place_id' = 'ChIJ-curated-club'"
+    );
+    expect(Number(publicVenue.rows[0]?.count ?? 0)).toBe(0);
+  });
+
+  it("holds curated Google QA rows when provider status or duplicate warnings are risky", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    await createManualCuratedCandidate(marketId, "Phase 2 Duplicate Curated Club");
+    const duplicateVenueId = await createTempVenue(marketId, "Phase 2 Duplicate Curated Club");
+    await pool.query(
+      `
+        UPDATE venues
+        SET latitude = 37.7823,
+            longitude = -122.4112,
+            metadata = metadata || $2::jsonb
+        WHERE id = $1::uuid
+      `,
+      [
+        duplicateVenueId,
+        JSON.stringify({
+          test_run_id: testRunId,
+          google_place_id: "ChIJ-curated-duplicate"
+        })
+      ]
+    );
+
+    const googleApp = createApp({
+      config: {
+        ...testConfig,
+        googlePlacesApiKey: "test-google-key"
+      },
+      authAdmin
+    });
+    const originalFetch = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) !== "https://places.googleapis.com/v1/places:searchText") {
+        return originalFetch(url, init);
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          places: [
+            {
+              id: "ChIJ-curated-duplicate",
+              displayName: { text: "Phase 2 Duplicate Curated Club", languageCode: "en" },
+              formattedAddress: "10 Curated Way, San Francisco, CA 94103",
+              location: { latitude: 37.7823, longitude: -122.4112 },
+              types: ["night_club", "bar", "establishment"],
+              primaryType: "night_club",
+              businessStatus: "OPERATIONAL",
+              googleMapsUri: "https://maps.google.com/?cid=curated-duplicate"
+            }
+          ]
+        })
+      } as Response;
+    });
+
+    const created = await request(googleApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "google_places",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 1,
+        summary: { test_run_id: testRunId, google_run_kind: "curated_qa" }
+      })
+      .expect(201);
+
+    await request(googleApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    const reviewItems = await request(googleApp)
+      .get(`/api/v1/admin/venue-review-items?status=pending&import_run_id=${created.body.run.id}`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    const proposed = reviewItems.body.items[0].proposed_changes;
+    expect(proposed.create_venue).toBeUndefined();
+    expect(proposed.review_context.action_bucket).toBe("hold_manual");
+    expect(proposed.review_context.hold_reason).toBe("duplicate_warning");
+    expect(proposed.duplicate_warnings.length).toBeGreaterThan(0);
+  });
+
   it("requires a backend-only Google Places key for live runs and validates provider caps", async () => {
     const admin = await createAdminUser();
     const marketId = await getSfMarketId();
@@ -441,6 +804,19 @@ describe("Nightloop v1 admin/data ops API", () => {
       })
       .expect(400);
     expect(fsqTooLarge.body.error.code).toBe("VALIDATION_ERROR");
+
+    const curatedTooLarge = await request(app)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "google_places",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 51,
+        summary: { test_run_id: testRunId, google_run_kind: "curated_qa" }
+      })
+      .expect(400);
+    expect(curatedTooLarge.body.error.code).toBe("VALIDATION_ERROR");
   });
 
   it("uses the exact Google Places field mask for mocked live existing-venue QA", async () => {
@@ -512,6 +888,60 @@ describe("Nightloop v1 admin/data ops API", () => {
     expect(fieldMask).not.toMatch(
       /rating|userRatingCount|currentOpeningHours|regularOpeningHours|internationalPhoneNumber|nationalPhoneNumber|websiteUri|reviews|photos/
     );
+  });
+
+  it("skips live Google QA for venues with fresh cached provider metadata", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    const venueId = await createTempVenue(marketId, "Phase 2 Fresh Google Cache");
+    await pool.query(
+      `
+        UPDATE venues
+        SET metadata = metadata || $2::jsonb,
+            created_at = now()
+        WHERE id = $1::uuid
+      `,
+      [
+        venueId,
+        JSON.stringify({
+          test_run_id: testRunId,
+          google_place_id: "ChIJ-fresh-cache",
+          google_checked_at: new Date().toISOString()
+        })
+      ]
+    );
+
+    const googleApp = createApp({
+      config: {
+        ...testConfig,
+        googlePlacesApiKey: "test-google-key"
+      },
+      authAdmin
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const created = await request(googleApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "google_places",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 1,
+        summary: { test_run_id: testRunId, google_run_kind: "existing_qa" }
+      })
+      .expect(201);
+
+    const run = await request(googleApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(run.body.summary.provider_records_created).toBe(0);
+    expect(run.body.summary.skipped_fresh_cache).toBe(1);
+    expect(
+      fetchSpy.mock.calls.filter(([url]) => String(url) === "https://places.googleapis.com/v1/places:searchText")
+    ).toHaveLength(0);
   });
 
   it("approves Google Places discovery candidates by creating canonical venues", async () => {
@@ -611,6 +1041,247 @@ describe("Nightloop v1 admin/data ops API", () => {
       [testRunId]
     );
     expect(createdVenue.rows[0]?.source).toBe("provider:google_places");
+  });
+
+  it("prioritizes approved Google discovery venues for capped Foursquare enrichment", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    const olderVenueId = await createTempVenue(marketId, "Phase 2 Older Venue");
+    const googleVenueId = await createTempVenue(marketId, "Phase 2 Google Discovery Venue");
+    await pool.query(
+      `
+        UPDATE venues
+        SET source = 'provider:google_places',
+            metadata = metadata || $2::jsonb,
+            created_at = now()
+        WHERE id = $1::uuid
+      `,
+      [
+        googleVenueId,
+        JSON.stringify({
+          test_run_id: testRunId,
+          google_place_id: "ChIJ-phase2-google-discovery-approved"
+        })
+      ]
+    );
+
+    const fsqApp = createApp({
+      config: {
+        ...testConfig,
+        foursquareApiKey: "test-foursquare-key"
+      },
+      authAdmin
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const text = String(url);
+      if (!text.startsWith("https://api.foursquare.com/v3")) {
+        return originalFetch(url, init);
+      }
+
+      if (text.includes("/places/search")) {
+        expect(text).toContain("Phase+2+Google+Discovery+Venue");
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              {
+                fsq_id: "fsq-phase2-google-discovery",
+                name: "Phase 2 Google Discovery Venue"
+              }
+            ]
+          })
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          fsq_id: "fsq-phase2-google-discovery",
+          name: "Phase 2 Google Discovery Venue",
+          categories: [{ id: 13003, name: "Bar" }],
+          location: {},
+          hours: {},
+          verified: true
+        })
+      } as Response;
+    });
+
+    const created = await request(fsqApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "foursquare",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 1,
+        summary: { test_run_id: testRunId, enrichment_target: "google_discovery_approved" }
+      })
+      .expect(201);
+
+    const run = await request(fsqApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(run.body.summary.provider_records_created).toBe(1);
+    expect(run.body.summary.enrichment_target).toBe("google_discovery_approved");
+    expect(fetchSpy).toHaveBeenCalled();
+
+    const record = await pool.query<{ venue_id: string | null }>(
+      "select venue_id from provider_records where import_run_id = $1::uuid",
+      [created.body.run.id]
+    );
+    expect(record.rows[0]?.venue_id).toBe(googleVenueId);
+    expect(record.rows[0]?.venue_id).not.toBe(olderVenueId);
+  });
+
+  it("prioritizes curated SF notable venues for capped Foursquare enrichment", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    const olderVenueId = await createTempVenue(marketId, "Phase 2 Older Curated Target");
+    const curatedVenueId = await createTempVenue(marketId, "Phase 2 Curated Notable Venue");
+    await pool.query(
+      `
+        UPDATE venues
+        SET source = 'curated:sf_notable',
+            metadata = metadata || $2::jsonb,
+            created_at = now()
+        WHERE id = $1::uuid
+      `,
+      [
+        curatedVenueId,
+        JSON.stringify({
+          test_run_id: testRunId,
+          google_place_id: "ChIJ-phase2-curated-notable"
+        })
+      ]
+    );
+
+    const fsqApp = createApp({
+      config: {
+        ...testConfig,
+        foursquareApiKey: "test-foursquare-key"
+      },
+      authAdmin
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const text = String(url);
+      if (!text.startsWith("https://api.foursquare.com/v3")) {
+        return originalFetch(url, init);
+      }
+
+      if (text.includes("/places/search")) {
+        expect(text).toContain("Phase+2+Curated+Notable+Venue");
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              {
+                fsq_id: "fsq-phase2-curated-notable",
+                name: "Phase 2 Curated Notable Venue"
+              }
+            ]
+          })
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          fsq_id: "fsq-phase2-curated-notable",
+          name: "Phase 2 Curated Notable Venue",
+          categories: [{ id: 13003, name: "Bar" }],
+          location: {},
+          hours: {},
+          verified: true
+        })
+      } as Response;
+    });
+
+    const created = await request(fsqApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "foursquare",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 1,
+        summary: { test_run_id: testRunId, enrichment_target: "curated_sf_notable" }
+      })
+      .expect(201);
+
+    const run = await request(fsqApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(run.body.summary.provider_records_created).toBe(1);
+    expect(run.body.summary.enrichment_target).toBe("curated_sf_notable");
+    expect(fetchSpy).toHaveBeenCalled();
+
+    const record = await pool.query<{ venue_id: string | null; proposed_changes: Record<string, unknown> }>(
+      `
+        SELECT pr.venue_id, vri.proposed_changes
+        FROM provider_records pr
+        JOIN venue_review_items vri ON vri.provider_record_id = pr.id
+        WHERE pr.import_run_id = $1::uuid
+      `,
+      [created.body.run.id]
+    );
+    expect(record.rows[0]?.venue_id).toBe(curatedVenueId);
+    expect(record.rows[0]?.venue_id).not.toBe(olderVenueId);
+    expect(record.rows[0]?.proposed_changes).not.toHaveProperty("name");
+  });
+
+  it("stops capped Foursquare live enrichment after an auth failure", async () => {
+    const admin = await createAdminUser();
+    const marketId = await getSfMarketId();
+    await createTempVenue(marketId, "Phase 2 Foursquare Auth Test One");
+    await createTempVenue(marketId, "Phase 2 Foursquare Auth Test Two");
+
+    const fsqApp = createApp({
+      config: {
+        ...testConfig,
+        foursquareApiKey: "bad-foursquare-key"
+      },
+      authAdmin
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (!String(url).startsWith("https://api.foursquare.com/v3")) {
+        return originalFetch(url, init);
+      }
+
+      return {
+        ok: false,
+        status: 401,
+        text: async () => '{"message":"Invalid request token."}'
+      } as Response;
+    });
+
+    const created = await request(fsqApp)
+      .post("/api/v1/admin/provider-import-runs")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        provider: "foursquare",
+        market_id: marketId,
+        mode: "live",
+        capped_venue_count: 3,
+        summary: { test_run_id: testRunId, enrichment_target: "google_discovery_approved" }
+      })
+      .expect(201);
+
+    const run = await request(fsqApp)
+      .post(`/api/v1/admin/provider-import-runs/${created.body.run.id}/run`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .expect(200);
+
+    expect(run.body.run.status).toBe("failed");
+    expect(run.body.summary.provider_records_created).toBe(0);
+    expect(run.body.summary.errors).toHaveLength(1);
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("https://api.foursquare.com/v3"))).toHaveLength(1);
   });
 
   it("approves or rejects provider review items without silently mutating venues", async () => {

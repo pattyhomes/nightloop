@@ -4,6 +4,14 @@ import type { AppConfig } from "../../lib/config";
 import type { DBClient } from "../../lib/db";
 import { dbQuery, dbTransaction } from "../../lib/db";
 import { ensureAccountForAuthUser } from "./accountService";
+import {
+  findProviderDuplicateWarnings,
+  hasFreshFoursquareMetadata,
+  hasFreshGoogleMetadata,
+  normalizeProviderName as normalizeName,
+  providerProvenancePatch,
+  scoreProviderName as scoreCandidate
+} from "./providerDedupe";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -156,21 +164,35 @@ const GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:s
 export const GOOGLE_PLACES_TEXT_SEARCH_FIELD_MASK =
   "places.id,places.displayName,places.formattedAddress,places.location,places.types,places.primaryType,places.businessStatus,places.googleMapsUri";
 const GOOGLE_DISCOVERY_TERMS = [
-  "bars",
   "cocktail bars",
-  "lounges",
   "nightclubs",
   "dance clubs",
-  "live music venues"
+  "live music venues",
+  "lounges",
+  "gay bars",
+  "karaoke bars",
+  "late night bars"
 ];
-
-function normalizeName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+const GOOGLE_DISCOVERY_NIGHTLIFE_TYPES = new Set([
+  "bar",
+  "night_club",
+  "cocktail_bar",
+  "lounge_bar",
+  "karaoke",
+  "karaoke_bar",
+  "live_music_venue",
+  "performing_arts_theater",
+  "event_venue"
+]);
+const GOOGLE_DISCOVERY_REJECT_TYPES = new Set([
+  "store",
+  "hotel",
+  "lodging",
+  "gym",
+  "fitness_center",
+  "corporate_office"
+]);
+const DISCOVERY_DUPLICATE_RADIUS_METERS = 160;
 
 function slugify(value: string): string {
   const slug = value
@@ -192,17 +214,12 @@ function numberValue(value: unknown): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function scoreCandidate(queryName: string, candidateName: string): number {
-  const query = normalizeName(queryName);
-  const candidate = normalizeName(candidateName);
-  if (candidate === query) return 0.92;
-  if (candidate.replace(/\s+/g, "") === query.replace(/\s+/g, "")) return 0.78;
-  if (candidate.includes(query) || query.includes(candidate)) return 0.64;
-  return 0.25;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isProviderAuthError(error: unknown): boolean {
+  return error instanceof Error && /Foursquare API returned 401|Invalid request token/i.test(error.message);
 }
 
 function serialize(value: JsonRecord | unknown[]): string {
@@ -449,6 +466,12 @@ export async function createProviderImportRun(input: {
     });
   }
 
+  if (input.provider === "google_places" && input.summary?.google_run_kind === "curated_qa" && input.cappedVenueCount > 50) {
+    throw validationError("Google curated candidate QA runs are capped at 50 candidates.", {
+      capped_venue_count: "Curated QA cap is 50"
+    });
+  }
+
   const result = await dbQuery<ProviderRunRow>(
     `
       INSERT INTO provider_import_runs (
@@ -496,7 +519,8 @@ async function readProviderRun(client: DBClient, runId: string, lock = false): P
 async function getMarketVenues(
   client: DBClient,
   marketId: string,
-  limit: number
+  limit: number,
+  options: { prioritizeGoogleDiscoveryApproved?: boolean; prioritizeCuratedSfNotable?: boolean } = {}
 ): Promise<VenueRow[]> {
   const result = await client.query<VenueRow>(
     `
@@ -505,10 +529,28 @@ async function getMarketVenues(
       WHERE market_id = $1::uuid
         AND is_active = true
         AND admin_status = 'approved'
-      ORDER BY name ASC
+      ORDER BY
+        CASE
+          WHEN $4::boolean = true
+            AND source = 'curated:sf_notable'
+            AND metadata ? 'google_place_id'
+          THEN 0
+          WHEN $3::boolean = true
+            AND source = 'provider:google_places'
+            AND metadata ? 'google_place_id'
+          THEN 0
+          ELSE 1
+        END,
+        created_at DESC,
+        name ASC
       LIMIT $2
     `,
-    [marketId, limit]
+    [
+      marketId,
+      limit,
+      options.prioritizeGoogleDiscoveryApproved ?? false,
+      options.prioritizeCuratedSfNotable ?? false
+    ]
   );
   return result.rows;
 }
@@ -549,8 +591,21 @@ type GoogleTextSearchResponse = {
   places?: GooglePlace[];
 };
 
-function googleRunKind(run: ProviderRunRow): "existing_qa" | "discovery" {
-  return run.summary.google_run_kind === "discovery" ? "discovery" : "existing_qa";
+type CuratedCandidateReviewRow = {
+  review_item_id: string;
+  provider_record_id: string;
+  market_id: string;
+  proposed_changes: JsonRecord;
+  normalized_payload: JsonRecord;
+  created_at: string;
+};
+
+type GoogleRunKind = "existing_qa" | "discovery" | "curated_qa";
+
+function googleRunKind(run: ProviderRunRow): GoogleRunKind {
+  if (run.summary.google_run_kind === "discovery") return "discovery";
+  if (run.summary.google_run_kind === "curated_qa") return "curated_qa";
+  return "existing_qa";
 }
 
 function mapGoogleTypeToCanonicalType(place: GooglePlace, fallback?: string | null): string {
@@ -579,14 +634,29 @@ function googleNormalizedPayload(place: GooglePlace): JsonRecord {
   };
 }
 
-function googleMetadataPatch(place: GooglePlace): JsonRecord {
+function googleMetadataPatch(place: GooglePlace, run?: ProviderRunRow, matchConfidence?: number): JsonRecord {
   return {
     google_place_id: place.id,
     google_formatted_address: place.formattedAddress ?? null,
     google_place_types: place.types ?? [],
     google_primary_type: place.primaryType ?? null,
     google_business_status: place.businessStatus ?? null,
-    google_maps_uri: place.googleMapsUri ?? null
+    google_maps_uri: place.googleMapsUri ?? null,
+    ...providerProvenancePatch({
+      provider: "google_places",
+      runId: run?.id,
+      matchConfidence,
+      fields: [
+        "id",
+        "displayName",
+        "formattedAddress",
+        "location",
+        "types",
+        "primaryType",
+        "businessStatus",
+        "googleMapsUri"
+      ]
+    })
   };
 }
 
@@ -630,6 +700,71 @@ function googleDiscoverySearchBody(
       }
     }
   };
+}
+
+function googleCuratedSearchBody(candidate: JsonRecord, market: MarketRow): JsonRecord {
+  const name = textValue(candidate.name) ?? "Unnamed nightlife venue";
+  const neighborhood = textValue(candidate.neighborhood);
+  const latitude = numberValue(candidate.latitude);
+  const longitude = numberValue(candidate.longitude);
+
+  return {
+    textQuery: neighborhood
+      ? `${name} in ${neighborhood}, ${market.display_name}`
+      : `${name} ${market.display_name}`,
+    maxResultCount: 5,
+    languageCode: "en",
+    regionCode: market.country_code,
+    locationBias: {
+      circle: {
+        center: {
+          latitude: latitude ?? Number(market.center_latitude),
+          longitude: longitude ?? Number(market.center_longitude)
+        },
+        radius: latitude == null || longitude == null ? 12000 : 600
+      }
+    }
+  };
+}
+
+function googleDiscoveryTypeDecision(place: GooglePlace): { allowed: boolean; reason: string } {
+  const types = new Set(
+    [place.primaryType, ...(place.types ?? [])].filter((type): type is string => typeof type === "string")
+  );
+  if (place.businessStatus && place.businessStatus !== "OPERATIONAL") {
+    return { allowed: false, reason: `business_status:${place.businessStatus}` };
+  }
+  for (const type of types) {
+    if (GOOGLE_DISCOVERY_REJECT_TYPES.has(type)) {
+      return { allowed: false, reason: `blocked_type:${type}` };
+    }
+  }
+  for (const type of types) {
+    if (GOOGLE_DISCOVERY_NIGHTLIFE_TYPES.has(type)) {
+      return { allowed: true, reason: `nightlife_type:${type}` };
+    }
+  }
+
+  return { allowed: false, reason: "not_nightlife_type" };
+}
+
+async function googleDiscoveryDuplicateWarnings(
+  client: DBClient,
+  marketId: string,
+  place: GooglePlace,
+  latitude: number,
+  longitude: number
+): Promise<string[]> {
+  return (
+    await findProviderDuplicateWarnings(client, {
+      marketId,
+      name: googlePlaceName(place),
+      latitude,
+      longitude,
+      googlePlaceId: textValue(place.id),
+      radiusMeters: DISCOVERY_DUPLICATE_RADIUS_METERS
+    })
+  ).warnings;
 }
 
 async function getFoursquarePayloadForVenue(
@@ -728,6 +863,9 @@ async function getFoursquarePayloadForVenue(
   );
 
   const category = detail.categories?.[0]?.name;
+  const metadataOnly =
+    run.summary.enrichment_target === "google_discovery_approved"
+    || run.summary.enrichment_target === "curated_sf_notable";
   const normalizedPayload = {
     fsq_id: detail.fsq_id,
     name: detail.name,
@@ -747,13 +885,23 @@ async function getFoursquarePayloadForVenue(
     },
     normalizedPayload,
     proposedChanges: {
-      name: detail.name,
-      canonical_type: venue.canonical_type ?? (category ? "bar" : undefined),
+      ...(metadataOnly
+        ? {}
+        : {
+            name: detail.name,
+            canonical_type: venue.canonical_type ?? (category ? "bar" : undefined)
+          }),
       metadata_patch: {
         foursquare_id: detail.fsq_id,
         foursquare_category: category,
         foursquare_verified: detail.verified ?? false,
-        website: detail.website
+        website: detail.website,
+        ...providerProvenancePatch({
+          provider: "foursquare",
+          runId: run.id,
+          matchConfidence: best.score,
+          fields: ["fsq_id", "name", "location", "categories", "hours", "website", "verified", "geocodes"]
+        })
       }
     },
     matchConfidence: best.score
@@ -848,7 +996,16 @@ function getGoogleFixtureDiscoveryPayload(
         google_place_id: googlePlaceId,
         google_maps_uri: null,
         types: ["bar", "establishment"]
-      }
+      },
+      discovery_context: {
+        provider: "google_places",
+        google_run_kind: "discovery",
+        search_term: term,
+        neighborhood: null,
+        primary_type: "bar",
+        included_reason: "nightlife_type:bar"
+      },
+      duplicate_warnings: []
     },
     matchConfidence: 0.72
   };
@@ -929,7 +1086,7 @@ async function getGooglePayloadForVenue(
       ...(typeof run.summary.test_run_id === "string" ? { test_run_id: run.summary.test_run_id } : {}),
       name: googlePlaceName(best.place),
       canonical_type: mapGoogleTypeToCanonicalType(best.place, venue.canonical_type),
-      metadata_patch: googleMetadataPatch(best.place)
+      metadata_patch: googleMetadataPatch(best.place, run, best.score)
     },
     matchConfidence: best.score
   };
@@ -940,13 +1097,25 @@ async function getGoogleDiscoveryPayloads(
   market: MarketRow,
   run: ProviderRunRow,
   config: AppConfig
-): Promise<ProviderCandidatePayload[]> {
+): Promise<{
+  payloads: ProviderCandidatePayload[];
+  attemptedRequests: number;
+  skippedDuplicates: number;
+  skippedNonNightlife: number;
+  discoveryTerms: string[];
+}> {
   const cap = run.capped_venue_count;
 
   if (run.mode !== "live") {
-    return GOOGLE_DISCOVERY_TERMS.slice(0, cap).map((term, index) =>
-      getGoogleFixtureDiscoveryPayload(market, term, index, run)
-    );
+    return {
+      payloads: GOOGLE_DISCOVERY_TERMS.slice(0, cap).map((term, index) =>
+        getGoogleFixtureDiscoveryPayload(market, term, index, run)
+      ),
+      attemptedRequests: Math.min(cap, GOOGLE_DISCOVERY_TERMS.length),
+      skippedDuplicates: 0,
+      skippedNonNightlife: 0,
+      discoveryTerms: GOOGLE_DISCOVERY_TERMS
+    };
   }
 
   if (!config.googlePlacesApiKey) {
@@ -963,33 +1132,40 @@ async function getGoogleDiscoveryPayloads(
     : GOOGLE_DISCOVERY_TERMS.map((term) => ({ term, neighborhood: undefined as string | undefined }));
   const payloads: ProviderCandidatePayload[] = [];
   const seenPlaceIds = new Set<string>();
+  let attemptedRequests = 0;
+  let skippedDuplicates = 0;
+  let skippedNonNightlife = 0;
 
   for (const query of queries) {
     if (payloads.length >= cap) break;
 
     const searchBody = googleDiscoverySearchBody(query.term, market, query.neighborhood);
     const search = await fetchGooglePlacesTextSearch(config.googlePlacesApiKey, searchBody);
+    attemptedRequests += 1;
 
     for (const place of search.places ?? []) {
       if (payloads.length >= cap) break;
-      if (!place.id || seenPlaceIds.has(place.id)) continue;
+      if (!place.id || seenPlaceIds.has(place.id)) {
+        skippedDuplicates += 1;
+        continue;
+      }
       seenPlaceIds.add(place.id);
 
       const latitude = numberValue(place.location?.latitude);
       const longitude = numberValue(place.location?.longitude);
       if (latitude == null || longitude == null) continue;
 
-      const duplicate = await client.query<{ exists: boolean }>(
-        `
-          SELECT EXISTS (
-            SELECT 1 FROM venues
-            WHERE market_id = $1::uuid
-              AND metadata->>'google_place_id' = $2
-          ) AS exists
-        `,
-        [market.id, place.id]
-      );
-      if (duplicate.rows[0]?.exists) continue;
+      const typeDecision = googleDiscoveryTypeDecision(place);
+      if (!typeDecision.allowed) {
+        skippedNonNightlife += 1;
+        continue;
+      }
+
+      const duplicateWarnings = await googleDiscoveryDuplicateWarnings(client, market.id, place, latitude, longitude);
+      if (duplicateWarnings.length > 0) {
+        skippedDuplicates += 1;
+        continue;
+      }
 
       payloads.push({
         providerRecordId: place.id,
@@ -1014,14 +1190,290 @@ async function getGoogleDiscoveryPayloads(
             google_place_id: place.id,
             google_maps_uri: place.googleMapsUri ?? null,
             types: place.types ?? []
-          }
+          },
+          discovery_context: {
+            provider: "google_places",
+            google_run_kind: "discovery",
+            search_term: query.term,
+            neighborhood: query.neighborhood ?? null,
+            primary_type: place.primaryType ?? null,
+            included_reason: typeDecision.reason
+          },
+          duplicate_warnings: duplicateWarnings
         },
         matchConfidence: 0.72
       });
     }
   }
 
-  return payloads;
+  return {
+    payloads,
+    attemptedRequests,
+    skippedDuplicates,
+    skippedNonNightlife,
+    discoveryTerms: GOOGLE_DISCOVERY_TERMS
+  };
+}
+
+async function getCuratedCandidateReviews(
+  client: DBClient,
+  marketId: string,
+  limit: number,
+  options: { testRunId?: string } = {}
+): Promise<CuratedCandidateReviewRow[]> {
+  const result = await client.query<CuratedCandidateReviewRow>(
+    `
+      SELECT
+        vri.id AS review_item_id,
+        vri.provider_record_id,
+        vri.market_id,
+        vri.proposed_changes,
+        pr.normalized_payload,
+        vri.created_at
+      FROM venue_review_items vri
+      JOIN provider_records pr ON pr.id = vri.provider_record_id
+      WHERE vri.market_id = $1::uuid
+        AND vri.status = 'pending'
+        AND vri.venue_id IS NULL
+        AND pr.provider = 'manual'
+        AND vri.proposed_changes ? 'curated_candidate'
+        AND ($3::text IS NULL OR vri.proposed_changes->>'test_run_id' = $3::text)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM provider_records google_pr
+          WHERE google_pr.provider = 'google_places'
+            AND google_pr.market_id = vri.market_id
+            AND google_pr.raw_payload->>'curated_review_item_id' = vri.id::text
+            AND google_pr.imported_at > now() - interval '30 days'
+        )
+      ORDER BY vri.created_at ASC
+      LIMIT $2
+    `,
+    [marketId, limit, options.testRunId ?? null]
+  );
+
+  return result.rows;
+}
+
+function getGoogleFixturePayloadForCuratedCandidate(
+  candidateReview: CuratedCandidateReviewRow,
+  market: MarketRow,
+  run: ProviderRunRow,
+  index: number
+): ProviderCandidatePayload {
+  const curated = asRecord(candidateReview.proposed_changes.curated_candidate);
+  const name = textValue(curated.name) ?? `Curated Venue ${index + 1}`;
+  const latitude = numberValue(curated.latitude) ?? Number(market.center_latitude) + index * 0.001;
+  const longitude = numberValue(curated.longitude) ?? Number(market.center_longitude) - index * 0.001;
+  const googlePlaceId = `fixture-google-curated-${candidateReview.review_item_id}`;
+  const canonicalType = textValue(curated.canonical_type) ?? "bar";
+
+  return {
+    providerRecordId: googlePlaceId,
+    venueId: null,
+    rawPayload: {
+      run_id: run.id,
+      mode: run.mode,
+      source: "google_places_fixture_curated_qa",
+      curated_review_item_id: candidateReview.review_item_id,
+      curated_candidate: curated,
+      ...(typeof run.summary.test_run_id === "string" ? { test_run_id: run.summary.test_run_id } : {})
+    },
+    normalizedPayload: {
+      google_place_id: googlePlaceId,
+      name,
+      formatted_address: null,
+      location: { latitude, longitude },
+      types: [canonicalType, "establishment"],
+      primary_type: canonicalType,
+      business_status: "OPERATIONAL",
+      google_maps_uri: null
+    },
+    proposedChanges: {
+      ...(typeof run.summary.test_run_id === "string" ? { test_run_id: run.summary.test_run_id } : {}),
+      create_venue: {
+        name,
+        canonical_type: canonicalType,
+        latitude,
+        longitude,
+        formatted_address: null,
+        google_place_id: googlePlaceId,
+        google_maps_uri: null,
+        types: [canonicalType, "establishment"]
+      },
+      curated_candidate: curated,
+      review_context: {
+        action_bucket: "google_verified_curated_candidate",
+        original_review_item_id: candidateReview.review_item_id,
+        approval_default: "manual_hold_for_imperfect_matches"
+      },
+      duplicate_warnings: [],
+      metadata_patch: {
+        neighborhood: textValue(curated.neighborhood),
+        notability_reason: textValue(curated.notability_reason),
+        source_note: textValue(curated.source_note),
+        provider: "manual_curated_google_verified",
+        ...providerProvenancePatch({
+          provider: "google_places",
+          runId: run.id,
+          matchConfidence: 0.9,
+          fields: ["fixture"]
+        })
+      }
+    },
+    matchConfidence: 0.9
+  };
+}
+
+async function getGooglePayloadForCuratedCandidate(
+  client: DBClient,
+  candidateReview: CuratedCandidateReviewRow,
+  market: MarketRow,
+  run: ProviderRunRow,
+  config: AppConfig,
+  index: number
+): Promise<ProviderCandidatePayload> {
+  if (run.mode !== "live") {
+    return getGoogleFixturePayloadForCuratedCandidate(candidateReview, market, run, index);
+  }
+
+  if (!config.googlePlacesApiKey) {
+    throw new ApiError(
+      409,
+      "PROVIDER_KEY_MISSING",
+      "GOOGLE_PLACES_API_KEY is required before running a capped live Google Places import."
+    );
+  }
+
+  const curated = asRecord(candidateReview.proposed_changes.curated_candidate);
+  const curatedName = textValue(curated.name) ?? "Unnamed nightlife venue";
+  const searchBody = googleCuratedSearchBody(curated, market);
+  const search = await fetchGooglePlacesTextSearch(config.googlePlacesApiKey, searchBody);
+  const candidates = (search.places ?? [])
+    .map((place) => ({ place, score: scoreCandidate(curatedName, googlePlaceName(place)) }))
+    .sort((left, right) => right.score - left.score);
+  const best = candidates[0];
+  const basePayload = {
+    run_id: run.id,
+    mode: run.mode,
+    source: "google_places_live_curated_qa",
+    curated_review_item_id: candidateReview.review_item_id,
+    curated_candidate: curated,
+    search_body: searchBody,
+    ...(typeof run.summary.test_run_id === "string" ? { test_run_id: run.summary.test_run_id } : {})
+  };
+
+  if (!best || best.score < 0.55) {
+    return {
+      providerRecordId: `unmatched-google-curated-${run.id}-${candidateReview.review_item_id}`,
+      venueId: null,
+      rawPayload: {
+        ...basePayload,
+        candidates: search.places ?? [],
+        unmatched: true
+      },
+      normalizedPayload: {
+        name: curatedName,
+        source: "google_places_live_curated_qa"
+      },
+      proposedChanges: {
+        curated_candidate: curated,
+        review_context: {
+          action_bucket: "hold_manual",
+          hold_reason: "low_confidence_google_match",
+          original_review_item_id: candidateReview.review_item_id
+        },
+        duplicate_warnings: [],
+        metadata_patch: {
+          google_places_match_status: "unmatched",
+          ...providerProvenancePatch({
+            provider: "google_places",
+            runId: run.id,
+            matchConfidence: best?.score ?? 0,
+            fields: []
+          })
+        }
+      },
+      matchConfidence: best?.score ?? 0
+    };
+  }
+
+  const place = best.place;
+  const latitude = numberValue(place.location?.latitude);
+  const longitude = numberValue(place.location?.longitude);
+  const duplicateResult =
+    latitude == null || longitude == null
+      ? { warnings: ["missing_google_coordinates"], blockingDuplicate: false }
+      : await findProviderDuplicateWarnings(client, {
+          marketId: market.id,
+          name: googlePlaceName(place),
+          latitude,
+          longitude,
+          googlePlaceId: textValue(place.id),
+          radiusMeters: DISCOVERY_DUPLICATE_RADIUS_METERS
+        });
+  const status = place.businessStatus ?? null;
+  const shouldHold =
+    status !== "OPERATIONAL" ||
+    latitude == null ||
+    longitude == null ||
+    duplicateResult.warnings.length > 0;
+  const canonicalType = textValue(curated.canonical_type) ?? mapGoogleTypeToCanonicalType(place);
+  const metadataPatch = {
+    neighborhood: textValue(curated.neighborhood),
+    notability_reason: textValue(curated.notability_reason),
+    source_note: textValue(curated.source_note),
+    source_url: textValue(curated.source_url),
+    alias_names: textValue(curated.alias_names),
+    provider: "manual_curated_google_verified",
+    ...googleMetadataPatch(place, run, best.score)
+  };
+
+  return {
+    providerRecordId: place.id,
+    venueId: null,
+    rawPayload: {
+      ...basePayload,
+      place
+    },
+    normalizedPayload: googleNormalizedPayload(place),
+    proposedChanges: {
+      ...(typeof run.summary.test_run_id === "string" ? { test_run_id: run.summary.test_run_id } : {}),
+      ...(shouldHold
+        ? {}
+        : {
+            create_venue: {
+              name: curatedName,
+              provider_display_name: googlePlaceName(place),
+              canonical_type: canonicalType,
+              latitude,
+              longitude,
+              formatted_address: place.formattedAddress ?? null,
+              google_place_id: place.id,
+              google_maps_uri: place.googleMapsUri ?? null,
+              types: place.types ?? []
+            }
+          }),
+      curated_candidate: curated,
+      review_context: {
+        action_bucket: shouldHold ? "hold_manual" : "google_verified_curated_candidate",
+        hold_reason:
+          status !== "OPERATIONAL"
+            ? `business_status:${status ?? "missing"}`
+            : latitude == null || longitude == null
+              ? "missing_google_coordinates"
+              : duplicateResult.warnings.length > 0
+                ? "duplicate_warning"
+                : null,
+        original_review_item_id: candidateReview.review_item_id,
+        approval_default: "manual_hold_for_imperfect_matches",
+        provider_display_name: googlePlaceName(place)
+      },
+      duplicate_warnings: duplicateResult.warnings,
+      metadata_patch: metadataPatch
+    },
+    matchConfidence: best.score
+  };
 }
 
 async function insertProviderCandidate(input: {
@@ -1165,10 +1617,25 @@ export async function runProviderImportRun(input: {
     let reviewItemsCreated = 0;
     let attempted = 0;
     let skippedDuplicates = 0;
+    let skippedNonNightlife = 0;
+    let skippedFreshCache = 0;
+    let discoveryTerms: string[] | undefined;
     const errors: Array<{ venue_id?: string; provider_record_id?: string; message: string }> = [];
+    const forceRefresh = run.summary.force_refresh === true;
+    const useFreshCache = run.mode === "live" && !forceRefresh;
 
     if (run.provider === "foursquare") {
-      const venues = await getMarketVenues(client, run.market_id, run.capped_venue_count);
+      const venueCandidates = await getMarketVenues(client, run.market_id, run.capped_venue_count, {
+        prioritizeGoogleDiscoveryApproved: run.summary.enrichment_target === "google_discovery_approved",
+        prioritizeCuratedSfNotable: run.summary.enrichment_target === "curated_sf_notable"
+      });
+      const venues = useFreshCache
+        ? venueCandidates.filter((venue) => {
+            if (!hasFreshFoursquareMetadata(asRecord(venue.metadata))) return true;
+            skippedFreshCache += 1;
+            return false;
+          })
+        : venueCandidates;
       attempted = venues.length;
 
       for (const venue of venues) {
@@ -1190,20 +1657,59 @@ export async function runProviderImportRun(input: {
             venue_id: venue.id,
             message: error instanceof Error ? error.message : "Unknown provider import error."
           });
+          if (isProviderAuthError(error)) {
+            break;
+          }
         }
       }
     } else {
       const kind = googleRunKind(run);
-      const payloads =
-        kind === "discovery"
-          ? await getGoogleDiscoveryPayloads(client, market, run, input.config)
-          : await Promise.all(
-              (await getMarketVenues(client, run.market_id, run.capped_venue_count)).map((venue) =>
-                getGooglePayloadForVenue(venue, market, run, input.config)
-              )
-            );
-
-      attempted = payloads.length;
+      let payloads: ProviderCandidatePayload[];
+      if (kind === "discovery") {
+        const discovery = await getGoogleDiscoveryPayloads(client, market, run, input.config);
+        payloads = discovery.payloads;
+        attempted = discovery.attemptedRequests;
+        skippedDuplicates += discovery.skippedDuplicates;
+        skippedNonNightlife = discovery.skippedNonNightlife;
+        discoveryTerms = discovery.discoveryTerms;
+      } else if (kind === "curated_qa") {
+        const curatedCandidates = await getCuratedCandidateReviews(client, run.market_id, run.capped_venue_count, {
+          testRunId: typeof run.summary.test_run_id === "string" ? run.summary.test_run_id : undefined
+        });
+        attempted = curatedCandidates.length;
+        payloads = [];
+        for (const [index, candidate] of curatedCandidates.entries()) {
+          const previous = await client.query<{ exists: boolean }>(
+            `
+              SELECT EXISTS (
+                SELECT 1
+                FROM provider_records
+                WHERE provider = 'google_places'
+                  AND raw_payload->>'curated_review_item_id' = $1
+                  AND market_id = $2::uuid
+                  AND imported_at > now() - interval '30 days'
+              ) AS exists
+            `,
+            [candidate.review_item_id, run.market_id]
+          );
+          if (useFreshCache && previous.rows[0]?.exists) {
+            skippedFreshCache += 1;
+            continue;
+          }
+          payloads.push(await getGooglePayloadForCuratedCandidate(client, candidate, market, run, input.config, index));
+        }
+      } else {
+        const venueCandidates = await getMarketVenues(client, run.market_id, run.capped_venue_count);
+        const venues = useFreshCache
+          ? venueCandidates.filter((venue) => {
+              if (!hasFreshGoogleMetadata(asRecord(venue.metadata))) return true;
+              skippedFreshCache += 1;
+              return false;
+            })
+          : venueCandidates;
+        payloads = await Promise.all(venues.map((venue) => getGooglePayloadForVenue(venue, market, run, input.config)));
+        attempted = venues.length;
+      }
 
       for (const payload of payloads) {
         try {
@@ -1251,6 +1757,9 @@ export async function runProviderImportRun(input: {
       provider_records_created: providerRecordsCreated,
       review_items_created: reviewItemsCreated,
       skipped_duplicates: skippedDuplicates,
+      skipped_non_nightlife: skippedNonNightlife,
+      skipped_fresh_cache: skippedFreshCache,
+      discovery_terms: discoveryTerms,
       errors
     };
 
@@ -1369,6 +1878,7 @@ function discoveryVenueFromProposed(proposed: JsonRecord): {
   latitude: number;
   longitude: number;
   metadata: JsonRecord;
+  source: string;
 } | null {
   const createVenue = asRecord(proposed.create_venue);
   if (Object.keys(createVenue).length === 0) return null;
@@ -1383,14 +1893,20 @@ function discoveryVenueFromProposed(proposed: JsonRecord): {
   }
 
   const canonicalType = textValue(createVenue.canonical_type) ?? "bar";
+  const metadataPatch = asRecord(proposed.metadata_patch);
   const metadata = {
+    ...metadataPatch,
     ...(typeof proposed.test_run_id === "string" ? { test_run_id: proposed.test_run_id } : {}),
-    google_place_id: textValue(createVenue.google_place_id),
-    google_maps_uri: textValue(createVenue.google_maps_uri),
-    google_formatted_address: textValue(createVenue.formatted_address),
-    google_place_types: Array.isArray(createVenue.types) ? createVenue.types : [],
-    provider: "google_places",
-    discovery_source: "ops_review"
+    ...(textValue(createVenue.google_place_id) ? { google_place_id: textValue(createVenue.google_place_id) } : {}),
+    ...(textValue(createVenue.google_maps_uri) ? { google_maps_uri: textValue(createVenue.google_maps_uri) } : {}),
+    ...(textValue(createVenue.formatted_address)
+      ? { google_formatted_address: textValue(createVenue.formatted_address) }
+      : {}),
+    ...(Array.isArray(createVenue.types) ? { google_place_types: createVenue.types } : {}),
+    provider: textValue(metadataPatch.provider) ?? "google_places",
+    discovery_source: textValue(metadataPatch.provider) === "manual_curated_google_verified"
+      ? "curated_ops_review"
+      : "ops_review"
   };
 
   return {
@@ -1398,7 +1914,10 @@ function discoveryVenueFromProposed(proposed: JsonRecord): {
     canonicalType,
     latitude,
     longitude,
-    metadata
+    metadata,
+    source: textValue(metadataPatch.provider) === "manual_curated_google_verified"
+      ? "curated:sf_notable"
+      : "provider:google_places"
   };
 }
 
@@ -1465,10 +1984,10 @@ export async function approveVenueReviewItem(input: {
             $4,
             $5,
             $6,
-            'provider:google_places',
-            $7::jsonb,
-            $8::uuid,
-            $9,
+            $7,
+            $8::jsonb,
+            $9::uuid,
+            $10,
             true,
             'approved'
           )
@@ -1481,6 +2000,7 @@ export async function approveVenueReviewItem(input: {
           market.country_code,
           discoveryVenue.latitude,
           discoveryVenue.longitude,
+          discoveryVenue.source,
           serialize(discoveryVenue.metadata),
           review.market_id,
           discoveryVenue.canonicalType

@@ -12,7 +12,8 @@
     "start": "node dist/server.js",
     "ingest:ra": "tsx src/scripts/fetchRAEvents.ts",
     "enrich:foursquare": "tsx src/scripts/enrichVenuesFoursquare.ts",
-    "review:google-qa": "tsx src/scripts/reviewGooglePlacesQa.ts"
+    "review:google-qa": "tsx src/scripts/reviewGooglePlacesQa.ts",
+    "import:sf-notable": "tsx src/scripts/importSfNotableVenues.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",
