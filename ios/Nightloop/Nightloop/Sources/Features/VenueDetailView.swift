@@ -5,87 +5,273 @@ struct VenueDetailView: View {
     @ObservedObject var authStore: AuthStore
     let venueID: String
     let initialVenue: VenueItem?
+    let onAccountChanged: (MeResponse) -> Void
 
+    @Environment(\.dismiss) private var dismiss
     @State private var detail: VenueDetailResponse?
     @State private var errorMessage: String?
     @State private var isLoading = true
     @State private var signalMessage: String?
     @State private var submittingSignal: SignalKind?
+    @State private var isSaved = false
 
     var venue: VenueItem? {
         detail?.venue ?? initialVenue
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if let venue {
-                    detailHeader(venue)
-                    signalGrid(venue)
-                    infoSection(venue)
-                } else if isLoading {
-                    LoadingStateView(title: "Loading venue")
-                } else if let errorMessage {
-                    ErrorStateView(title: "Venue unavailable", message: errorMessage) {
-                        Task { await load() }
+        ZStack(alignment: .bottom) {
+            OrchidBackground(animated: true, gridOpacity: 0.025)
+
+            if let venue {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        detailHero(venue)
+                        detailContent(venue)
+                    }
+                    .padding(.bottom, 18)
+                }
+                .ignoresSafeArea(edges: .top)
+                .overlay(alignment: .top) {
+                    topControls
+                }
+            } else {
+                VStack {
+                    if isLoading {
+                        LoadingStateView(title: "Loading venue")
+                    } else if let errorMessage {
+                        ErrorStateView(title: "Venue unavailable", message: errorMessage) {
+                            Task { await load() }
+                        }
+                        .padding(20)
                     }
                 }
             }
-            .padding(20)
+
+            if let signalMessage {
+                SignalToast(message: signalMessage, isError: !signalMessage.contains("+"))
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
-        .background(OrchidBackground())
-        .navigationTitle(venue?.name ?? "Venue")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
     }
 
-    private func detailHeader(_ venue: VenueItem) -> some View {
-        NightloopCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    PulsePill(level: venue.pulse.level, label: venue.pulse.label)
-                    Spacer()
-                    EnergyScorePill(score: venue.pulse.score)
+    private var topControls: some View {
+        HStack {
+            GlassIconButton(systemName: "chevron.left") {
+                dismiss()
+            }
+            Spacer()
+            HStack(spacing: 8) {
+                GlassIconButton(systemName: isSaved ? "bookmark.fill" : "bookmark") {
+                    isSaved.toggle()
                 }
+                GlassIconButton(systemName: "square.and.arrow.up") {}
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 54)
+    }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(venue.name)
-                        .font(.largeTitle.weight(.black))
-                        .foregroundStyle(NightloopTheme.ink)
+    private func detailHero(_ venue: VenueItem) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            VenueArtView(venue: venue, height: 340, cornerRadius: 0)
+                .overlay(
+                    LinearGradient(
+                        colors: [.black.opacity(0.08), NightloopTheme.background.opacity(0.92)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
 
-                    Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(NightloopTheme.inkMuted)
+            HStack(spacing: 6) {
+                PulsePill(level: venue.pulse.level, label: venue.pulse.label)
+                Text("Trending \(venue.trend)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 6)
+                    .background(Color.black.opacity(0.42))
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 18)
+        }
+        .frame(height: 340)
+    }
+
+    private func detailContent(_ venue: VenueItem) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            titleBlock(venue)
+            energyBar(venue)
+            statsRow(venue)
+            whyNightloopCard(venue)
+            liveTrendCard(venue)
+            tagsSection(venue)
+            if let eventTitle = venue.event?.title {
+                eventCard(eventTitle)
+            }
+            infoSection(venue)
+            signalGrid(venue)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+    }
+
+    private func titleBlock(_ venue: VenueItem) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(venue.name)
+                    .font(.system(size: 32, weight: .black, design: .rounded))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+
+                Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+            }
+
+            Spacer(minLength: 8)
+            EnergyScoreBlock(score: venue.pulse.score)
+        }
+    }
+
+    private func energyBar(_ venue: VenueItem) -> some View {
+        VStack(spacing: 5) {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.06))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [NightloopTheme.cool, NightloopTheme.amber, NightloopTheme.rose],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: geometry.size.width * CGFloat(max(0, min(venue.pulse.score, 100))) / 100)
                 }
+            }
+            .frame(height: 6)
 
-                VenueArtView(venue: venue)
+            HStack {
+                Text("Chill")
+                Spacer()
+                Text("Active")
+                Spacer()
+                Text("Packed")
+            }
+            .font(.caption2.weight(.black))
+            .tracking(1)
+            .foregroundStyle(NightloopTheme.inkDim)
+        }
+    }
 
-                SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
+    private func statsRow(_ venue: VenueItem) -> some View {
+        HStack(spacing: 10) {
+            StatMiniCard(value: venue.waitMinutes.map { "\($0)m" } ?? "?", label: "Wait", color: waitColor(venue.waitMinutes))
+            StatMiniCard(value: coverCopy(for: venue), label: "Cover")
+            StatMiniCard(value: "\(venue.friendSummary.friendsHereCount)", label: "Friends", color: NightloopTheme.purple)
+        }
+    }
 
-                if let eventTitle = venue.event?.title {
-                    Label(eventTitle, systemImage: "music.note")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(NightloopTheme.amber)
-                }
+    private func whyNightloopCard(_ venue: VenueItem) -> some View {
+        NightloopCard(fill: NightloopTheme.purpleSoft) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Why Nightloop picks it", systemImage: "sparkles")
+                    .font(.caption.weight(.black))
+                    .tracking(1.2)
+                    .foregroundStyle(Color(hex: "#e9d5ff"))
 
-                if let signalMessage {
-                    Text(signalMessage)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(NightloopTheme.good)
+                ForEach(whyLines(for: venue), id: \.self) { line in
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(NightloopTheme.purple)
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 7)
+                        Text(line)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineSpacing(3)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func signalGrid(_ venue: VenueItem) -> some View {
-        NightloopCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Send a signal")
-                    .font(.headline)
-                    .foregroundStyle(NightloopTheme.ink)
+    private func liveTrendCard(_ venue: VenueItem) -> some View {
+        NightloopCard(fill: Color.white.opacity(0.04)) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    NightloopSectionHeader(title: "Live trend · last 3 hours")
+                    Spacer()
+                    Text("\(venue.recentSignalCount) reports")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                }
+                SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
+                HStack {
+                    Text("9:00")
+                    Spacer()
+                    Text("10:00")
+                    Spacer()
+                    Text("11:00")
+                    Spacer()
+                    Text("now")
+                }
+                .font(.caption2.monospaced())
+                .foregroundStyle(NightloopTheme.inkDim)
+            }
+        }
+    }
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+    private func tagsSection(_ venue: VenueItem) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            tagGroup(title: "Vibe tonight", tags: vibeTags(for: venue), isMusic: false)
+            tagGroup(title: "Music", tags: musicTags(for: venue), isMusic: true)
+        }
+    }
+
+    private func tagGroup(title: String, tags: [String], isMusic: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            NightloopSectionHeader(title: title)
+            FlowLayout(spacing: 6) {
+                ForEach(tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(isMusic ? Color(hex: "#e9d5ff") : NightloopTheme.ink)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(isMusic ? NightloopTheme.purpleSoft : Color.white.opacity(0.05))
+                        .clipShape(Capsule())
+                        .overlay {
+                            Capsule().stroke(isMusic ? NightloopTheme.purpleEdge : NightloopTheme.hairlineSoft)
+                        }
+                }
+            }
+        }
+    }
+
+    private func eventCard(_ title: String) -> some View {
+        NightloopCard(fill: NightloopTheme.amber.opacity(0.10)) {
+            Label(title, systemImage: "music.note")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(NightloopTheme.amber)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func signalGrid(_ venue: VenueItem) -> some View {
+        NightloopCard(fill: Color.white.opacity(0.04)) {
+            VStack(alignment: .leading, spacing: 12) {
+                NightloopSectionHeader(title: "Send a signal from here")
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
                     ForEach(SignalKind.allCases) { kind in
                         Button {
                             Task { await submitSignal(venueID: venue.id, kind: kind) }
@@ -93,16 +279,24 @@ struct VenueDetailView: View {
                             if submittingSignal == kind {
                                 ProgressView().tint(kind == .packed ? NightloopTheme.fab : NightloopTheme.purple)
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
+                                    .padding(.vertical, 9)
                             } else {
-                                Label(kind.label, systemImage: kind.symbol)
-                                    .font(.caption.weight(.bold))
+                                VStack(spacing: 4) {
+                                    Image(systemName: kind.symbol)
+                                        .font(.callout.weight(.bold))
+                                    Text(shortSignalLabel(kind))
+                                        .font(.caption2.weight(.bold))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.7)
+                                }
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
+                                    .padding(.vertical, 9)
                             }
                         }
-                        .buttonStyle(.bordered)
-                        .tint(kind == .packed ? NightloopTheme.fab : NightloopTheme.purple)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(NightloopTheme.ink)
+                        .background(submittingSignal == kind ? NightloopTheme.good : Color.white.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .disabled(submittingSignal != nil)
                     }
                 }
@@ -112,16 +306,14 @@ struct VenueDetailView: View {
     }
 
     private func infoSection(_ venue: VenueItem) -> some View {
-        NightloopCard {
+        NightloopCard(fill: Color.white.opacity(0.035)) {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Live state", systemImage: "waveform.path.ecg")
-                    .font(.headline)
-                    .foregroundStyle(NightloopTheme.ink)
+                NightloopSectionHeader(title: "Worth noting")
 
                 DetailLine(label: "Signals", value: "\(venue.signalCount) total · \(venue.recentSignalCount) recent")
                 DetailLine(label: "Wait", value: venue.waitMinutes.map { "\($0) min" } ?? "Unknown")
                 DetailLine(label: "Confidence", value: venue.confidence.capitalized)
-                DetailLine(label: "Coordinates", value: String(format: "%.4f, %.4f", venue.coordinate.latitude, venue.coordinate.longitude))
+                DetailLine(label: "Address", value: "\(venue.neighborhood), San Francisco")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -150,12 +342,72 @@ struct VenueDetailView: View {
         submittingSignal = kind
         do {
             let result = try await apiClient.submitSignal(venueID: venueID, kind: kind, bearerToken: token)
-            signalMessage = "+\(result.pointsAwarded) Signal Scout points"
+            signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
             await load()
+            if let updatedMe = try? await apiClient.me(bearerToken: token) {
+                onAccountChanged(updatedMe)
+            }
         } catch {
             signalMessage = error.localizedDescription
         }
         submittingSignal = nil
+    }
+
+    private func waitColor(_ wait: Int?) -> Color {
+        guard let wait else { return NightloopTheme.ink }
+        if wait < 10 { return NightloopTheme.good }
+        if wait < 20 { return NightloopTheme.amber }
+        return NightloopTheme.rose
+    }
+
+    private func coverCopy(for venue: VenueItem) -> String {
+        if venue.pulse.level >= 3 { return "$20-30" }
+        if venue.pulse.level == 2 { return "$10-15" }
+        return "Free"
+    }
+
+    private func whyLines(for venue: VenueItem) -> [String] {
+        var lines = [venue.whyShort]
+        if venue.trend == "rising" {
+            lines.append("Energy is rising in the last hour; get there before the line does.")
+        } else if venue.trend == "cooling" {
+            lines.append("Cooling off; expect easier entry but less atmosphere.")
+        }
+        if venue.friendSummary.friendsHereCount > 0 {
+            lines.append("\(venue.friendSummary.firstFriendName ?? "A friend") is already here.")
+        }
+        if let event = venue.event?.title {
+            lines.append("\(event) is live tonight.")
+        }
+        return Array(lines.prefix(4))
+    }
+
+    private func vibeTags(for venue: VenueItem) -> [String] {
+        var tags = [venue.category.replacingOccurrences(of: "_", with: " ").capitalized, venue.pulse.label]
+        if venue.neighborhood.localizedCaseInsensitiveContains("Castro") { tags.append("Queer-forward") }
+        if venue.neighborhood.localizedCaseInsensitiveContains("SoMa") { tags.append("Dance floor") }
+        if venue.pulse.level >= 3 { tags.append("Packed") }
+        return Array(Set(tags)).prefix(4).map { $0 }
+    }
+
+    private func musicTags(for venue: VenueItem) -> [String] {
+        let raw = "\(venue.category) \(venue.event?.title ?? "")".lowercased()
+        var tags: [String] = []
+        if raw.contains("club") { tags.append("DJs") }
+        if raw.contains("live") { tags.append("Live") }
+        if raw.contains("lounge") { tags.append("Lounge") }
+        if raw.contains("bar") { tags.append("Mixed") }
+        return tags.isEmpty ? ["Nightlife"] : Array(tags.prefix(3))
+    }
+
+    private func shortSignalLabel(_ kind: SignalKind) -> String {
+        switch kind {
+        case .packed: return "Packed"
+        case .shortLine: return "Short"
+        case .longLine: return "Long"
+        case .dead: return "Dead"
+        case .eventLive: return "Event"
+        }
     }
 }
 
@@ -173,5 +425,19 @@ private struct DetailLine: View {
                 .fontWeight(.semibold)
         }
         .font(.subheadline)
+    }
+}
+
+private struct FlowLayout<Content: View>: View {
+    var spacing: CGFloat = 8
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: spacing) { content }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: spacing)], alignment: .leading, spacing: spacing) {
+                content
+            }
+        }
     }
 }

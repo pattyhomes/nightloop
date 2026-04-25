@@ -218,6 +218,26 @@ struct AccountDeletionResponse: Decodable, Equatable {
     let message: String
 }
 
+struct RecentSignalsResponse: Decodable, Equatable {
+    let items: [RecentSignalItem]
+}
+
+struct RecentSignalItem: Decodable, Identifiable, Equatable {
+    let id: String
+    let venueId: String
+    let venueName: String
+    let venueNeighborhood: String
+    let kind: SignalKind
+    let pointsAwarded: Int
+    let observedAt: String
+}
+
+#if DEBUG
+struct DevConfirmedAuthUserResponse: Decodable, Equatable {
+    let message: String
+}
+#endif
+
 enum SignalKind: String, Codable, CaseIterable, Identifiable {
     case packed
     case shortLine = "short_line"

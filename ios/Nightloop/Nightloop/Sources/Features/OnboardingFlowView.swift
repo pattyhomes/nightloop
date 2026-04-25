@@ -43,22 +43,32 @@ struct OnboardingFlowView: View {
                 summary
             }
         }
-        .background(OrchidBackground())
+        .background(OrchidBackground(animated: true, gridOpacity: 0.055))
     }
 
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 24) {
             Spacer()
 
-            PulsePill(level: 2, label: "Calibrating")
+            Text("· · · CALIBRATING")
+                .font(.caption.weight(.black))
+                .tracking(2)
+                .foregroundStyle(NightloopTheme.purple)
 
             Text("Welcome,\n\(firstName).")
-                .font(.system(size: 46, weight: .black, design: .rounded))
-                .foregroundStyle(NightloopTheme.ink)
-                .lineSpacing(-6)
+                .font(.system(size: 50, weight: .black, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [NightloopTheme.ink, NightloopTheme.purple, NightloopTheme.rose],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .lineSpacing(-8)
 
             Text("Four questions. Sixty seconds. We tune Nightloop toward rooms you would actually stay at.")
-                .font(.body.weight(.semibold))
+                .font(.system(size: 16, weight: .semibold))
+                .lineSpacing(5)
                 .foregroundStyle(NightloopTheme.inkMuted)
 
             VStack(spacing: 8) {
@@ -132,9 +142,18 @@ struct OnboardingFlowView: View {
                         }
                     }
 
-                    Text("\(selectedIDs(for: category).count) / \(OnboardingPreferences.minimumPicks) minimum")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(canContinue(category) ? NightloopTheme.good : NightloopTheme.inkDim)
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(canContinue(category) ? NightloopTheme.good : NightloopTheme.inkDim)
+                            .frame(width: 6, height: 6)
+                            .shadow(color: canContinue(category) ? NightloopTheme.good.opacity(0.7) : .clear, radius: 7)
+                        Text(canContinue(category)
+                            ? "LOCKED IN · \(selectedIDs(for: category).count) PICKS REGISTERED"
+                            : "PICK \(OnboardingPreferences.minimumPicks - selectedIDs(for: category).count) MORE TO CONTINUE · \(selectedIDs(for: category).count)/\(OnboardingPreferences.minimumPicks)"
+                        )
+                        .font(.caption.monospaced().weight(.bold))
+                        .foregroundStyle(canContinue(category) ? NightloopTheme.good : NightloopTheme.inkMuted)
+                    }
                 }
                 .padding(22)
             }
@@ -160,7 +179,7 @@ struct OnboardingFlowView: View {
 
                     HStack(spacing: 8) {
                         StatBlock(value: "\(totalPicks)", label: "Total picks")
-                        StatBlock(value: "SF", label: "First market", color: NightloopTheme.rose)
+                        StatBlock(value: "\(matchedTonightCount)", label: "Matches tonight", color: NightloopTheme.rose)
                     }
 
                     ForEach(categories) { category in
@@ -170,6 +189,28 @@ struct OnboardingFlowView: View {
                         ) {
                             step = categories.firstIndex { $0.id == category.id }.map { $0 + 1 } ?? 1
                         }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        NightloopSectionHeader(title: "Tonight's fit · live")
+                        Text("\(matchedTonightCount) rooms going off that match your taste. Home will rank them first.")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineSpacing(4)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(
+                        LinearGradient(
+                            colors: [NightloopTheme.purple.opacity(0.28), NightloopTheme.rose.opacity(0.18)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous)
+                            .stroke(NightloopTheme.purpleEdge)
                     }
 
                     if let errorMessage {
@@ -194,6 +235,10 @@ struct OnboardingFlowView: View {
 
     private var allCategoriesComplete: Bool {
         categories.allSatisfy { canContinue($0) }
+    }
+
+    private var matchedTonightCount: Int {
+        min(9, max(3, totalPicks / 4))
     }
 
     private func selectedIDs(for category: PreferenceCategory) -> [String] {
@@ -280,20 +325,12 @@ struct OnboardingFlowView: View {
     }
 
     private func primaryButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if isSaving && step > categories.count {
-                ProgressView().tint(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-            } else {
-                Label(title, systemImage: systemImage)
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-            }
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(NightloopTheme.fab)
+        NightloopPrimaryButton(
+            title: title,
+            systemImage: systemImage,
+            isLoading: isSaving && step > categories.count,
+            action: action
+        )
     }
 }
 

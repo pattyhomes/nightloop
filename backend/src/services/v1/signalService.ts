@@ -63,6 +63,16 @@ type RecentSignalRow = {
   observed_at: string;
 };
 
+type UserRecentSignalRow = {
+  id: string;
+  venue_id: string;
+  venue_name: string;
+  venue_neighborhood: string;
+  kind: UserSignalKind;
+  points_awarded: number;
+  observed_at: string;
+};
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -326,4 +336,39 @@ export async function submitUserSignal(input: {
   );
 
   return result;
+}
+
+export async function listUserRecentSignals(input: { account: AccountState; limit?: number }) {
+  const limit = clamp(Math.trunc(input.limit ?? 5), 1, 20);
+  const result = await dbQuery<UserRecentSignalRow>(
+    `
+      SELECT
+        s.id,
+        s.venue_id,
+        v.name AS venue_name,
+        COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS venue_neighborhood,
+        s.kind,
+        s.points_awarded,
+        s.observed_at
+      FROM signals s
+      JOIN venues v ON v.id = s.venue_id
+      WHERE s.user_id = $1::uuid
+        AND s.kind IS NOT NULL
+      ORDER BY s.observed_at DESC, s.created_at DESC
+      LIMIT $2
+    `,
+    [input.account.user.id, limit]
+  );
+
+  return {
+    items: result.rows.map((row) => ({
+      id: row.id,
+      venue_id: row.venue_id,
+      venue_name: row.venue_name,
+      venue_neighborhood: row.venue_neighborhood,
+      kind: row.kind,
+      points_awarded: Number(row.points_awarded),
+      observed_at: row.observed_at
+    }))
+  };
 }

@@ -183,77 +183,92 @@ private struct AgeGateView: View {
     let deleteAccount: () -> Void
 
     @State private var showDeleteConfirmation = false
+    @State private var showUnderageConfirmation = false
 
     var body: some View {
-        VStack {
-            Spacer()
+        ZStack {
+            OrchidBackground(animated: true, gridOpacity: 0.055)
 
-            NightloopCard {
-                VStack(alignment: .leading, spacing: 16) {
-                    PulsePill(level: status == "ineligible" ? 1 : 2, label: status == "ineligible" ? "Eligibility locked" : "21+")
+            VStack(alignment: .leading, spacing: 24) {
+                Spacer()
 
-                    Text(status == "ineligible" ? "Nightloop is 21+." : "Confirm 21+ to enter.")
-                        .font(.system(size: 30, weight: .black, design: .rounded))
-                        .foregroundStyle(NightloopTheme.ink)
-
-                    Text("Nightloop stores only the attestation result and timestamp. It does not store your date of birth.")
-                        .font(.subheadline)
-                        .foregroundStyle(NightloopTheme.inkMuted)
-
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(NightloopTheme.amber)
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(status == "ineligible" ? NightloopTheme.amber : NightloopTheme.rose)
+                            .frame(width: 7, height: 7)
+                        Text(status == "ineligible" ? "ELIGIBILITY LOCKED" : "ENTRY CHECK")
+                            .font(.caption2.weight(.black))
+                            .tracking(1.6)
+                    }
+                    .foregroundStyle(status == "ineligible" ? NightloopTheme.amber : NightloopTheme.rose)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 6)
+                    .background((status == "ineligible" ? NightloopTheme.amber : NightloopTheme.rose).opacity(0.14))
+                    .clipShape(Capsule())
+                    .overlay {
+                        Capsule().stroke((status == "ineligible" ? NightloopTheme.amber : NightloopTheme.rose).opacity(0.32))
                     }
 
-                    if status != "ineligible" {
-                        Button {
-                            attest(true)
-                        } label: {
-                            if isSaving {
-                                ProgressView().tint(.white)
-                            } else {
-                                Label("I am 21 or older", systemImage: "checkmark.seal.fill")
-                                    .font(.headline)
+                    Text(status == "ineligible" ? "Nightloop is not available for this account." : "Confirm your age to enter.")
+                        .font(.system(size: 40, weight: .black))
+                        .lineSpacing(-2)
+                        .foregroundStyle(NightloopTheme.ink)
+                    Text(status == "ineligible" ? "You can sign out or delete this account. No date of birth is stored." : "We store only your eligibility attestation and timestamp. No date of birth.")
+                        .font(.subheadline.weight(.semibold))
+                        .lineSpacing(4)
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                }
+
+                if let errorMessage {
+                    ErrorStateView(title: "Eligibility save failed", message: errorMessage)
+                }
+
+                NightloopCard(fill: Color.white.opacity(0.045)) {
+                    VStack(spacing: 12) {
+                        if status != "ineligible" {
+                            NightloopPrimaryButton(
+                                title: "I am 21 or older",
+                                systemImage: "checkmark.seal.fill",
+                                isLoading: isSaving
+                            ) {
+                                attest(true)
+                            }
+
+                            NightloopSecondaryButton(title: "I am under 21") {
+                                showUnderageConfirmation = true
+                            }
+                            .disabled(isSaving)
+                            .opacity(isSaving ? 0.5 : 1)
+                        }
+
+                        Button("Sign out", action: signOut)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .frame(maxWidth: .infinity)
+
+                        if status == "ineligible" {
+                            Button(role: .destructive) {
+                                showDeleteConfirmation = true
+                            } label: {
+                                Text(isDeleting ? "Deleting..." : "Delete account")
                                     .frame(maxWidth: .infinity)
                             }
+                            .buttonStyle(.bordered)
+                            .disabled(isDeleting)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(NightloopTheme.fab)
-                        .disabled(isSaving)
-
-                        Button {
-                            attest(false)
-                        } label: {
-                            Text("I am not 21")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(NightloopTheme.inkMuted)
-                        .disabled(isSaving)
-                    }
-
-                    Button("Sign out", action: signOut)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(NightloopTheme.inkMuted)
-                        .frame(maxWidth: .infinity)
-
-                    if status == "ineligible" {
-                        Button(role: .destructive) {
-                            showDeleteConfirmation = true
-                        } label: {
-                            Text(isDeleting ? "Deleting..." : "Delete account")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isDeleting)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(22)
 
-            Spacer()
+                Spacer()
+            }
+            .padding(24)
+        }
+        .alert("Confirm eligibility", isPresented: $showUnderageConfirmation) {
+            Button("I am under 21", role: .destructive) { attest(false) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will mark this Nightloop account as ineligible.")
         }
         .alert("Delete account?", isPresented: $showDeleteConfirmation) {
             Button("Delete account", role: .destructive, action: deleteAccount)

@@ -20,7 +20,7 @@ import {
 } from "../../services/v1/accountService";
 import { getMarketConfig, listMarkets } from "../../services/v1/marketService";
 import { getVenue, listVenues } from "../../services/v1/venueService";
-import { submitUserSignal } from "../../services/v1/signalService";
+import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
 import { createAdminRouter } from "./admin";
 
 declare global {
@@ -96,6 +96,10 @@ const DevConfirmedAuthUserSchema = z
     password: z.string().min(8).max(128)
   })
   .strict();
+
+const RecentSignalsQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).optional()
+});
 
 function accountFromRequest(req: Request): AccountState {
   if (!req.account) {
@@ -244,6 +248,14 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     "/me/preferences",
     asyncHandler(async (req, res) => {
       res.json({ preferences: await getPreferences(accountFromRequest(req)) });
+    })
+  );
+
+  router.get(
+    "/me/signals",
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(RecentSignalsQuerySchema, req.query);
+      res.json(await listUserRecentSignals({ account: accountFromRequest(req), limit: query.limit }));
     })
   );
 

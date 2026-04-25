@@ -109,6 +109,14 @@ struct NightloopAPIClient {
         try await send(path: "me/preferences", bearerToken: bearerToken)
     }
 
+    func recentSignals(bearerToken: String, limit: Int = 5) async throws -> RecentSignalsResponse {
+        try await send(
+            path: "me/signals",
+            queryItems: [URLQueryItem(name: "limit", value: String(limit))],
+            bearerToken: bearerToken
+        )
+    }
+
     func replacePreferences(_ preferences: [String: [String]], bearerToken: String) async throws -> PreferencesResponse {
         try await send(path: "me/preferences", method: "PUT", bearerToken: bearerToken, body: preferences)
     }
@@ -145,6 +153,17 @@ struct NightloopAPIClient {
     func deleteAccount(bearerToken: String) async throws -> AccountDeletionResponse {
         try await send(path: "me/account", method: "DELETE", bearerToken: bearerToken)
     }
+
+    #if DEBUG
+    func createConfirmedDevAuthUser(email: String, password: String) async throws -> DevConfirmedAuthUserResponse {
+        try await send(
+            path: "dev/confirmed-auth-user",
+            method: "POST",
+            bearerToken: nil,
+            body: DevConfirmedAuthUserBody(email: email, password: password)
+        )
+    }
+    #endif
 
     private func send<Response: Decodable>(
         path: String,
@@ -238,3 +257,10 @@ private struct SignalBody: Encodable {
         case kind
     }
 }
+
+#if DEBUG
+private struct DevConfirmedAuthUserBody: Encodable {
+    let email: String
+    let password: String
+}
+#endif

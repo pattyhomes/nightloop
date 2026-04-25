@@ -429,4 +429,63 @@ describe("Nightloop v1 API", () => {
     expect(result.rows.map((row) => Number(row.points_awarded))).toEqual([3, 4]);
     expect(Date.parse(result.rows[0]?.expires_at ?? "")).toBeGreaterThan(Date.now() + 80 * 60 * 1000);
   });
+
+  it("returns only the current user's recent signals with a capped limit", async () => {
+    const first = await createTestUser();
+    const second = await createTestUser();
+    await attestEligible(first);
+    await attestEligible(second);
+    const venueId = await getFirstSfVenueId();
+
+    const empty = await request(app)
+      .get("/api/v1/me/signals")
+      .set("Authorization", `Bearer ${first.token}`)
+      .expect(200);
+    expect(empty.body.items).toEqual([]);
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${first.token}`)
+      .send({ venue_id: venueId, kind: "packed", metadata: { test_run_id: testRunId } })
+      .expect(201);
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${first.token}`)
+      .send({ venue_id: venueId, kind: "short_line", metadata: { test_run_id: testRunId } })
+      .expect(201);
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${second.token}`)
+      .send({ venue_id: venueId, kind: "event_live", metadata: { test_run_id: testRunId } })
+      .expect(201);
+
+    const unauthorized = await request(app).get("/api/v1/me/signals").expect(401);
+    expect(unauthorized.body.error.code).toBe("AUTH_REQUIRED");
+
+    const recent = await request(app)
+      .get("/api/v1/me/signals?limit=1")
+      .set("Authorization", `Bearer ${first.token}`)
+      .expect(200);
+
+    expect(recent.body.items).toHaveLength(1);
+    expect(recent.body.items[0]).toEqual(
+      expect.objectContaining({
+        id: expect.any(String),
+        venue_id: venueId,
+        venue_name: expect.any(String),
+        venue_neighborhood: expect.any(String),
+        kind: "short_line",
+        points_awarded: 2,
+        observed_at: expect.any(String)
+      })
+    );
+
+    const capped = await request(app)
+      .get("/api/v1/me/signals?limit=50")
+      .set("Authorization", `Bearer ${first.token}`)
+      .expect(200);
+    expect(capped.body.items.length).toBeLessThanOrEqual(20);
+  });
 });

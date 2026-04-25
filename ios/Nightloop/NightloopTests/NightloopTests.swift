@@ -148,6 +148,49 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
     }
 
+    func testRecentSignalsRequestUsesProtectedEndpointAndDecodes() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/me/signals?limit=5")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "items": [
+                {
+                  "id": "signal-1",
+                  "venue_id": "venue-1",
+                  "venue_name": "Halcyon",
+                  "venue_neighborhood": "SoMa",
+                  "kind": "packed",
+                  "points_awarded": 3,
+                  "observed_at": "2026-04-25T00:00:00.000Z"
+                }
+              ]
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let response = try await client.recentSignals(bearerToken: "test-token")
+
+        XCTAssertEqual(response.items.first?.venueName, "Halcyon")
+        XCTAssertEqual(response.items.first?.kind, .packed)
+        XCTAssertEqual(response.items.first?.pointsAwarded, 3)
+    }
+
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {
         URLProtocolMock.requestHandler = { request in
             XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/me/profile")
@@ -182,6 +225,48 @@ final class NightloopTests: XCTestCase {
             bearerToken: "test-token"
         )
     }
+
+    #if DEBUG
+    func testDevConfirmedAuthUserRequestUsesLocalDevEndpoint() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/dev/confirmed-auth-user")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+
+            let body = try XCTUnwrap(Self.bodyData(from: request))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(object["email"] as? String, "dev+fresh@example.com")
+            XCTAssertEqual(object["password"] as? String, "password123")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "user": { "id": "auth-user-1" },
+              "message": "Confirmed local development auth user is ready."
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let response = try await client.createConfirmedDevAuthUser(
+            email: "dev+fresh@example.com",
+            password: "password123"
+        )
+
+        XCTAssertEqual(response.message, "Confirmed local development auth user is ready.")
+    }
+    #endif
 
     func testPreferenceTunerBoostsPreferredNeighborhoods() {
         let venue = VenueItem(

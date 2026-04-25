@@ -57,101 +57,112 @@ struct ProfileSetupView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 10) {
-                    PulsePill(level: 2, label: "Profile")
-                    Text("Set your Nightloop identity.")
-                        .font(.system(size: 36, weight: .black, design: .rounded))
-                        .foregroundStyle(NightloopTheme.ink)
-                    Text("This is how your signals and future friend activity appear in the app.")
+        ZStack {
+            OrchidBackground(animated: true, gridOpacity: 0.055)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        PulsePill(level: 2, label: "Profile")
+                        Text("Set your\nNightloop\nidentity.")
+                            .font(.system(size: 40, weight: .black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineSpacing(-2)
+                        Text("This is how your signals and future friend activity appear in the app.")
+                            .font(.subheadline.weight(.semibold))
+                            .lineSpacing(4)
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                    }
+
+                    HStack(spacing: 10) {
+                        StatMiniCard(value: "21+", label: "Verified", color: NightloopTheme.good)
+                        StatMiniCard(value: "SF", label: "Home market", color: NightloopTheme.rose)
+                    }
+
+                    NightloopCard(fill: Color.white.opacity(0.045)) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            FieldLabel("Display name")
+                            nightloopTextField("Alex", text: $displayName)
+                                .textContentType(.name)
+
+                            FieldLabel("Username")
+                            HStack(spacing: 4) {
+                                Text("@")
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(NightloopTheme.inkMuted)
+                                TextField("alexsf", text: $username)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .foregroundStyle(NightloopTheme.ink)
+                            }
+                            .padding(13)
+                            .background(NightloopTheme.surfaceElevated)
+                            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
+
+                            if let usernameError {
+                                Text(usernameError)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(NightloopTheme.amber)
+                            }
+
+                            FieldLabel("Home market")
+                            Picker("Home market", selection: Binding(
+                                get: { selectedMarketID ?? markets.first?.id },
+                                set: { selectedMarketID = $0 }
+                            )) {
+                                ForEach(markets) { market in
+                                    Text(market.displayName).tag(Optional(market.id))
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(NightloopTheme.ink)
+                            .padding(.horizontal, 4)
+
+                            FieldLabel("Bio")
+                            nightloopTextField("Optional", text: $bio, axis: .vertical)
+                                .lineLimit(2...4)
+                        }
+                    }
+
+                    if let errorMessage {
+                        ErrorStateView(title: "Profile save failed", message: errorMessage)
+                    }
+
+                    NightloopPrimaryButton(
+                        title: "Continue",
+                        systemImage: "arrow.right",
+                        isLoading: isSaving,
+                        isEnabled: canSave
+                    ) {
+                        save(
+                            normalizedDisplayName,
+                            normalizedUsername,
+                            selectedMarketID,
+                            bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : bio.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    }
+
+                    Button("Sign out", action: signOut)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(NightloopTheme.inkMuted)
+                        .frame(maxWidth: .infinity)
                 }
-
-                NightloopCard {
-                    VStack(alignment: .leading, spacing: 14) {
-                        FieldLabel("Display name")
-                        TextField("Alex", text: $displayName)
-                            .textContentType(.name)
-                            .padding(12)
-                            .background(NightloopTheme.surfaceElevated)
-                            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
-                            .foregroundStyle(NightloopTheme.ink)
-
-                        FieldLabel("Username")
-                        HStack(spacing: 4) {
-                            Text("@")
-                                .foregroundStyle(NightloopTheme.inkMuted)
-                            TextField("alexsf", text: $username)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .foregroundStyle(NightloopTheme.ink)
-                        }
-                        .padding(12)
-                        .background(NightloopTheme.surfaceElevated)
-                        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
-
-                        if let usernameError {
-                            Text(usernameError)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(NightloopTheme.amber)
-                        }
-
-                        FieldLabel("Home market")
-                        Picker("Home market", selection: Binding(
-                            get: { selectedMarketID ?? markets.first?.id },
-                            set: { selectedMarketID = $0 }
-                        )) {
-                            ForEach(markets) { market in
-                                Text(market.displayName).tag(Optional(market.id))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(NightloopTheme.ink)
-
-                        FieldLabel("Bio")
-                        TextField("Optional", text: $bio, axis: .vertical)
-                            .lineLimit(2...4)
-                            .padding(12)
-                            .background(NightloopTheme.surfaceElevated)
-                            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
-                            .foregroundStyle(NightloopTheme.ink)
-                    }
-                }
-
-                if let errorMessage {
-                    ErrorStateView(title: "Profile save failed", message: errorMessage)
-                }
-
-                Button {
-                    save(
-                        normalizedDisplayName,
-                        normalizedUsername,
-                        selectedMarketID,
-                        bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : bio.trimmingCharacters(in: .whitespacesAndNewlines)
-                    )
-                } label: {
-                    if isSaving {
-                        ProgressView().tint(.white)
-                    } else {
-                        Label("Continue", systemImage: "arrow.right")
-                            .font(.headline.weight(.bold))
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(NightloopTheme.fab)
-                .disabled(!canSave)
-
-                Button("Sign out", action: signOut)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(NightloopTheme.inkMuted)
-                    .frame(maxWidth: .infinity)
+                .padding(24)
+                .padding(.top, 44)
             }
-            .padding(24)
         }
-        .background(OrchidBackground())
+    }
+
+    private func nightloopTextField(
+        _ placeholder: String,
+        text: Binding<String>,
+        axis: Axis = .horizontal
+    ) -> some View {
+        TextField(placeholder, text: text, axis: axis)
+            .padding(13)
+            .background(NightloopTheme.surfaceElevated)
+            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
+            .foregroundStyle(NightloopTheme.ink)
     }
 }
 

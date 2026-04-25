@@ -7,6 +7,8 @@ struct DevSignInView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var isSubmitting = false
+    @State private var isCreatingAccount = false
+    @State private var devMessage: String?
 
     var body: some View {
         ScrollView {
@@ -15,12 +17,12 @@ struct DevSignInView: View {
                     Text("Nightloop")
                         .font(.largeTitle.weight(.black))
                         .foregroundStyle(NightloopTheme.ink)
-                    Text("Dev sign-in for Phase 3 API smoke testing.")
+                    Text("Debug-only account testing for repeated onboarding runs.")
                         .font(.subheadline)
                         .foregroundStyle(NightloopTheme.inkMuted)
                 }
 
-                if let message {
+                if let message = devMessage ?? message {
                     ErrorStateView(title: "Sign-in status", message: message)
                 }
 
@@ -45,21 +47,41 @@ struct DevSignInView: View {
                             .background(NightloopTheme.surfaceElevated)
                             .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
 
-                        Button {
-                            Task { await submit() }
-                        } label: {
-                            if isSubmitting {
-                                ProgressView().tint(.white)
-                            } else {
-                                Label("Sign In", systemImage: "key.fill")
-                                    .font(.headline)
+                        VStack(spacing: 10) {
+                            #if DEBUG
+                            Button {
+                                Task { await createConfirmedAccountAndSignIn() }
+                            } label: {
+                                if isCreatingAccount {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Label("Create + Sign In", systemImage: "person.badge.plus.fill")
+                                        .font(.headline)
+                                }
                             }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(NightloopTheme.purple)
-                        .disabled(email.isEmpty || password.isEmpty || isSubmitting)
+                            .buttonStyle(.borderedProminent)
+                            .tint(NightloopTheme.purple)
+                            .disabled(!canSubmit)
+                            .frame(maxWidth: .infinity)
+                            #endif
 
-                        Text("Production Apple and phone auth are Phase 4. This screen exists so the iOS shell can test Supabase sessions and bearer-token API calls locally.")
+                            Button {
+                                Task { await submit() }
+                            } label: {
+                                if isSubmitting {
+                                    ProgressView().tint(NightloopTheme.ink)
+                                } else {
+                                    Label("Sign In Existing Dev User", systemImage: "key.fill")
+                                        .font(.headline)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(NightloopTheme.amber)
+                            .disabled(!canSubmit)
+                            .frame(maxWidth: .infinity)
+                        }
+
+                        Text("Use Create + Sign In with a fresh email alias to test age gate, profile setup, onboarding, and the first Home load from scratch.")
                             .font(.footnote)
                             .foregroundStyle(NightloopTheme.inkDim)
                     }
@@ -82,9 +104,43 @@ struct DevSignInView: View {
         .background(OrchidBackground())
     }
 
+    private var normalizedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isBusy: Bool {
+        isSubmitting || isCreatingAccount
+    }
+
+    private var canSubmit: Bool {
+        !normalizedEmail.isEmpty && password.count >= 8 && !isBusy
+    }
+
     private func submit() async {
         isSubmitting = true
-        await authStore.signIn(email: email, password: password)
+        devMessage = nil
+        await authStore.signIn(email: normalizedEmail, password: password)
         isSubmitting = false
     }
+
+    #if DEBUG
+    private func createConfirmedAccountAndSignIn() async {
+        isCreatingAccount = true
+        devMessage = nil
+
+        do {
+            let client = NightloopAPIClient(baseURL: authStore.config.apiBaseURL)
+            let response = try await client.createConfirmedDevAuthUser(
+                email: normalizedEmail,
+                password: password
+            )
+            devMessage = response.message
+            await authStore.signIn(email: normalizedEmail, password: password)
+        } catch {
+            devMessage = error.localizedDescription
+        }
+
+        isCreatingAccount = false
+    }
+    #endif
 }

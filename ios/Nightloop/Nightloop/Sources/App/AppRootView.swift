@@ -77,37 +77,41 @@ struct NightloopTabShell: View {
     @State private var selectedTab: AppTab = .home
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
-                HomeView(apiClient: apiClient, authStore: authStore, me: me, preferences: preferences)
-            }
-            .tabItem { Label(AppTab.home.title, systemImage: AppTab.home.symbol) }
-            .tag(AppTab.home)
+        ZStack {
+            OrchidBackground(animated: true, gridOpacity: 0.045)
 
-            NavigationStack {
-                MapShellView(apiClient: apiClient, authStore: authStore, me: me)
+            switch selectedTab {
+            case .home:
+                NavigationStack {
+                    HomeView(
+                        apiClient: apiClient,
+                        authStore: authStore,
+                        me: me,
+                        preferences: preferences,
+                        onAccountChanged: onAccountChanged
+                    )
+                }
+            case .map:
+                NavigationStack {
+                    MapShellView(apiClient: apiClient, authStore: authStore, me: me)
+                }
+            case .decision:
+                NavigationStack {
+                    DecisionShellView()
+                }
+            case .friends:
+                NavigationStack {
+                    FriendsShellView()
+                }
+            case .profile:
+                NavigationStack {
+                    ProfileView(authStore: authStore, apiClient: apiClient, me: me, onAccountChanged: onAccountChanged)
+                }
             }
-            .tabItem { Label(AppTab.map.title, systemImage: AppTab.map.symbol) }
-            .tag(AppTab.map)
-
-            NavigationStack {
-                DecisionShellView()
-            }
-            .tabItem { Label(AppTab.decision.title, systemImage: AppTab.decision.symbol) }
-            .tag(AppTab.decision)
-
-            NavigationStack {
-                FriendsShellView()
-            }
-            .tabItem { Label(AppTab.friends.title, systemImage: AppTab.friends.symbol) }
-            .tag(AppTab.friends)
-
-            NavigationStack {
-                ProfileView(authStore: authStore, apiClient: apiClient, me: me, onAccountChanged: onAccountChanged)
-            }
-            .tabItem { Label(AppTab.profile.title, systemImage: AppTab.profile.symbol) }
-            .tag(AppTab.profile)
         }
-        .tint(NightloopTheme.purple)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            NightloopBottomTabBar(selectedTab: $selectedTab)
+        }
+        .toolbar(.hidden, for: .tabBar)
     }
 }

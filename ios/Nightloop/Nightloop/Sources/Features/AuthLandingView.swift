@@ -15,19 +15,25 @@ struct AuthLandingView: View {
     @State private var showDebugSignIn = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                header
-                authCard
+        ZStack {
+            OrchidBackground(animated: true, gridOpacity: 0.08)
 
-                if let message = authMessage ?? message {
-                    ErrorStateView(title: "Sign-in status", message: message)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    header
+                    statsStrip
+                    authPanel
+
+                    if let message = authMessage ?? message {
+                        ErrorStateView(title: "Sign-in status", message: message)
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.top, 72)
+                .padding(.bottom, 34)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(22)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(OrchidBackground())
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
             Button {
@@ -53,8 +59,24 @@ struct AuthLandingView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PulsePill(level: 3, label: "Live in SF")
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(NightloopTheme.rose)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: NightloopTheme.rose.opacity(0.9), radius: 8)
+                Text("LIVE IN SF · TONIGHT")
+                    .font(.caption2.weight(.black))
+                    .tracking(1.6)
+                    .foregroundStyle(NightloopTheme.rose)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(NightloopTheme.roseSoft)
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(NightloopTheme.rose.opacity(0.36))
+            }
 
             Text("night\nloop.")
                 .font(.system(size: 58, weight: .black, design: .rounded))
@@ -68,16 +90,24 @@ struct AuthLandingView: View {
                 )
 
             Text("A live read on every room in the city. Who's going off. Who's dead. Where your people are.")
-                .font(.body.weight(.semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(NightloopTheme.inkMuted)
+                .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 46)
     }
 
-    private var authCard: some View {
-        NightloopCard {
-            VStack(alignment: .leading, spacing: 14) {
+    private var statsStrip: some View {
+        HStack(spacing: 10) {
+            StatMiniCard(value: "142", label: "Spots live")
+            StatMiniCard(value: "38", label: "Packed now", color: NightloopTheme.rose)
+            StatMiniCard(value: "2.1k", label: "Signals · 1h", color: NightloopTheme.amber)
+        }
+    }
+
+    private var authPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 10) {
                 SignInWithAppleButton(.signIn) { request in
                     let nonce = AppleNonce.make()
                     currentAppleNonce = nonce
@@ -90,62 +120,66 @@ struct AuthLandingView: View {
                 .frame(height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Phone number")
-                        .font(.headline)
-                        .foregroundStyle(NightloopTheme.ink)
+                phoneFlow
+            }
 
-                    TextField("(415) 555-0134", text: $phoneNumber)
-                        .keyboardType(.phonePad)
-                        .textContentType(.telephoneNumber)
-                        .padding(12)
+            Text("21+ · SF only · be cool to doors, tip bartenders")
+                .font(.caption2.weight(.semibold))
+                .tracking(0.3)
+                .foregroundStyle(NightloopTheme.inkDim)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var phoneFlow: some View {
+        NightloopCard(padding: 14, radius: NightloopTheme.cornerMedium, fill: Color.white.opacity(0.045)) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Phone number", systemImage: "message.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(NightloopTheme.ink)
+                    Spacer()
+                    Text("US SMS")
+                        .font(.caption2.weight(.black))
+                        .tracking(1)
+                        .foregroundStyle(NightloopTheme.inkDim)
+                }
+
+                TextField("(415) 555-0134", text: $phoneNumber)
+                    .keyboardType(.phonePad)
+                    .textContentType(.telephoneNumber)
+                    .padding(13)
+                    .background(NightloopTheme.surfaceElevated)
+                    .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
+                    .foregroundStyle(NightloopTheme.ink)
+
+                NightloopSecondaryButton(
+                    title: normalizedPhone == nil ? "Text me a code" : "Send a new code",
+                    systemImage: isSendingPhoneCode ? nil : "message.fill"
+                ) {
+                    Task { await sendPhoneCode() }
+                }
+                .disabled(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil)
+                .opacity(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil ? 0.55 : 1)
+
+                if normalizedPhone != nil {
+                    TextField("6-digit code", text: $verificationCode)
+                        .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
+                        .padding(13)
                         .background(NightloopTheme.surfaceElevated)
                         .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
                         .foregroundStyle(NightloopTheme.ink)
 
-                    Button {
-                        Task { await sendPhoneCode() }
-                    } label: {
-                        if isSendingPhoneCode {
-                            ProgressView().tint(.white)
-                        } else {
-                            Label(normalizedPhone == nil ? "Text me a code" : "Send a new code", systemImage: "message.fill")
-                                .font(.headline)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.purple)
-                    .disabled(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil)
-
-                    if normalizedPhone != nil {
-                        TextField("6-digit code", text: $verificationCode)
-                            .keyboardType(.numberPad)
-                            .textContentType(.oneTimeCode)
-                            .padding(12)
-                            .background(NightloopTheme.surfaceElevated)
-                            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
-                            .foregroundStyle(NightloopTheme.ink)
-
-                        Button {
-                            Task { await verifyPhoneCode() }
-                        } label: {
-                            if isVerifyingPhoneCode {
-                                ProgressView().tint(.white)
-                            } else {
-                                Label("Verify code", systemImage: "checkmark.seal.fill")
-                                    .font(.headline)
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(NightloopTheme.fab)
-                        .disabled(isVerifyingPhoneCode || verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).count < 4)
+                    NightloopPrimaryButton(
+                        title: "Verify code",
+                        systemImage: "checkmark.seal.fill",
+                        isLoading: isVerifyingPhoneCode,
+                        isEnabled: verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).count >= 4
+                    ) {
+                        Task { await verifyPhoneCode() }
                     }
                 }
-
-                Text("21+ only. Nightloop uses Supabase for sign-in and Express for product data.")
-                    .font(.footnote)
-                    .foregroundStyle(NightloopTheme.inkDim)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
