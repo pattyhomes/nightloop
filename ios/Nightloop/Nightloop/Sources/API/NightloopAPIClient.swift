@@ -83,8 +83,21 @@ struct NightloopAPIClient {
         return try await send(path: "me/age-attestation", method: "POST", bearerToken: bearerToken, body: body)
     }
 
-    func updateProfile(displayName: String?, username: String?, selectedMarketId: String?, bearerToken: String) async throws -> MeResponse {
-        let body = ProfilePatchBody(displayName: displayName, username: username, selectedMarketId: selectedMarketId)
+    func updateProfile(
+        displayName: String?,
+        username: String?,
+        selectedMarketId: String?,
+        bio: String? = nil,
+        includeBio: Bool = false,
+        bearerToken: String
+    ) async throws -> MeResponse {
+        let body = ProfilePatchBody(
+            displayName: displayName,
+            username: username,
+            selectedMarketId: selectedMarketId,
+            bio: bio,
+            shouldEncodeBio: includeBio || bio != nil
+        )
         return try await send(path: "me/profile", method: "PATCH", bearerToken: bearerToken, body: body)
     }
 
@@ -104,13 +117,18 @@ struct NightloopAPIClient {
         try await send(path: "markets", bearerToken: nil)
     }
 
-    func venues(marketID: String, bearerToken: String, limit: Int = 30) async throws -> VenueListResponse {
-        try await send(
+    func venues(marketID: String, bearerToken: String, limit: Int = 30, pulse: String? = nil) async throws -> VenueListResponse {
+        var queryItems = [
+            URLQueryItem(name: "market_id", value: marketID),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if let pulse {
+            queryItems.append(URLQueryItem(name: "pulse", value: pulse))
+        }
+
+        return try await send(
             path: "venues",
-            queryItems: [
-                URLQueryItem(name: "market_id", value: marketID),
-                URLQueryItem(name: "limit", value: String(limit))
-            ],
+            queryItems: queryItems,
             bearerToken: bearerToken
         )
     }
@@ -122,6 +140,10 @@ struct NightloopAPIClient {
     func submitSignal(venueID: String, kind: SignalKind, bearerToken: String) async throws -> SignalResponse {
         let body = SignalBody(venueID: venueID, kind: kind)
         return try await send(path: "signals", method: "POST", bearerToken: bearerToken, body: body)
+    }
+
+    func deleteAccount(bearerToken: String) async throws -> AccountDeletionResponse {
+        try await send(path: "me/account", method: "DELETE", bearerToken: bearerToken)
     }
 
     private func send<Response: Decodable>(
@@ -181,6 +203,30 @@ private struct ProfilePatchBody: Encodable {
     let displayName: String?
     let username: String?
     let selectedMarketId: String?
+    let bio: String?
+    let shouldEncodeBio: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case displayName
+        case username
+        case selectedMarketId
+        case bio
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(displayName, forKey: .displayName)
+        try container.encodeIfPresent(username, forKey: .username)
+        try container.encodeIfPresent(selectedMarketId, forKey: .selectedMarketId)
+
+        if shouldEncodeBio {
+            if let bio {
+                try container.encode(bio, forKey: .bio)
+            } else {
+                try container.encodeNil(forKey: .bio)
+            }
+        }
+    }
 }
 
 private struct SignalBody: Encodable {

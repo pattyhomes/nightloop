@@ -5,9 +5,13 @@ struct AccountGateView: View {
     let apiClient: NightloopAPIClient
 
     @State private var me: MeResponse?
+    @State private var markets: [Market] = []
+    @State private var preferences: [String: [String]] = [:]
     @State private var errorMessage: String?
+    @State private var saveErrorMessage: String?
     @State private var isLoading = true
-    @State private var isAttesting = false
+    @State private var isSaving = false
+    @State private var isDeleting = false
 
     var body: some View {
         ZStack {
@@ -17,24 +21,67 @@ struct AccountGateView: View {
                 LoadingStateView(title: "Loading your account")
             } else if let errorMessage {
                 ErrorStateView(title: "Account unavailable", message: errorMessage) {
-                    Task { await loadMe() }
+                    Task { await loadAccount() }
                 }
                 .padding(20)
-            } else if let me, me.user.eligibilityStatus == "eligible" {
-                NightloopTabShell(authStore: authStore, apiClient: apiClient, me: me)
             } else if let me {
-                AgeGateCard(me: me, isAttesting: isAttesting) {
-                    Task { await attestAge() }
-                } signOut: {
-                    Task { await authStore.signOut() }
-                }
-                .padding(20)
+                route(for: me)
             }
         }
-        .task { await loadMe() }
+        .task { await loadAccount() }
     }
 
-    private func loadMe() async {
+    @ViewBuilder
+    private func route(for me: MeResponse) -> some View {
+        if me.user.eligibilityStatus == "eligible" {
+            if me.onboarding.missingSteps.contains("profile") {
+                ProfileSetupView(
+                    me: me,
+                    markets: markets,
+                    isSaving: isSaving,
+                    errorMessage: saveErrorMessage,
+                    save: { displayName, username, marketID, bio in
+                        Task { await saveProfile(displayName: displayName, username: username, marketID: marketID, bio: bio) }
+                    },
+                    signOut: {
+                        Task { await authStore.signOut() }
+                    }
+                )
+            } else if me.onboarding.missingSteps.contains("preferences") {
+                OnboardingFlowView(
+                    displayName: me.profile?.displayName ?? "Nightloop User",
+                    initialSelections: OnboardingPreferences.uiSelections(from: preferences),
+                    isSaving: isSaving,
+                    errorMessage: saveErrorMessage,
+                    onComplete: { payload in
+                        Task { await savePreferences(payload) }
+                    }
+                )
+            } else {
+                NightloopTabShell(authStore: authStore, apiClient: apiClient, me: me, preferences: preferences) { updated in
+                    self.me = updated
+                }
+            }
+        } else {
+            AgeGateView(
+                status: me.user.eligibilityStatus,
+                isSaving: isSaving,
+                isDeleting: isDeleting,
+                errorMessage: saveErrorMessage,
+                attest: { value in
+                    Task { await attestAge(is21OrOver: value) }
+                },
+                signOut: {
+                    Task { await authStore.signOut() }
+                },
+                deleteAccount: {
+                    Task { await deleteAccount() }
+                }
+            )
+        }
+    }
+
+    private func loadAccount() async {
         guard let token = authStore.accessToken else {
             errorMessage = "Your Supabase session is missing. Please sign in again."
             isLoading = false
@@ -43,73 +90,176 @@ struct AccountGateView: View {
 
         isLoading = true
         errorMessage = nil
+        saveErrorMessage = nil
+
         do {
-            me = try await apiClient.me(bearerToken: token)
+            let loadedMe = try await apiClient.me(bearerToken: token)
+            let loadedMarkets = try await apiClient.markets()
+            me = loadedMe
+            markets = loadedMarkets.items
+
+            if loadedMe.user.eligibilityStatus == "eligible" {
+                preferences = (try? await apiClient.preferences(bearerToken: token).preferences) ?? [:]
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
+
         isLoading = false
     }
 
-    private func attestAge() async {
+    private func attestAge(is21OrOver: Bool) async {
         guard let token = authStore.accessToken else { return }
 
-        isAttesting = true
+        isSaving = true
+        saveErrorMessage = nil
         do {
-            me = try await apiClient.attestAge(is21OrOver: true, bearerToken: token)
+            me = try await apiClient.attestAge(is21OrOver: is21OrOver, bearerToken: token)
+            if is21OrOver {
+                preferences = (try? await apiClient.preferences(bearerToken: token).preferences) ?? [:]
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            saveErrorMessage = error.localizedDescription
         }
-        isAttesting = false
+        isSaving = false
+    }
+
+    private func saveProfile(displayName: String, username: String, marketID: String?, bio: String?) async {
+        guard let token = authStore.accessToken else { return }
+
+        isSaving = true
+        saveErrorMessage = nil
+        do {
+            me = try await apiClient.updateProfile(
+                displayName: displayName,
+                username: username,
+                selectedMarketId: marketID ?? markets.first?.id,
+                bio: bio,
+                includeBio: true,
+                bearerToken: token
+            )
+        } catch {
+            saveErrorMessage = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    private func savePreferences(_ payload: [String: [String]]) async {
+        guard let token = authStore.accessToken else { return }
+
+        isSaving = true
+        saveErrorMessage = nil
+        do {
+            preferences = try await apiClient.replacePreferences(payload, bearerToken: token).preferences
+            me = try await apiClient.me(bearerToken: token)
+        } catch {
+            saveErrorMessage = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    private func deleteAccount() async {
+        guard let token = authStore.accessToken else { return }
+
+        isDeleting = true
+        saveErrorMessage = nil
+        do {
+            _ = try await apiClient.deleteAccount(bearerToken: token)
+            await authStore.signOut()
+        } catch {
+            saveErrorMessage = error.localizedDescription
+        }
+        isDeleting = false
     }
 }
 
-private struct AgeGateCard: View {
-    let me: MeResponse
-    let isAttesting: Bool
-    let attest: () -> Void
+private struct AgeGateView: View {
+    let status: String
+    let isSaving: Bool
+    let isDeleting: Bool
+    let errorMessage: String?
+    let attest: (Bool) -> Void
     let signOut: () -> Void
+    let deleteAccount: () -> Void
+
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
-        VStack(spacing: 18) {
-            NightloopCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    PulsePill(level: 2, label: "Phase 3")
+        VStack {
+            Spacer()
 
-                    Text("Confirm 21+ to load live venues")
-                        .font(.title2.weight(.black))
+            NightloopCard {
+                VStack(alignment: .leading, spacing: 16) {
+                    PulsePill(level: status == "ineligible" ? 1 : 2, label: status == "ineligible" ? "Eligibility locked" : "21+")
+
+                    Text(status == "ineligible" ? "Nightloop is 21+." : "Confirm 21+ to enter.")
+                        .font(.system(size: 30, weight: .black, design: .rounded))
                         .foregroundStyle(NightloopTheme.ink)
 
                     Text("Nightloop stores only the attestation result and timestamp. It does not store your date of birth.")
                         .font(.subheadline)
                         .foregroundStyle(NightloopTheme.inkMuted)
 
-                    if !me.onboarding.missingSteps.isEmpty {
-                        Text("Remaining setup: \(me.onboarding.missingSteps.joined(separator: ", "))")
+                    if let errorMessage {
+                        Text(errorMessage)
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(NightloopTheme.inkDim)
+                            .foregroundStyle(NightloopTheme.amber)
                     }
 
-                    Button {
-                        attest()
-                    } label: {
-                        if isAttesting {
-                            ProgressView().tint(.white)
-                        } else {
-                            Label("I am 21 or older", systemImage: "checkmark.seal.fill")
-                                .font(.headline)
+                    if status != "ineligible" {
+                        Button {
+                            attest(true)
+                        } label: {
+                            if isSaving {
+                                ProgressView().tint(.white)
+                            } else {
+                                Label("I am 21 or older", systemImage: "checkmark.seal.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NightloopTheme.fab)
+                        .disabled(isSaving)
+
+                        Button {
+                            attest(false)
+                        } label: {
+                            Text("I am not 21")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(NightloopTheme.inkMuted)
+                        .disabled(isSaving)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.fab)
-                    .disabled(isAttesting)
 
                     Button("Sign out", action: signOut)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(NightloopTheme.inkMuted)
+                        .frame(maxWidth: .infinity)
+
+                    if status == "ineligible" {
+                        Button(role: .destructive) {
+                            showDeleteConfirmation = true
+                        } label: {
+                            Text(isDeleting ? "Deleting..." : "Delete account")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isDeleting)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(22)
+
+            Spacer()
+        }
+        .alert("Delete account?", isPresented: $showDeleteConfirmation) {
+            Button("Delete account", role: .destructive, action: deleteAccount)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This anonymizes your Nightloop profile and signs you out.")
         }
     }
 }

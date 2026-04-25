@@ -23,7 +23,10 @@ final class AuthStore: ObservableObject {
         if config.isSupabaseConfigured, let supabaseURL = config.supabaseURL {
             self.client = SupabaseClient(
                 supabaseURL: supabaseURL,
-                supabaseKey: config.supabasePublishableKey
+                supabaseKey: config.supabasePublishableKey,
+                options: SupabaseClientOptions(
+                    auth: .init(emitLocalSessionAsInitialSession: true)
+                )
             )
         } else {
             self.client = nil
@@ -62,6 +65,68 @@ final class AuthStore: ObservableObject {
         }
     }
 
+    func signInWithApple(idToken: String, nonce: String?) async {
+        guard let client else {
+            phase = .unconfigured("Supabase is not configured for this build.")
+            return
+        }
+
+        phase = .loading
+        do {
+            try await client.auth.signInWithIdToken(
+                credentials: OpenIDConnectCredentials(
+                    provider: .apple,
+                    idToken: idToken,
+                    nonce: nonce
+                )
+            )
+            await restoreSession()
+        } catch {
+            accessToken = nil
+            phase = .failed(Self.safeErrorMessage(error))
+        }
+    }
+
+    func sendPhoneCode(phone: String) async -> Result<String, AuthActionError> {
+        guard let client else {
+            return .failure(.configuration("Supabase is not configured for this build."))
+        }
+
+        guard let normalized = USPhoneNumber.normalize(phone) else {
+            return .failure(.validation("Enter a valid US phone number."))
+        }
+
+        do {
+            try await client.auth.signInWithOTP(phone: normalized)
+            return .success(normalized)
+        } catch {
+            return .failure(.authentication(Self.safeErrorMessage(error)))
+        }
+    }
+
+    func verifyPhoneCode(phone: String, code: String) async -> Result<Void, AuthActionError> {
+        guard let client else {
+            return .failure(.configuration("Supabase is not configured for this build."))
+        }
+
+        guard let normalized = USPhoneNumber.normalize(phone) else {
+            return .failure(.validation("Enter a valid US phone number."))
+        }
+
+        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedCode.count >= 4 else {
+            return .failure(.validation("Enter the SMS code."))
+        }
+
+        do {
+            try await client.auth.verifyOTP(phone: normalized, token: trimmedCode, type: .sms)
+            await restoreSession()
+            return .success(())
+        } catch {
+            return .failure(.authentication(Self.safeErrorMessage(error)))
+        }
+    }
+
     func signOut() async {
         guard let client else {
             phase = .signedOut
@@ -85,5 +150,18 @@ final class AuthStore: ObservableObject {
             return "Authentication failed. Please check the account details and try again."
         }
         return message
+    }
+}
+
+enum AuthActionError: LocalizedError, Equatable {
+    case configuration(String)
+    case validation(String)
+    case authentication(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .configuration(let message), .validation(let message), .authentication(let message):
+            return message
+        }
     }
 }

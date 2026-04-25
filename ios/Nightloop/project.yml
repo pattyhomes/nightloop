@@ -39,6 +39,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Nightloop/Resources/Nightloop.entitlements
         CODE_SIGN_STYLE: Automatic
       configs:
         Debug:

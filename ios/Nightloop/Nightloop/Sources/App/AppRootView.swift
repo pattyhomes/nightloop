@@ -22,13 +22,13 @@ struct AppRootView: View {
                 case .loading:
                     LoadingStateView(title: "Restoring Nightloop")
                 case .unconfigured(let message):
-                    DevSignInView(authStore: authStore, message: message)
+                    AuthLandingView(authStore: authStore, message: message)
                 case .signedOut:
-                    DevSignInView(authStore: authStore, message: nil)
+                    AuthLandingView(authStore: authStore, message: nil)
                 case .signedIn:
                     AccountGateView(authStore: authStore, apiClient: apiClient)
                 case .failed(let message):
-                    DevSignInView(authStore: authStore, message: message)
+                    AuthLandingView(authStore: authStore, message: message)
                 }
             }
         }
@@ -71,13 +71,15 @@ struct NightloopTabShell: View {
     @ObservedObject var authStore: AuthStore
     let apiClient: NightloopAPIClient
     let me: MeResponse
+    let preferences: [String: [String]]
+    let onAccountChanged: (MeResponse) -> Void
 
     @State private var selectedTab: AppTab = .home
 
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                HomeView(apiClient: apiClient, authStore: authStore, me: me)
+                HomeView(apiClient: apiClient, authStore: authStore, me: me, preferences: preferences)
             }
             .tabItem { Label(AppTab.home.title, systemImage: AppTab.home.symbol) }
             .tag(AppTab.home)
@@ -101,7 +103,7 @@ struct NightloopTabShell: View {
             .tag(AppTab.friends)
 
             NavigationStack {
-                ProfileView(authStore: authStore, apiClient: apiClient, me: me)
+                ProfileView(authStore: authStore, apiClient: apiClient, me: me, onAccountChanged: onAccountChanged)
             }
             .tabItem { Label(AppTab.profile.title, systemImage: AppTab.profile.symbol) }
             .tag(AppTab.profile)

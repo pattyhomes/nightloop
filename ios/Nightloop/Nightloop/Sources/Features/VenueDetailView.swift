@@ -10,6 +10,7 @@ struct VenueDetailView: View {
     @State private var errorMessage: String?
     @State private var isLoading = true
     @State private var signalMessage: String?
+    @State private var submittingSignal: SignalKind?
 
     var venue: VenueItem? {
         detail?.venue ?? initialVenue
@@ -57,6 +58,8 @@ struct VenueDetailView: View {
                         .foregroundStyle(NightloopTheme.inkMuted)
                 }
 
+                VenueArtView(venue: venue)
+
                 SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
 
                 if let eventTitle = venue.event?.title {
@@ -87,13 +90,20 @@ struct VenueDetailView: View {
                         Button {
                             Task { await submitSignal(venueID: venue.id, kind: kind) }
                         } label: {
-                            Label(kind.label, systemImage: kind.symbol)
-                                .font(.caption.weight(.bold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
+                            if submittingSignal == kind {
+                                ProgressView().tint(kind == .packed ? NightloopTheme.fab : NightloopTheme.purple)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                            } else {
+                                Label(kind.label, systemImage: kind.symbol)
+                                    .font(.caption.weight(.bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                            }
                         }
                         .buttonStyle(.bordered)
                         .tint(kind == .packed ? NightloopTheme.fab : NightloopTheme.purple)
+                        .disabled(submittingSignal != nil)
                     }
                 }
             }
@@ -137,6 +147,7 @@ struct VenueDetailView: View {
     private func submitSignal(venueID: String, kind: SignalKind) async {
         guard let token = authStore.accessToken else { return }
 
+        submittingSignal = kind
         do {
             let result = try await apiClient.submitSignal(venueID: venueID, kind: kind, bearerToken: token)
             signalMessage = "+\(result.pointsAwarded) Signal Scout points"
@@ -144,6 +155,7 @@ struct VenueDetailView: View {
         } catch {
             signalMessage = error.localizedDescription
         }
+        submittingSignal = nil
     }
 }
 

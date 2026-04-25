@@ -53,6 +53,18 @@ Cover at minimum:
 
 - RLS enabled for Supabase-exposed tables.
 - Policies reviewed for user-owned rows.
+- While Nightloop remains backend-mediated, app tables may intentionally have RLS
+  enabled with no broad direct-client policies. Express owns product-data
+  authorization.
+- Do not add permissive `USING (true)` policies to app/private/admin tables to
+  silence Supabase Advisor warnings.
+- Phase 4 Supabase Advisor cleanup includes leaked password protection,
+  `public.set_updated_at` search-path hardening, and direct API denial for
+  `public.spatial_ref_sys` when the migration role owns that extension-created
+  table. If Supabase keeps it owned by `supabase_admin`, record the advisor item
+  as a manual extension cleanup follow-up.
+- PostGIS-in-public relocation is tracked for Phase 5 database cleanup unless a
+  safe migration path is verified earlier.
 - Service role/secret keys only in backend env.
 - No service role in iOS, Next frontend bundle, tests committed with real secrets, or screenshots.
 - Migrations reviewed before production apply.

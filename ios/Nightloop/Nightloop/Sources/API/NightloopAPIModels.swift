@@ -72,6 +72,15 @@ struct UserSettings: Codable, Equatable {
     let pushSocialEnabled: Bool
     let pushDecisionEnabled: Bool
     let pushFavoriteVenueAlertsEnabled: Bool
+
+    static let fallback = UserSettings(
+        ghostMode: false,
+        mapShowNeighborhoodLabels: true,
+        mapShowStreetGrid: true,
+        pushSocialEnabled: true,
+        pushDecisionEnabled: true,
+        pushFavoriteVenueAlertsEnabled: false
+    )
 }
 
 struct OnboardingState: Decodable, Equatable {
@@ -202,6 +211,11 @@ struct TrendBucket: Decodable, Equatable {
 
 struct PreferencesResponse: Decodable, Equatable {
     let preferences: [String: [String]]
+}
+
+struct AccountDeletionResponse: Decodable, Equatable {
+    let status: String
+    let message: String
 }
 
 enum SignalKind: String, Codable, CaseIterable, Identifiable {

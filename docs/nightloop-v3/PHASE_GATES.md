@@ -125,6 +125,20 @@ Scope:
 - Home.
 - Venue Detail.
 - Profile and Settings.
+- Supabase Auth and Security Advisor cleanup before real user testing.
+
+Security/advisor cleanup:
+
+- Enable leaked password protection in Supabase Auth settings before real user
+  testing.
+- Apply the Phase 4 advisor migration for `public.set_updated_at` search path
+  and `public.spatial_ref_sys` RLS/revokes.
+- Keep product data backend-mediated through Express. App tables with RLS and no
+  broad direct-client policies are intentional while Express owns authorization.
+- Do not add permissive `USING (true)` policies to app/private/admin tables to
+  silence advisor warnings.
+- Track PostGIS-in-public relocation, unused indexes, and unindexed foreign keys
+  as DB hardening follow-ups unless a concrete Phase 4 issue appears.
 
 Stop before continuing if:
 
