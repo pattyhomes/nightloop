@@ -118,6 +118,20 @@ struct MarketsResponse: Decodable, Equatable {
     let items: [Market]
 }
 
+struct MarketConfigResponse: Decodable, Equatable {
+    let market: Market
+    let neighborhoods: [MarketNeighborhood]
+    let providerConfig: JSONValue?
+}
+
+struct MarketNeighborhood: Decodable, Identifiable, Equatable {
+    let id: String
+    let slug: String
+    let displayName: String
+    let labelCoordinate: Coordinate?
+    let polygon: JSONValue?
+}
+
 struct VenuePulse: Codable, Equatable {
     let level: Int
     let label: String

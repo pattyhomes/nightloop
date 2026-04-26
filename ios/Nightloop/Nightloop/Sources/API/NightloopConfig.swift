@@ -6,6 +6,8 @@ struct NightloopConfig: Equatable {
     let supabasePublishableKey: String
     let appleAuthEnabled: Bool
     let phoneAuthEnabled: Bool
+    let mapboxAccessToken: String?
+    let mapboxStyleURI: String?
     let debugPhoneTestNumber: String?
     let debugPhoneTestCode: String?
 
@@ -13,6 +15,10 @@ struct NightloopConfig: Equatable {
         guard supabaseURL != nil else { return false }
         let trimmed = supabasePublishableKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && !trimmed.localizedCaseInsensitiveContains("paste_")
+    }
+
+    var isMapboxConfigured: Bool {
+        mapboxAccessToken != nil && mapboxStyleURI != nil
     }
 
     static func current(bundle: Bundle = .main) throws -> NightloopConfig {
@@ -30,6 +36,8 @@ struct NightloopConfig: Equatable {
         let publishableKey = Self.stringValue(info["NightloopSupabasePublishableKey"])
         let appleAuthEnabled = Self.boolValue(info["NightloopAppleAuthEnabled"])
         let phoneAuthEnabled = Self.boolValue(info["NightloopPhoneAuthEnabled"])
+        let mapboxAccessToken = Self.optionalConfigValue(info["NightloopMapboxAccessToken"])
+        let mapboxStyleURI = Self.optionalConfigValue(info["NightloopMapboxStyleURI"])
         let debugPhoneTestNumber = Self.optionalDebugValue(info["NightloopDebugPhoneTestNumber"])
         let debugPhoneTestCode = Self.optionalDebugValue(info["NightloopDebugPhoneTestCode"])
 
@@ -38,6 +46,8 @@ struct NightloopConfig: Equatable {
         self.supabasePublishableKey = publishableKey
         self.appleAuthEnabled = appleAuthEnabled
         self.phoneAuthEnabled = phoneAuthEnabled
+        self.mapboxAccessToken = mapboxAccessToken
+        self.mapboxStyleURI = mapboxStyleURI
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }
@@ -48,6 +58,8 @@ struct NightloopConfig: Equatable {
         supabasePublishableKey: String,
         appleAuthEnabled: Bool = false,
         phoneAuthEnabled: Bool = false,
+        mapboxAccessToken: String? = nil,
+        mapboxStyleURI: String? = nil,
         debugPhoneTestNumber: String? = nil,
         debugPhoneTestCode: String? = nil
     ) {
@@ -56,6 +68,8 @@ struct NightloopConfig: Equatable {
         self.supabasePublishableKey = supabasePublishableKey
         self.appleAuthEnabled = appleAuthEnabled
         self.phoneAuthEnabled = phoneAuthEnabled
+        self.mapboxAccessToken = mapboxAccessToken
+        self.mapboxStyleURI = mapboxStyleURI
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }
@@ -65,6 +79,10 @@ struct NightloopConfig: Equatable {
     }
 
     private static func optionalDebugValue(_ value: Any?) -> String? {
+        optionalConfigValue(value)
+    }
+
+    private static func optionalConfigValue(_ value: Any?) -> String? {
         let trimmed = stringValue(value)
         guard !trimmed.isEmpty else { return nil }
         guard !trimmed.contains("$("), !trimmed.localizedCaseInsensitiveContains("paste_") else {

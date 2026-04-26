@@ -1,3 +1,4 @@
+import MapboxMaps
 import SwiftUI
 
 @main
@@ -9,6 +10,9 @@ struct NightloopApp: App {
     init() {
         do {
             let config = try NightloopConfig.current()
+            if let mapboxAccessToken = config.mapboxAccessToken {
+                MapboxOptions.accessToken = mapboxAccessToken
+            }
             _authStore = StateObject(wrappedValue: AuthStore(config: config))
             apiClient = NightloopAPIClient(baseURL: config.apiBaseURL)
             startupError = nil

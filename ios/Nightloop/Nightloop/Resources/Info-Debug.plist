@@ -22,10 +22,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>MBXAccessToken</key>
+	<string>$(MAPBOX_ACCESS_TOKEN)</string>
 	<key>NightloopAPIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
 	<key>NightloopAppleAuthEnabled</key>
 	<string>$(AUTH_APPLE_ENABLED)</string>
+	<key>NightloopMapboxAccessToken</key>
+	<string>$(MAPBOX_ACCESS_TOKEN)</string>
+	<key>NightloopMapboxStyleURI</key>
+	<string>$(MAPBOX_STYLE_URI)</string>
 	<key>NightloopDebugPhoneTestCode</key>
 	<string>$(DEBUG_PHONE_TEST_CODE)</string>
 	<key>NightloopDebugPhoneTestNumber</key>
@@ -41,6 +47,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Nightloop uses your location only while the app is open to sort nearby venues on the map.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

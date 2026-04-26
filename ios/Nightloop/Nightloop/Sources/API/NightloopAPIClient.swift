@@ -125,13 +125,27 @@ struct NightloopAPIClient {
         try await send(path: "markets", bearerToken: nil)
     }
 
-    func venues(marketID: String, bearerToken: String, limit: Int = 30, pulse: String? = nil) async throws -> VenueListResponse {
+    func marketConfig(id: String) async throws -> MarketConfigResponse {
+        try await send(path: "markets/\(id)/config", bearerToken: nil)
+    }
+
+    func venues(
+        marketID: String,
+        bearerToken: String,
+        limit: Int = 30,
+        pulse: String? = nil,
+        userCoordinate: Coordinate? = nil
+    ) async throws -> VenueListResponse {
         var queryItems = [
             URLQueryItem(name: "market_id", value: marketID),
             URLQueryItem(name: "limit", value: String(limit))
         ]
         if let pulse {
             queryItems.append(URLQueryItem(name: "pulse", value: pulse))
+        }
+        if let userCoordinate {
+            queryItems.append(URLQueryItem(name: "lat", value: String(userCoordinate.latitude)))
+            queryItems.append(URLQueryItem(name: "lng", value: String(userCoordinate.longitude)))
         }
 
         return try await send(

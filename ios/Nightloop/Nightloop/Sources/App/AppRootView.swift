@@ -93,7 +93,7 @@ struct NightloopTabShell: View {
                 }
             case .map:
                 NavigationStack {
-                    MapShellView(apiClient: apiClient, authStore: authStore, me: me)
+                    MapShellView(apiClient: apiClient, authStore: authStore, me: me, onAccountChanged: onAccountChanged)
                 }
             case .decision:
                 NavigationStack {
