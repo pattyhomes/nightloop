@@ -24,6 +24,10 @@
 	<true/>
 	<key>NightloopAPIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
+	<key>NightloopAppleAuthEnabled</key>
+	<string>$(AUTH_APPLE_ENABLED)</string>
+	<key>NightloopPhoneAuthEnabled</key>
+	<string>$(AUTH_PHONE_ENABLED)</string>
 	<key>NightloopSupabasePublishableKey</key>
 	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
 	<key>NightloopSupabaseURL</key>

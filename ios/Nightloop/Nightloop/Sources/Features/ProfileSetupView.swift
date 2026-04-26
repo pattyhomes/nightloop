@@ -64,11 +64,11 @@ struct ProfileSetupView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 12) {
                         PulsePill(level: 2, label: "Profile")
-                        Text("Set your\nNightloop\nidentity.")
-                            .font(.system(size: 40, weight: .black))
+                        Text("Set up your profile.")
+                            .font(.system(size: 36, weight: .black))
                             .foregroundStyle(NightloopTheme.ink)
                             .lineSpacing(-2)
-                        Text("This is how your signals and future friend activity appear in the app.")
+                        Text("Choose the name people see on signals. You can edit this later from Profile.")
                             .font(.subheadline.weight(.semibold))
                             .lineSpacing(4)
                             .foregroundStyle(NightloopTheme.inkMuted)

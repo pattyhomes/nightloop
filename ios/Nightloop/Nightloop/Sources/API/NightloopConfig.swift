@@ -4,6 +4,8 @@ struct NightloopConfig: Equatable {
     let apiBaseURL: URL
     let supabaseURL: URL?
     let supabasePublishableKey: String
+    let appleAuthEnabled: Bool
+    let phoneAuthEnabled: Bool
     let debugPhoneTestNumber: String?
     let debugPhoneTestCode: String?
 
@@ -26,12 +28,16 @@ struct NightloopConfig: Equatable {
         let supabaseURLValue = Self.stringValue(info["NightloopSupabaseURL"])
         let supabaseURL = URL(string: supabaseURLValue)
         let publishableKey = Self.stringValue(info["NightloopSupabasePublishableKey"])
+        let appleAuthEnabled = Self.boolValue(info["NightloopAppleAuthEnabled"])
+        let phoneAuthEnabled = Self.boolValue(info["NightloopPhoneAuthEnabled"])
         let debugPhoneTestNumber = Self.optionalDebugValue(info["NightloopDebugPhoneTestNumber"])
         let debugPhoneTestCode = Self.optionalDebugValue(info["NightloopDebugPhoneTestCode"])
 
         self.apiBaseURL = apiURL
         self.supabaseURL = supabaseURL
         self.supabasePublishableKey = publishableKey
+        self.appleAuthEnabled = appleAuthEnabled
+        self.phoneAuthEnabled = phoneAuthEnabled
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }
@@ -40,12 +46,16 @@ struct NightloopConfig: Equatable {
         apiBaseURL: URL,
         supabaseURL: URL?,
         supabasePublishableKey: String,
+        appleAuthEnabled: Bool = false,
+        phoneAuthEnabled: Bool = false,
         debugPhoneTestNumber: String? = nil,
         debugPhoneTestCode: String? = nil
     ) {
         self.apiBaseURL = apiBaseURL
         self.supabaseURL = supabaseURL
         self.supabasePublishableKey = supabasePublishableKey
+        self.appleAuthEnabled = appleAuthEnabled
+        self.phoneAuthEnabled = phoneAuthEnabled
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }
@@ -61,6 +71,15 @@ struct NightloopConfig: Equatable {
             return nil
         }
         return trimmed
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool {
+        switch stringValue(value).lowercased() {
+        case "yes", "true", "1", "enabled":
+            return true
+        default:
+            return false
+        }
     }
 }
 

@@ -5,6 +5,12 @@ API_BASE_URL = http:/$()/127.0.0.1:4000/api/v1
 SUPABASE_URL = https:/$()/vvpfgxpxsxuhgbqeosqg.supabase.co
 SUPABASE_PUBLISHABLE_KEY = paste_publishable_or_anon_key_here
 
+// Flip these only after the matching Supabase/Apple/Twilio setup is complete.
+// Keeping them off makes the app show honest setup-pending states instead of
+// attempting live auth providers that are not configured yet.
+AUTH_APPLE_ENABLED = NO
+AUTH_PHONE_ENABLED = NO
+
 // Optional DEBUG-only phone auth test helper values.
 // Use only Supabase dashboard test numbers or a controlled development number.
 // Never put a real user's phone number or one-time code in git.

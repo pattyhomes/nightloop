@@ -28,12 +28,27 @@ final class NightloopTests: XCTestCase {
             "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
             "NightloopSupabaseURL": "https://example.supabase.co",
             "NightloopSupabasePublishableKey": "sb_publishable_test",
+            "NightloopAppleAuthEnabled": "YES",
+            "NightloopPhoneAuthEnabled": "true",
             "NightloopDebugPhoneTestNumber": " (415) 555-0134 ",
             "NightloopDebugPhoneTestCode": " 123456 "
         ])
 
+        XCTAssertTrue(config.appleAuthEnabled)
+        XCTAssertTrue(config.phoneAuthEnabled)
         XCTAssertEqual(config.debugPhoneTestNumber, "(415) 555-0134")
         XCTAssertEqual(config.debugPhoneTestCode, "123456")
+    }
+
+    func testConfigDefaultsLiveAuthProvidersOff() throws {
+        let config = try NightloopConfig(info: [
+            "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
+            "NightloopSupabaseURL": "https://example.supabase.co",
+            "NightloopSupabasePublishableKey": "sb_publishable_test"
+        ])
+
+        XCTAssertFalse(config.appleAuthEnabled)
+        XCTAssertFalse(config.phoneAuthEnabled)
     }
 
     func testConfigIgnoresUnresolvedDebugPhoneBuildSettings() throws {

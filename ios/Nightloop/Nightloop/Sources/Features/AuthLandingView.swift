@@ -35,23 +35,6 @@ struct AuthLandingView: View {
             }
         }
         #if DEBUG
-        .overlay(alignment: .bottomTrailing) {
-            Button {
-                showDebugSignIn = true
-            } label: {
-                Image(systemName: "wrench.and.screwdriver.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(NightloopTheme.inkMuted)
-                    .padding(10)
-                    .background(NightloopTheme.surface.opacity(0.86))
-                    .clipShape(Circle())
-                    .overlay {
-                        Circle().stroke(NightloopTheme.hairline)
-                    }
-            }
-            .padding(18)
-            .accessibilityLabel("Open debug sign-in")
-        }
         .sheet(isPresented: $showDebugSignIn) {
             DevSignInView(authStore: authStore, message: nil)
         }
@@ -108,26 +91,60 @@ struct AuthLandingView: View {
     private var authPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(spacing: 10) {
-                SignInWithAppleButton(.signIn) { request in
-                    let nonce = AppleNonce.make()
-                    currentAppleNonce = nonce
-                    request.requestedScopes = [.fullName, .email]
-                    request.nonce = AppleNonce.sha256(nonce)
-                } onCompletion: { result in
-                    handleAppleCompletion(result)
-                }
-                .signInWithAppleButtonStyle(.white)
-                .frame(height: 52)
-                .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
+                appleSignInControl
 
                 phoneFlow
             }
 
-            Text("21+ · SF only · be cool to doors, tip bartenders")
-                .font(.caption2.weight(.semibold))
-                .tracking(0.3)
-                .foregroundStyle(NightloopTheme.inkDim)
-                .frame(maxWidth: .infinity)
+            VStack(spacing: 10) {
+                Text("21+ · SF only · be cool to doors, tip bartenders")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.3)
+                    .foregroundStyle(NightloopTheme.inkDim)
+                    .frame(maxWidth: .infinity)
+
+                #if DEBUG
+                Button {
+                    showDebugSignIn = true
+                } label: {
+                    Label("Developer testing", systemImage: "hammer.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(NightloopTheme.surface.opacity(0.62))
+                        .clipShape(Capsule())
+                        .overlay {
+                            Capsule().stroke(NightloopTheme.hairline)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open debug sign-in")
+                #endif
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var appleSignInControl: some View {
+        if authStore.config.appleAuthEnabled {
+            SignInWithAppleButton(.signIn) { request in
+                let nonce = AppleNonce.make()
+                currentAppleNonce = nonce
+                request.requestedScopes = [.fullName, .email]
+                request.nonce = AppleNonce.sha256(nonce)
+            } onCompletion: { result in
+                handleAppleCompletion(result)
+            }
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
+        } else {
+            AuthProviderPendingButton(
+                title: "Sign in with Apple",
+                subtitle: "Apple Developer setup pending",
+                systemImage: "apple.logo"
+            )
         }
     }
 
@@ -145,44 +162,51 @@ struct AuthLandingView: View {
                         .foregroundStyle(NightloopTheme.inkDim)
                 }
 
-                TextField("(415) 555-0134", text: $phoneNumber)
-                    .keyboardType(.phonePad)
-                    .textContentType(.telephoneNumber)
-                    .padding(13)
-                    .background(NightloopTheme.surfaceElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
-                    .foregroundStyle(NightloopTheme.ink)
-
-                NightloopSecondaryButton(
-                    title: normalizedPhone == nil ? "Text me a code" : "Send a new code",
-                    systemImage: isSendingPhoneCode ? nil : "message.fill"
-                ) {
-                    Task { await sendPhoneCode() }
-                }
-                .disabled(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil)
-                .opacity(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil ? 0.55 : 1)
-
-                if normalizedPhone != nil {
-                    TextField("6-digit code", text: $verificationCode)
-                        .keyboardType(.numberPad)
-                        .textContentType(.oneTimeCode)
+                if authStore.config.phoneAuthEnabled {
+                    TextField("(415) 555-0134", text: $phoneNumber)
+                        .keyboardType(.phonePad)
+                        .textContentType(.telephoneNumber)
                         .padding(13)
                         .background(NightloopTheme.surfaceElevated)
                         .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
                         .foregroundStyle(NightloopTheme.ink)
 
-                    NightloopPrimaryButton(
-                        title: "Verify code",
-                        systemImage: "checkmark.seal.fill",
-                        isLoading: isVerifyingPhoneCode,
-                        isEnabled: verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).count >= 4
+                    NightloopSecondaryButton(
+                        title: normalizedPhone == nil ? "Text me a code" : "Send a new code",
+                        systemImage: isSendingPhoneCode ? nil : "message.fill"
                     ) {
-                        Task { await verifyPhoneCode() }
+                        Task { await sendPhoneCode() }
                     }
+                    .disabled(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil)
+                    .opacity(isSendingPhoneCode || USPhoneNumber.normalize(phoneNumber) == nil ? 0.55 : 1)
+
+                    if normalizedPhone != nil {
+                        TextField("6-digit code", text: $verificationCode)
+                            .keyboardType(.numberPad)
+                            .textContentType(.oneTimeCode)
+                            .padding(13)
+                            .background(NightloopTheme.surfaceElevated)
+                            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
+                            .foregroundStyle(NightloopTheme.ink)
+
+                        NightloopPrimaryButton(
+                            title: "Verify code",
+                            systemImage: "checkmark.seal.fill",
+                            isLoading: isVerifyingPhoneCode,
+                            isEnabled: verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).count >= 4
+                        ) {
+                            Task { await verifyPhoneCode() }
+                        }
+                    }
+                } else {
+                    AuthProviderPendingRow(
+                        title: "SMS setup pending",
+                        message: "Phone sign-in turns on after a Supabase SMS provider is configured."
+                    )
                 }
 
                 #if DEBUG
-                PhoneAuthDebugHelper(config: authStore.config) { number, code in
+                PhoneAuthDebugHelper(config: authStore.config, isPhoneAuthEnabled: authStore.config.phoneAuthEnabled) { number, code in
                     phoneNumber = number
                     normalizedPhone = USPhoneNumber.normalize(number)
                     if let code {
@@ -264,9 +288,75 @@ struct AuthLandingView: View {
     }
 }
 
+private struct AuthProviderPendingButton: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.headline.weight(.black))
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline.weight(.black))
+                Text(subtitle)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color(hex: "#59515f"))
+            }
+            Spacer()
+            Image(systemName: "lock.fill")
+                .font(.caption.weight(.black))
+                .foregroundStyle(Color(hex: "#59515f"))
+        }
+        .foregroundStyle(Color(hex: "#1b1524"))
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+        .background(Color.white.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous)
+                .stroke(Color.white.opacity(0.42))
+        }
+        .opacity(0.9)
+    }
+}
+
+private struct AuthProviderPendingRow: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "clock.badge.checkmark")
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(NightloopTheme.amber)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.ink)
+                Text(message)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(NightloopTheme.amber.opacity(0.09))
+        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous)
+                .stroke(NightloopTheme.amber.opacity(0.18))
+        }
+    }
+}
+
 #if DEBUG
 private struct PhoneAuthDebugHelper: View {
     let config: NightloopConfig
+    let isPhoneAuthEnabled: Bool
     let apply: (String, String?) -> Void
 
     private var testNumber: String? {
@@ -295,25 +385,27 @@ private struct PhoneAuthDebugHelper: View {
                         .foregroundStyle(NightloopTheme.ink)
 
                     if let testNumber {
-                        Text("Configured for \(maskedPhone(testNumber)). Use only Supabase test numbers or a controlled dev number.")
+                        Text(isPhoneAuthEnabled ? "Configured for \(maskedPhone(testNumber)). Use only Supabase test numbers or a controlled dev number." : "Test phone is configured, but phone auth is still marked setup-pending.")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(NightloopTheme.inkMuted)
 
-                        Button {
-                            apply(testNumber, testCode)
-                        } label: {
-                            Label(testCode == nil ? "Fill test phone" : "Fill test phone + code", systemImage: "wand.and.stars")
-                                .font(.caption.weight(.black))
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(NightloopTheme.ink)
-                        .padding(.vertical, 9)
-                        .background(NightloopTheme.purpleSoft)
-                        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous)
-                                .stroke(NightloopTheme.purpleEdge)
+                        if isPhoneAuthEnabled {
+                            Button {
+                                apply(testNumber, testCode)
+                            } label: {
+                                Label(testCode == nil ? "Fill test phone" : "Fill test phone + code", systemImage: "wand.and.stars")
+                                    .font(.caption.weight(.black))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(NightloopTheme.ink)
+                            .padding(.vertical, 9)
+                            .background(NightloopTheme.purpleSoft)
+                            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall, style: .continuous)
+                                    .stroke(NightloopTheme.purpleEdge)
+                            }
                         }
                     } else {
                         Text("Optional: set DEBUG_PHONE_TEST_NUMBER and DEBUG_PHONE_TEST_CODE in your ignored iOS config after Supabase phone testing is configured.")
