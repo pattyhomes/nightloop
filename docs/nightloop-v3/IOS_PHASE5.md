@@ -9,12 +9,15 @@ keeping Express `/api/v1` as the app data boundary.
 
 ```xcconfig
 MAPBOX_ACCESS_TOKEN = pk_your_public_runtime_token
-MAPBOX_STYLE_URI = mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1
+MAPBOX_STYLE_URI = mapbox:/$()/styles/chuck18/cmofbpqpc004501qp2igmbha1
 ```
 
 Use only a public runtime token in the iOS config. If Swift Package Manager needs
 a Mapbox Downloads token, store that secret only in `~/.netrc`; never commit it
 or paste it into `NightloopConfig.xcconfig`.
+
+The `mapbox:/$()/styles/...` form is intentional for `.xcconfig` files. A raw
+`mapbox://styles/...` value is parsed as `mapbox:` because `//` starts a comment.
 
 The current Studio style is named `Nightloop Midnight Orchid`. It should stay a
 subdued dark base map: muted streets, minimal road/POI labels, and enough

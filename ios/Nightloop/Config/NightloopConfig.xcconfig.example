@@ -8,7 +8,7 @@ SUPABASE_PUBLISHABLE_KEY = paste_publishable_or_anon_key_here
 // Phase 5 Mapbox. Use a public runtime token only. Never paste a secret token
 // with Downloads:Read here; if SPM needs one, store it in ~/.netrc instead.
 MAPBOX_ACCESS_TOKEN = paste_public_mapbox_token_here
-MAPBOX_STYLE_URI = mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1
+MAPBOX_STYLE_URI = mapbox:/$()/styles/chuck18/cmofbpqpc004501qp2igmbha1
 
 // Flip these only after the matching Supabase/Apple/Twilio setup is complete.
 // Keeping them off makes the app show honest setup-pending states instead of
