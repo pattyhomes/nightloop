@@ -71,6 +71,18 @@ final class NightloopTests: XCTestCase {
         XCTAssertFalse(config.isMapboxConfigured)
     }
 
+    func testConfigNormalizesEscapedMapboxStyleURI() throws {
+        let config = try NightloopConfig(info: [
+            "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
+            "NightloopSupabaseURL": "https://example.supabase.co",
+            "NightloopSupabasePublishableKey": "sb_publishable_test",
+            "NightloopMapboxAccessToken": "pk.test-token",
+            "NightloopMapboxStyleURI": "mapbox:/$()/styles/chuck18/cmofbpqpc004501qp2igmbha1"
+        ])
+
+        XCTAssertEqual(config.mapboxStyleURI, "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1")
+    }
+
     func testConfigIgnoresUnresolvedDebugPhoneBuildSettings() throws {
         let config = try NightloopConfig(info: [
             "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
@@ -236,6 +248,46 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(MapVenueFilter.selectedVenueID(current: "venue-2", venues: venues), "venue-2")
         XCTAssertEqual(MapVenueFilter.selectedVenueID(current: "missing", venues: venues), "venue-1")
         XCTAssertEqual(MapVenueFilter.rankedVenues(from: venues).map(\.id), ["venue-2", "venue-1"])
+    }
+
+    func testMapSheetDetentsSnapToNearestHeight() {
+        let availableHeight: CGFloat = 760
+
+        XCTAssertEqual(MapSheetDetent.snap(to: 205, availableHeight: availableHeight), .peek)
+        XCTAssertEqual(MapSheetDetent.snap(to: 390, availableHeight: availableHeight), .half)
+        XCTAssertEqual(MapSheetDetent.snap(to: 690, availableHeight: availableHeight), .full)
+        XCTAssertLessThan(MapSheetDetent.peek.height(for: availableHeight), MapSheetDetent.half.height(for: availableHeight))
+        XCTAssertLessThan(MapSheetDetent.half.height(for: availableHeight), MapSheetDetent.full.height(for: availableHeight))
+    }
+
+    func testMapOverlayLayoutFollowsSheetHeight() {
+        let layout = MapOverlayLayout(sheetHeight: 392)
+
+        XCTAssertEqual(layout.promptBottomPadding, 406)
+        XCTAssertEqual(layout.toastBottomPadding, 410)
+        XCTAssertEqual(layout.fabBottomPadding, 358)
+        XCTAssertEqual(layout.signalMenuBottomPadding, 426)
+    }
+
+    func testMapZoomControlClampsZoom() {
+        XCTAssertEqual(MapZoomControl.nextZoom(current: 12, delta: 0.8), 12.8)
+        XCTAssertEqual(MapZoomControl.nextZoom(current: 16.3, delta: 0.8), MapZoomControl.maximumZoom)
+        XCTAssertEqual(MapZoomControl.nextZoom(current: 9.7, delta: -0.8), MapZoomControl.minimumZoom)
+    }
+
+    func testMapStyleResolverTrustsConfiguredStudioStyle() {
+        XCTAssertEqual(
+            MapStyleResolver.preferredURI(
+                configured: "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1",
+                market: "mapbox://styles/other/style"
+            ),
+            "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1"
+        )
+        XCTAssertFalse(MapStyleResolver.shouldFallbackToDark(
+            configured: "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1",
+            market: nil
+        ))
+        XCTAssertTrue(MapStyleResolver.shouldFallbackToDark(configured: "paste_style_here", market: nil))
     }
 
     func testSignalKindRawValuesMatchBackend() {

@@ -100,3 +100,82 @@ struct MapVenueFilter {
         }
     }
 }
+
+enum MapSheetDetent: String, CaseIterable, Equatable {
+    case peek
+    case half
+    case full
+
+    func height(for availableHeight: CGFloat) -> CGFloat {
+        let safeHeight = max(availableHeight, 480)
+        switch self {
+        case .peek:
+            return min(230, max(188, safeHeight * 0.28))
+        case .half:
+            return min(430, max(360, safeHeight * 0.48))
+        case .full:
+            return min(safeHeight - 68, max(560, safeHeight * 0.84))
+        }
+    }
+
+    static func snap(to height: CGFloat, availableHeight: CGFloat) -> MapSheetDetent {
+        allCases.min {
+            abs($0.height(for: availableHeight) - height) < abs($1.height(for: availableHeight) - height)
+        } ?? .half
+    }
+}
+
+struct MapOverlayLayout {
+    let sheetHeight: CGFloat
+
+    var promptBottomPadding: CGFloat {
+        sheetHeight + 14
+    }
+
+    var toastBottomPadding: CGFloat {
+        sheetHeight + 18
+    }
+
+    var fabBottomPadding: CGFloat {
+        max(42, sheetHeight - 34)
+    }
+
+    var signalMenuBottomPadding: CGFloat {
+        sheetHeight + 34
+    }
+}
+
+enum MapZoomControl {
+    static let minimumZoom = 9.5
+    static let maximumZoom = 16.5
+
+    static func nextZoom(current: Double, delta: Double) -> Double {
+        min(maximumZoom, max(minimumZoom, current + delta))
+    }
+}
+
+enum MapStyleResolver {
+    static func preferredURI(configured: String?, market: String?) -> String? {
+        if let configured = usableStyleURI(configured) {
+            return configured
+        }
+        return usableStyleURI(market)
+    }
+
+    static func shouldFallbackToDark(configured: String?, market: String?) -> Bool {
+        preferredURI(configured: configured, market: market) == nil
+    }
+
+    private static func usableStyleURI(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        guard !trimmed.contains("$("), !trimmed.localizedCaseInsensitiveContains("paste_") else {
+            return nil
+        }
+        guard trimmed.hasPrefix("mapbox://") else {
+            return nil
+        }
+        return trimmed
+    }
+}

@@ -26,8 +26,14 @@ neighborhood readability for Nightloop's own labels and markers to dominate.
 ## Behavior
 
 - The map uses the configured Midnight Orchid Mapbox Studio style.
-- If that custom style fails while loading, the app switches once to Mapbox Dark
-  so the map remains usable.
+- The app falls back to Mapbox Dark only when no valid configured Studio URI is
+  available. Nonfatal tile, glyph, sprite, or transient load errors must not
+  silently replace the configured style.
+- The map sheet has three snap points: peek for mostly full-screen map, half for
+  the default selected-venue browse state, and full for list-focused browsing.
+- Compact `+ / -` zoom controls are visible for simulator testing and
+  accessibility. Reevaluate whether they stay visible, become accessibility-only,
+  or move behind debug tooling before TestFlight/App Store hardening.
 - Venue coordinates, counts, pulse state, images, and signal submission still
   come from the backend.
 - If Mapbox config is missing, the app shows a setup card instead of creating a

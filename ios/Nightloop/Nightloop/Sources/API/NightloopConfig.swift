@@ -83,7 +83,7 @@ struct NightloopConfig: Equatable {
     }
 
     private static func optionalConfigValue(_ value: Any?) -> String? {
-        let trimmed = stringValue(value)
+        let trimmed = stringValue(value).replacingOccurrences(of: ":/$()/", with: "://")
         guard !trimmed.isEmpty else { return nil }
         guard !trimmed.contains("$("), !trimmed.localizedCaseInsensitiveContains("paste_") else {
             return nil

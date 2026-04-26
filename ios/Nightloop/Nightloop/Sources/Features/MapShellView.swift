@@ -22,8 +22,10 @@ struct MapShellView: View {
     @State private var isLoading = true
     @State private var isSubmittingSignal = false
     @State private var isSignalMenuOpen = false
-    @State private var didFallbackToDarkStyle = false
-    @State private var didLoadMapStyle = false
+    @State private var sheetDetent: MapSheetDetent = .half
+    @State private var sheetDragTranslation: CGFloat = 0
+    @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
+    @State private var currentMapZoom = 12.2
     @State private var didLoad = false
 
     private var selectedVenue: VenueItem? {
@@ -39,11 +41,10 @@ struct MapShellView: View {
     }
 
     private var mapStyle: MapStyle {
-        guard !didFallbackToDarkStyle else {
-            return .dark
-        }
-
-        let configuredURI = authStore.config.mapboxStyleURI ?? marketConfig?.market.mapboxStyleUri
+        let configuredURI = MapStyleResolver.preferredURI(
+            configured: authStore.config.mapboxStyleURI,
+            market: marketConfig?.market.mapboxStyleUri
+        )
         if let configuredURI, let uri = StyleURI(rawValue: configuredURI) {
             return MapStyle(uri: uri)
         }
@@ -76,6 +77,9 @@ struct MapShellView: View {
 
     private var mapContent: some View {
         GeometryReader { proxy in
+            let sheetHeight = interactiveSheetHeight(for: proxy.size.height)
+            let overlayLayout = MapOverlayLayout(sheetHeight: sheetHeight)
+
             ZStack(alignment: .bottom) {
                 mapView
                     .ignoresSafeArea()
@@ -87,6 +91,11 @@ struct MapShellView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, max(proxy.safeAreaInsets.top + 6, 18))
+
+                zoomControls
+                    .padding(.top, max(proxy.safeAreaInsets.top + 112, 128))
+                    .padding(.trailing, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 
                 if shouldShowLocationPrompt {
                     LocationPromptCard(
@@ -101,7 +110,7 @@ struct MapShellView: View {
                         }
                     )
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 390)
+                    .padding(.bottom, overlayLayout.promptBottomPadding)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
@@ -110,27 +119,26 @@ struct MapShellView: View {
                         Task { await load() }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 390)
+                    .padding(.bottom, overlayLayout.toastBottomPadding)
                 }
 
                 if let signalMessage {
                     SignalToast(message: signalMessage)
-                        .padding(.bottom, 394)
+                        .padding(.bottom, overlayLayout.toastBottomPadding)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                mapBottomSheet
-                    .padding(.bottom, 86)
+                mapBottomSheet(height: sheetHeight, availableHeight: proxy.size.height)
 
                 signalFAB
                     .padding(.trailing, 20)
-                    .padding(.bottom, 430)
+                    .padding(.bottom, overlayLayout.fabBottomPadding)
                     .frame(maxWidth: .infinity, alignment: .trailing)
 
                 if isSignalMenuOpen {
                     signalMenu
                         .padding(.trailing, 20)
-                        .padding(.bottom, 498)
+                        .padding(.bottom, overlayLayout.signalMenuBottomPadding)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
@@ -171,11 +179,11 @@ struct MapShellView: View {
         }
         .mapStyle(mapStyle)
         .onStyleLoaded { _ in
-            didLoadMapStyle = true
+            // Style loaded. Nonfatal tile/glyph/sprite events should not force
+            // Nightloop away from the configured Studio style.
         }
-        .onMapLoadingError { _ in
-            guard !didLoadMapStyle, !didFallbackToDarkStyle else { return }
-            didFallbackToDarkStyle = true
+        .onCameraChanged { event in
+            rememberCameraState(event.cameraState)
         }
         .overlay {
             LinearGradient(
@@ -185,6 +193,35 @@ struct MapShellView: View {
             )
             .allowsHitTesting(false)
         }
+    }
+
+    private var zoomControls: some View {
+        VStack(spacing: 8) {
+            Button {
+                adjustZoom(by: 0.8)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .black))
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Zoom in")
+
+            Button {
+                adjustZoom(by: -0.8)
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 13, weight: .black))
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Zoom out")
+        }
+        .foregroundStyle(NightloopTheme.ink)
+        .background(NightloopTheme.surface.opacity(0.78))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 14, x: 0, y: 8)
     }
 
     private var mapHeader: some View {
@@ -232,20 +269,20 @@ struct MapShellView: View {
         }
     }
 
-    private var mapBottomSheet: some View {
+    private func mapBottomSheet(height: CGFloat, availableHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
             Capsule()
                 .fill(Color.white.opacity(0.22))
                 .frame(width: 42, height: 4)
-                .padding(.top, 10)
-                .padding(.bottom, 12)
+                .padding(.top, 9)
+                .padding(.bottom, sheetDetent == .peek ? 8 : 12)
 
             if isLoading && venues.isEmpty {
                 LoadingStateView(title: "Loading the map")
-                    .frame(maxWidth: .infinity, minHeight: 280)
+                    .frame(maxWidth: .infinity, minHeight: max(130, height - 42))
             } else if venues.isEmpty {
                 EmptyMapState(retry: { Task { await load() } })
-                    .frame(maxWidth: .infinity, minHeight: 280)
+                    .frame(maxWidth: .infinity, minHeight: max(130, height - 42))
             } else {
                 if let selectedVenue {
                     SelectedVenueMapCard(
@@ -254,6 +291,7 @@ struct MapShellView: View {
                         authStore: authStore,
                         onAccountChanged: onAccountChanged,
                         isSubmittingSignal: isSubmittingSignal,
+                        isCompact: sheetDetent == .peek,
                         submitPacked: {
                             Task { await submitSignal(kind: .packed) }
                         }
@@ -269,7 +307,7 @@ struct MapShellView: View {
 
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(rankedVenues.prefix(20)) { venue in
+                        ForEach(Array(rankedVenues.prefix(sheetVenueLimit))) { venue in
                             MapRankedVenueRow(
                                 venue: venue,
                                 isSelected: venue.id == selectedVenueID
@@ -282,11 +320,11 @@ struct MapShellView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 18)
                 }
-                .frame(maxHeight: 190)
+                .frame(maxHeight: listMaxHeight(for: height))
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 392)
+        .frame(height: height)
         .background(
             LinearGradient(
                 colors: [NightloopTheme.surface.opacity(0.98), NightloopTheme.background],
@@ -300,6 +338,21 @@ struct MapShellView: View {
                 .stroke(NightloopTheme.hairline)
         }
         .shadow(color: .black.opacity(0.38), radius: 24, x: 0, y: -8)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 10)
+                .onChanged { value in
+                    sheetDragTranslation = value.translation.height
+                }
+                .onEnded { value in
+                    let proposedHeight = height - value.predictedEndTranslation.height
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                        sheetDetent = MapSheetDetent.snap(to: proposedHeight, availableHeight: availableHeight)
+                        sheetDragTranslation = 0
+                    }
+                }
+        )
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: sheetDetent)
     }
 
     private var signalFAB: some View {
@@ -375,6 +428,33 @@ struct MapShellView: View {
         !locationPromptSeen && locationManager.userCoordinate == nil && !locationManager.isDenied && !isLoading
     }
 
+    private var sheetVenueLimit: Int {
+        switch sheetDetent {
+        case .peek: return 2
+        case .half: return 20
+        case .full: return 60
+        }
+    }
+
+    private func interactiveSheetHeight(for availableHeight: CGFloat) -> CGFloat {
+        let baseHeight = sheetDetent.height(for: availableHeight)
+        let draggedHeight = baseHeight - sheetDragTranslation
+        let minHeight = MapSheetDetent.peek.height(for: availableHeight)
+        let maxHeight = MapSheetDetent.full.height(for: availableHeight)
+        return min(maxHeight, max(minHeight, draggedHeight))
+    }
+
+    private func listMaxHeight(for sheetHeight: CGFloat) -> CGFloat {
+        switch sheetDetent {
+        case .peek:
+            return max(64, sheetHeight - 164)
+        case .half:
+            return max(150, sheetHeight - 202)
+        case .full:
+            return max(280, sheetHeight - 218)
+        }
+    }
+
     private func load() async {
         guard authStore.config.isMapboxConfigured else {
             isLoading = false
@@ -442,7 +522,30 @@ struct MapShellView: View {
         }
 
         withAnimation(.easeInOut(duration: 0.25)) {
+            currentMapCenter = center
+            currentMapZoom = zoom
             viewport = .camera(center: center, zoom: zoom)
+        }
+    }
+
+    private func rememberCameraState(_ cameraState: CameraState) {
+        let center = cameraState.center
+        let zoom = cameraState.zoom
+        guard abs(zoom - currentMapZoom) > 0.05 ||
+            abs(center.latitude - currentMapCenter.latitude) > 0.0005 ||
+            abs(center.longitude - currentMapCenter.longitude) > 0.0005 else {
+            return
+        }
+
+        currentMapCenter = center
+        currentMapZoom = zoom
+    }
+
+    private func adjustZoom(by delta: Double) {
+        let nextZoom = MapZoomControl.nextZoom(current: currentMapZoom, delta: delta)
+        currentMapZoom = nextZoom
+        withAnimation(.easeInOut(duration: 0.2)) {
+            viewport = .camera(center: currentMapCenter, zoom: nextZoom)
         }
     }
 
@@ -566,10 +669,11 @@ private struct SelectedVenueMapCard: View {
     @ObservedObject var authStore: AuthStore
     let onAccountChanged: (MeResponse) -> Void
     let isSubmittingSignal: Bool
+    let isCompact: Bool
     let submitPacked: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: isCompact ? 7 : 10) {
             HStack(spacing: 8) {
                 Circle()
                     .fill(EnergyTone.from(score: venue.pulse.score).color)
@@ -589,7 +693,7 @@ private struct SelectedVenueMapCard: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(venue.name)
-                        .font(.system(size: 26, weight: .black))
+                        .font(.system(size: isCompact ? 22 : 26, weight: .black))
                         .foregroundStyle(NightloopTheme.ink)
                         .lineLimit(1)
                     Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
@@ -600,47 +704,49 @@ private struct SelectedVenueMapCard: View {
                 EnergyScorePill(score: venue.pulse.score)
             }
 
-            HStack(spacing: 7) {
-                MapFactPill(systemName: "clock.fill", text: venue.waitMinutes.map { "\($0)m wait" } ?? "line unknown")
-                if let distance = venue.distanceMiles {
-                    MapFactPill(systemName: "location.fill", text: String(format: "%.1f mi", distance))
+            if !isCompact {
+                HStack(spacing: 7) {
+                    MapFactPill(systemName: "clock.fill", text: venue.waitMinutes.map { "\($0)m wait" } ?? "line unknown")
+                    if let distance = venue.distanceMiles {
+                        MapFactPill(systemName: "location.fill", text: String(format: "%.1f mi", distance))
+                    }
+                    if venue.event != nil {
+                        MapFactPill(systemName: "music.note", text: "event")
+                    }
                 }
-                if venue.event != nil {
-                    MapFactPill(systemName: "music.note", text: "event")
-                }
-            }
 
-            HStack(spacing: 10) {
-                NavigationLink {
-                    VenueDetailView(
-                        apiClient: apiClient,
-                        authStore: authStore,
-                        venueID: venue.id,
-                        initialVenue: venue,
-                        onAccountChanged: onAccountChanged
-                    )
-                } label: {
-                    Text("Details")
-                        .font(.subheadline.weight(.black))
-                        .foregroundStyle(NightloopTheme.ink)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .buttonStyle(.plain)
+                HStack(spacing: 10) {
+                    NavigationLink {
+                        VenueDetailView(
+                            apiClient: apiClient,
+                            authStore: authStore,
+                            venueID: venue.id,
+                            initialVenue: venue,
+                            onAccountChanged: onAccountChanged
+                        )
+                    } label: {
+                        Text("Details")
+                            .font(.subheadline.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
 
-                Button(action: submitPacked) {
-                    Label("Packed", systemImage: "flame.fill")
-                        .font(.subheadline.weight(.black))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(NightloopTheme.fab)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    Button(action: submitPacked) {
+                        Label("Packed", systemImage: "flame.fill")
+                            .font(.subheadline.weight(.black))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(NightloopTheme.fab)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSubmittingSignal)
                 }
-                .buttonStyle(.plain)
-                .disabled(isSubmittingSignal)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
