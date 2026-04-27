@@ -4,6 +4,7 @@ import type { AccountState } from "./accountService";
 import { requireEligible } from "./accountService";
 import { findMarketByIdOrSlug, type MarketRow } from "./marketService";
 import { formatVenue, type VenueFeedRow } from "./venueService";
+import { buildVenueLiveness, type VenueLiveness } from "./livenessService";
 
 type PulseFilter = "chill" | "active" | "packed";
 
@@ -29,6 +30,7 @@ type ScoredRecommendation = {
   score: number;
   reason: string;
   mode: "tonight_preview" | "live_now";
+  liveness: VenueLiveness;
   factors: {
     venue_quality: number;
     preference_match: number;
@@ -123,9 +125,10 @@ function preferenceMatch(row: RecommendationRow, preferences: Record<string, str
 }
 
 function liveSignalScore(row: RecommendationRow): number {
-  const signalCount = Number(row.recent_signal_count ?? 0);
+  const signalCount = Number(row.live_signal_count ?? row.recent_signal_count ?? 0);
+  const uniqueUsers = Number(row.live_unique_user_count ?? 0);
   const energy = clamp(Number(row.energy_score ?? 28) / 100);
-  const cap = signalCount >= 10 ? 0.25 : signalCount >= 3 ? 0.15 : signalCount >= 1 ? 0.08 : 0;
+  const cap = signalCount >= 3 && uniqueUsers >= 2 ? 0.18 : signalCount >= 1 ? 0.06 : 0;
   const deadPenalty = typeof row.source_summary?.dead === "number" ? Number(row.source_summary.dead) * 0.02 : 0;
   return clamp(Math.min(energy, cap) - deadPenalty);
 }
@@ -136,14 +139,28 @@ function eventScore(row: RecommendationRow): number {
 }
 
 function hoursScore(row: RecommendationRow): number {
-  if (row.schedule_status === "verified_hours") return clamp(Number(row.schedule_confidence ?? 0.75));
-  if (row.schedule_status === "temporarily_closed") return 0.05;
-  if (row.schedule_status === "manual_hold") return 0.15;
-  return 0.35;
+  if (row.schedule_status === "verified_hours") return clamp(Math.max(Number(row.schedule_confidence ?? 0.75), 0.72));
+  if (row.schedule_status === "temporarily_closed") return 0.02;
+  if (row.schedule_status === "manual_hold") return 0.08;
+  return 0.16;
 }
 
-function reasonFor(row: RecommendationRow, mode: ScoredRecommendation["mode"], factors: ScoredRecommendation["factors"]): string {
+function reasonFor(
+  row: RecommendationRow,
+  mode: ScoredRecommendation["mode"],
+  factors: ScoredRecommendation["factors"],
+  liveness: VenueLiveness
+): string {
   const area = row.neighborhood ?? "SF";
+  if (liveness.state === "live") {
+    return `${liveness.live_signal_count} verified reports from ${liveness.live_unique_user_count} people in the last 90 minutes.`;
+  }
+  if (liveness.state === "opens_later" && liveness.opens_at) {
+    return `Source-backed ${area} pick that opens later tonight.`;
+  }
+  if (liveness.hours_state === "unknown") {
+    return `Potential ${area} fit, but hours are not verified yet.`;
+  }
   if (mode === "tonight_preview") {
     if (factors.preference_match >= 0.55) return `A strong ${area} fit for your tonight picks.`;
     if (factors.source_confidence >= 0.7) return `Source-backed ${area} nightlife for tonight.`;
@@ -161,6 +178,18 @@ function scoreRecommendation(
   mode: ScoredRecommendation["mode"]
 ): ScoredRecommendation {
   const hasPreferences = Object.values(account.preferences).some((values) => values.length > 0);
+  const liveness = buildVenueLiveness({
+    scheduleStatus: row.schedule_status,
+    scheduleSource: row.schedule_source,
+    scheduleConfidence: row.schedule_confidence,
+    scheduleVerifiedAt: row.schedule_verified_at,
+    scheduleFetchedAt: row.schedule_fetched_at,
+    scheduleMetadata: row.schedule_metadata,
+    pulseLevel: row.pulse_level,
+    recentSignalCount: row.recent_signal_count,
+    liveSignalCount: row.live_signal_count,
+    liveUniqueUserCount: row.live_unique_user_count
+  });
   const factors = {
     venue_quality: sourceQuality(row),
     preference_match: preferenceMatch(row, account.preferences),
@@ -171,23 +200,33 @@ function scoreRecommendation(
   };
 
   const score = hasPreferences
-    ? factors.venue_quality * 0.45 +
-      factors.preference_match * 0.25 +
-      factors.live_signals * 0.15 +
-      factors.event_relevance * 0.10 +
-      factors.source_confidence * 0.05
-    : factors.venue_quality * 0.60 +
-      factors.live_signals * 0.20 +
-      factors.event_relevance * 0.10 +
-      factors.source_confidence * 0.10;
+    ? factors.venue_quality * 0.34 +
+      factors.source_confidence * 0.20 +
+      factors.hours_confidence * 0.20 +
+      factors.preference_match * 0.16 +
+      factors.live_signals * 0.06 +
+      factors.event_relevance * 0.04
+    : factors.venue_quality * 0.44 +
+      factors.source_confidence * 0.25 +
+      factors.hours_confidence * 0.20 +
+      factors.live_signals * 0.06 +
+      factors.event_relevance * 0.05;
 
-  const adjusted = row.schedule_status === "temporarily_closed" ? score * 0.25 : score;
+  const adjusted =
+    row.schedule_status === "temporarily_closed"
+      ? score * 0.08
+      : row.schedule_status === "manual_hold"
+        ? score * 0.35
+        : row.schedule_status === "unknown" || !row.schedule_status
+          ? score * 0.72
+          : score;
   return {
     row,
     score: adjusted,
     mode,
+    liveness,
     factors,
-    reason: reasonFor(row, mode, factors)
+    reason: reasonFor(row, mode, factors, liveness)
   };
 }
 
@@ -227,6 +266,8 @@ export async function listRecommendations(query: RecommendationQuery) {
         vls.wait_minutes,
         COALESCE(vls.signal_count, 0) AS signal_count,
         COALESCE(vls.recent_signal_count, 0) AS recent_signal_count,
+        COALESCE(signal_pack.live_signal_count, COALESCE(vls.recent_signal_count, 0)) AS live_signal_count,
+        COALESCE(signal_pack.live_unique_user_count, 0) AS live_unique_user_count,
         COALESCE(vls.confidence, 0.25) AS confidence,
         vls.last_signal_at,
         vls.computed_at,
@@ -235,6 +276,7 @@ export async function listRecommendations(query: RecommendationQuery) {
         event_pack.current_event,
         schedule_pack.status AS schedule_status,
         schedule_pack.source AS schedule_source,
+        COALESCE(schedule_pack.weekly_hours, '{}'::jsonb) AS schedule_weekly_hours,
         schedule_pack.confidence AS schedule_confidence,
         schedule_pack.verified_at AS schedule_verified_at,
         schedule_pack.fetched_at AS schedule_fetched_at,
@@ -248,6 +290,15 @@ export async function listRecommendations(query: RecommendationQuery) {
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
       LEFT JOIN venue_recommendation_inputs vri ON vri.venue_id = v.id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS live_signal_count,
+          COUNT(DISTINCT s.user_id)::int AS live_unique_user_count
+        FROM signals s
+        WHERE s.venue_id = v.id
+          AND s.kind IS NOT NULL
+          AND s.expires_at > NOW()
+      ) signal_pack ON true
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(
           jsonb_build_object(
@@ -288,6 +339,7 @@ export async function listRecommendations(query: RecommendationQuery) {
         SELECT
           vs.status,
           vs.source,
+          vs.weekly_hours,
           vs.confidence,
           vs.verified_at,
           vs.fetched_at,
@@ -333,6 +385,8 @@ export async function listRecommendations(query: RecommendationQuery) {
       score: Math.round(item.score * 1000) / 10,
       mode: item.mode,
       reason: item.reason,
+      confidence: item.liveness.confidence,
+      liveness: item.liveness,
       venue: formatVenue(item.row),
       factors: {
         venue_quality: Math.round(item.factors.venue_quality * 100),

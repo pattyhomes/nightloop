@@ -22,6 +22,7 @@ struct MapShellView: View {
     @State private var isLoading = true
     @State private var isSubmittingSignal = false
     @State private var isSignalMenuOpen = false
+    @State private var isShowingDetailedReport = false
     @State private var sheetDetent: MapSheetDetent = .half
     @State private var sheetDragTranslation: CGFloat = 0
     @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
@@ -61,6 +62,14 @@ struct MapShellView: View {
         .onChange(of: locationManager.userCoordinate) { _, coordinate in
             guard coordinate != nil else { return }
             Task { await load() }
+        }
+        .sheet(isPresented: $isShowingDetailedReport) {
+            if let selectedVenue {
+                DetailedSignalSheet(venue: selectedVenue) { kind, details in
+                    isShowingDetailedReport = false
+                    Task { await submitSignal(kind: kind, details: details) }
+                }
+            }
         }
     }
 
@@ -368,6 +377,26 @@ struct MapShellView: View {
                 .buttonStyle(.plain)
                 .disabled(isSubmittingSignal || !canSignalSelectedVenue)
             }
+
+            Button {
+                isShowingDetailedReport = true
+                isSignalMenuOpen = false
+            } label: {
+                HStack {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(width: 22)
+                    Text("More details")
+                        .font(.footnote.weight(.bold))
+                    Spacer()
+                }
+                .foregroundStyle(NightloopTheme.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmittingSignal || !canSignalSelectedVenue)
         }
         .padding(8)
         .frame(width: 230)
@@ -505,7 +534,7 @@ struct MapShellView: View {
         }
     }
 
-    private func submitSignal(kind: SignalKind) async {
+    private func submitSignal(kind: SignalKind, details: SignalDetails? = nil) async {
         guard let selectedVenue, let token = authStore.accessToken else { return }
         guard !isSubmittingSignal else { return }
         guard let userCoordinate = locationManager.userCoordinate else {
@@ -527,7 +556,8 @@ struct MapShellView: View {
                 venueID: selectedVenue.id,
                 kind: kind,
                 bearerToken: token,
-                userCoordinate: userCoordinate
+                userCoordinate: userCoordinate,
+                details: details
             )
             signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
             isSignalMenuOpen = false
@@ -724,6 +754,7 @@ private struct MarkerState: Equatable {
     let latitude: Double
     let longitude: Double
     let score: Int
+    let livenessState: VenueLivenessState?
     let isSelected: Bool
 
     init(marker: VenueMapMarker, isSelected: Bool) {
@@ -731,24 +762,35 @@ private struct MarkerState: Equatable {
         latitude = marker.coordinate.latitude
         longitude = marker.coordinate.longitude
         score = marker.score
+        livenessState = marker.venue.liveness?.state
         self.isSelected = isSelected
     }
 }
 
 private final class PulseMarkerView: UIView {
     init(marker: VenueMapMarker, isSelected: Bool) {
-        let visuals = MapMarkerVisuals.style(score: marker.score, isSelected: isSelected)
+        let visuals = MapMarkerVisuals.style(liveness: marker.venue.liveness, score: marker.score, isSelected: isSelected)
         let size = visuals.haloSize
         super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
         isUserInteractionEnabled = false
         backgroundColor = .clear
 
-        let color = UIColor(marker.tone.color)
-        addCircle(size: visuals.haloSize, color: color.withAlphaComponent(visuals.haloOpacity), blur: visuals.glowRadius / 2)
-        addCircle(size: visuals.middleSize, color: color.withAlphaComponent(visuals.middleOpacity), blur: 0)
-        let dot = addCircle(size: visuals.dotSize, color: color, blur: visuals.glowRadius / 3)
-        dot.layer.borderWidth = isSelected ? 2 : 1.2
-        dot.layer.borderColor = UIColor.white.withAlphaComponent(0.86).cgColor
+        let color = markerColor(visuals: visuals, fallback: marker.tone.color)
+        switch visuals.shape {
+        case .filledBloom:
+            addCircle(size: visuals.haloSize, color: color.withAlphaComponent(visuals.haloOpacity), blur: visuals.glowRadius / 2)
+            addCircle(size: visuals.middleSize, color: color.withAlphaComponent(visuals.middleOpacity), blur: 0)
+            let dot = addCircle(size: visuals.dotSize, color: color, blur: visuals.glowRadius / 3)
+            dot.layer.borderWidth = isSelected ? 2 : 1.2
+            dot.layer.borderColor = UIColor.white.withAlphaComponent(0.86).cgColor
+        case .hollowRing:
+            addRing(size: visuals.middleSize, color: color, lineWidth: isSelected ? 3 : 2, dashed: false)
+            addCircle(size: 5, color: color.withAlphaComponent(0.85), blur: visuals.glowRadius / 2)
+        case .dashedRing:
+            addRing(size: visuals.middleSize, color: color, lineWidth: isSelected ? 2.4 : 1.8, dashed: true)
+        case .outline:
+            addRing(size: visuals.middleSize, color: color.withAlphaComponent(0.78), lineWidth: isSelected ? 2.2 : 1.5, dashed: false)
+        }
     }
 
     @available(*, unavailable)
@@ -770,6 +812,37 @@ private final class PulseMarkerView: UIView {
         }
         addSubview(view)
         return view
+    }
+
+    private func addRing(size: CGFloat, color: UIColor, lineWidth: CGFloat, dashed: Bool) {
+        let shape = CAShapeLayer()
+        let rect = CGRect(
+            x: bounds.midX - size / 2,
+            y: bounds.midY - size / 2,
+            width: size,
+            height: size
+        )
+        shape.path = UIBezierPath(ovalIn: rect).cgPath
+        shape.fillColor = UIColor.clear.cgColor
+        shape.strokeColor = color.cgColor
+        shape.lineWidth = lineWidth
+        if dashed {
+            shape.lineDashPattern = [3, 3]
+        }
+        layer.addSublayer(shape)
+    }
+
+    private func markerColor(visuals: MapMarkerVisuals, fallback: Color) -> UIColor {
+        switch visuals.colorRole {
+        case .energy:
+            return UIColor(fallback)
+        case .purple:
+            return UIColor(NightloopTheme.purple)
+        case .amber:
+            return UIColor(NightloopTheme.amber)
+        case .gray:
+            return UIColor(NightloopTheme.inkDim)
+        }
     }
 }
 
@@ -818,17 +891,11 @@ private struct SelectedVenueMapCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: isCompact ? 7 : 10) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(EnergyTone.from(score: venue.pulse.score).color)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: EnergyTone.from(score: venue.pulse.score).color.opacity(0.8), radius: 8)
-                Text("\(venue.pulse.label) · \(venue.trend)")
-                    .font(.caption2.weight(.black))
-                    .tracking(1.4)
-                    .foregroundStyle(EnergyTone.from(score: venue.pulse.score).color)
+                LivenessChip(liveness: venue.liveness, compact: true)
+                ConfidencePips(confidence: venue.liveness?.confidence)
                 Text("·")
                     .foregroundStyle(NightloopTheme.inkDim)
-                Text("\(venue.signalCount) signals tonight")
+                Text("\(venue.liveness?.liveSignalCount ?? venue.recentSignalCount) recent reports")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(NightloopTheme.inkMuted)
             }
@@ -849,7 +916,7 @@ private struct SelectedVenueMapCard: View {
 
             if !isCompact {
                 HStack(spacing: 7) {
-                    MapFactPill(systemName: "clock.fill", text: venue.waitMinutes.map { "\($0)m wait" } ?? "line unknown")
+                    MapFactPill(systemName: "clock.fill", text: venue.liveness?.badgeTitle ?? "hours unknown")
                     if let distance = venue.distanceMiles {
                         MapFactPill(systemName: "location.fill", text: String(format: "%.1f mi", distance))
                     }
@@ -920,10 +987,7 @@ private struct MapRankedVenueRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Circle()
-                    .fill(EnergyTone.from(score: venue.pulse.score).color)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: EnergyTone.from(score: venue.pulse.score).color.opacity(0.75), radius: 8)
+                LivenessChip(liveness: venue.liveness, compact: true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(venue.name)

@@ -5,6 +5,14 @@ import { dbQuery, dbTransaction } from "../../lib/db";
 import { ApiError, notFoundError } from "../../lib/apiError";
 
 export type UserSignalKind = "packed" | "short_line" | "long_line" | "dead" | "event_live";
+export type SignalDetails = {
+  wait_minutes?: number;
+  cover_amount_dollars?: number;
+  crowd_level?: "empty" | "chill" | "active" | "packed";
+  vibe_tags?: string[];
+  music_tags?: string[];
+  event_live?: boolean;
+};
 
 type SignalKindConfig = {
   points: number;
@@ -63,6 +71,7 @@ type RecentSignalRow = {
   kind: UserSignalKind;
   trust_weight: number;
   observed_at: string;
+  payload: Record<string, unknown> | null;
 };
 
 type UserRecentSignalRow = {
@@ -157,6 +166,25 @@ function metadataWithoutCoordinates(metadata: Record<string, unknown> | undefine
   return sanitized;
 }
 
+function sanitizeDetails(details: SignalDetails | undefined): SignalDetails | undefined {
+  if (!details) return undefined;
+  const sanitized: SignalDetails = {};
+  if (details.wait_minutes != null) sanitized.wait_minutes = clamp(Math.round(details.wait_minutes), 0, 180);
+  if (details.cover_amount_dollars != null) {
+    sanitized.cover_amount_dollars = clamp(Math.round(details.cover_amount_dollars), 0, 500);
+  }
+  if (details.crowd_level) sanitized.crowd_level = details.crowd_level;
+  if (details.vibe_tags) sanitized.vibe_tags = [...new Set(details.vibe_tags)].slice(0, 8);
+  if (details.music_tags) sanitized.music_tags = [...new Set(details.music_tags)].slice(0, 8);
+  if (details.event_live != null) sanitized.event_live = details.event_live;
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+function detailsFromPayload(payload: Record<string, unknown> | null): SignalDetails | undefined {
+  const details = payload?.details;
+  return details && typeof details === "object" ? (details as SignalDetails) : undefined;
+}
+
 async function getVenueForSignal(venueId: string): Promise<VenueRow> {
   const result = await dbQuery<VenueRow>(
     `
@@ -181,7 +209,7 @@ async function getVenueForSignal(venueId: string): Promise<VenueRow> {
 async function recomputeVenueLiveState(venue: VenueRow): Promise<void> {
   const recent = await dbQuery<RecentSignalRow>(
     `
-      SELECT kind, trust_weight, observed_at
+      SELECT kind, trust_weight, observed_at, COALESCE(payload, '{}'::jsonb) AS payload
       FROM signals
       WHERE venue_id = $1::uuid
         AND kind IS NOT NULL
@@ -199,13 +227,23 @@ async function recomputeVenueLiveState(venue: VenueRow): Promise<void> {
   for (const signal of recent.rows) {
     const config = SIGNAL_CONFIG[signal.kind];
     if (!config) continue;
+    const details = detailsFromPayload(signal.payload);
     const ageMinutes = Math.max(0, (Date.now() - Date.parse(signal.observed_at)) / 60_000);
     const freshness = Math.pow(0.5, ageMinutes / 90);
     score += config.liveDelta * Number(signal.trust_weight ?? 1) * freshness;
     summary[signal.kind] = (summary[signal.kind] ?? 0) + 1;
 
-    if (waitMinutes == null && config.waitMinutes != null) {
+    if (waitMinutes == null && details?.wait_minutes != null) {
+      waitMinutes = clamp(Math.round(details.wait_minutes), 0, 180);
+    } else if (waitMinutes == null && config.waitMinutes != null) {
       waitMinutes = config.waitMinutes;
+    }
+
+    if (details?.crowd_level) {
+      summary[`crowd:${details.crowd_level}`] = (summary[`crowd:${details.crowd_level}`] ?? 0) + 1;
+    }
+    if (details?.event_live === true) {
+      summary.event_live_detail = (summary.event_live_detail ?? 0) + 1;
     }
   }
 
@@ -288,6 +326,7 @@ export async function submitUserSignal(input: {
   };
   observedAt?: string;
   metadata?: Record<string, unknown>;
+  details?: SignalDetails;
 }) {
   requireEligible(input.account);
 
@@ -343,8 +382,10 @@ export async function submitUserSignal(input: {
   }
 
   const observedAt = input.observedAt ?? new Date().toISOString();
+  const details = sanitizeDetails(input.details);
   const payload = {
     ...metadataWithoutCoordinates(input.metadata),
+    ...(details ? { details } : {}),
     kind: input.kind,
     source: "ios",
     proximity_verified: true,

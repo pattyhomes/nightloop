@@ -88,6 +88,18 @@ const RecommendationQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(60).optional()
 });
 
+const StructuredTagSchema = z.string().trim().regex(/^[a-z0-9_-]{2,40}$/);
+const SignalDetailsSchema = z
+  .object({
+    wait_minutes: z.coerce.number().int().min(0).max(180).optional(),
+    cover_amount_dollars: z.coerce.number().int().min(0).max(500).optional(),
+    crowd_level: z.enum(["empty", "chill", "active", "packed"]).optional(),
+    vibe_tags: z.array(StructuredTagSchema).max(8).optional(),
+    music_tags: z.array(StructuredTagSchema).max(8).optional(),
+    event_live: z.boolean().optional()
+  })
+  .strict();
+
 const SignalSchema = z
   .object({
     venue_id: z.string().uuid(),
@@ -99,6 +111,7 @@ const SignalSchema = z
       })
       .optional(),
     observed_at: z.string().datetime().optional(),
+    details: SignalDetailsSchema.optional(),
     metadata: z.record(z.string(), z.unknown()).optional()
   })
   .strict();
@@ -353,7 +366,8 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
         kind: body.kind,
         location: body.location,
         observedAt: body.observed_at,
-        metadata: body.metadata
+        metadata: body.metadata,
+        details: body.details
       });
 
       res.status(201).json({

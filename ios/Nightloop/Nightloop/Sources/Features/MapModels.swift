@@ -96,6 +96,20 @@ struct VenueMapMarker: Identifiable, Equatable {
     }
 }
 
+enum MapMarkerShape: Equatable {
+    case filledBloom
+    case hollowRing
+    case dashedRing
+    case outline
+}
+
+enum MapMarkerColorRole: Equatable {
+    case energy
+    case purple
+    case amber
+    case gray
+}
+
 struct MapMarkerVisuals: Equatable {
     let haloSize: CGFloat
     let middleSize: CGFloat
@@ -103,6 +117,8 @@ struct MapMarkerVisuals: Equatable {
     let haloOpacity: Double
     let middleOpacity: Double
     let glowRadius: CGFloat
+    let shape: MapMarkerShape
+    let colorRole: MapMarkerColorRole
 
     static func style(score: Int, isSelected: Bool) -> MapMarkerVisuals {
         if isSelected {
@@ -112,7 +128,9 @@ struct MapMarkerVisuals: Equatable {
                 dotSize: 16,
                 haloOpacity: 0.24,
                 middleOpacity: 0.24,
-                glowRadius: 18
+                glowRadius: 18,
+                shape: .filledBloom,
+                colorRole: .energy
             )
         }
 
@@ -123,7 +141,9 @@ struct MapMarkerVisuals: Equatable {
                 dotSize: 12,
                 haloOpacity: 0.18,
                 middleOpacity: 0.22,
-                glowRadius: 13
+                glowRadius: 13,
+                shape: .filledBloom,
+                colorRole: .energy
             )
         }
 
@@ -134,7 +154,9 @@ struct MapMarkerVisuals: Equatable {
                 dotSize: 9,
                 haloOpacity: 0.1,
                 middleOpacity: 0.15,
-                glowRadius: 8
+                glowRadius: 8,
+                shape: .filledBloom,
+                colorRole: .energy
             )
         }
 
@@ -144,8 +166,63 @@ struct MapMarkerVisuals: Equatable {
             dotSize: 7,
             haloOpacity: 0.07,
             middleOpacity: 0.12,
-            glowRadius: 6
+            glowRadius: 6,
+            shape: .filledBloom,
+            colorRole: .energy
         )
+    }
+
+    static func style(liveness: VenueLiveness?, score: Int, isSelected: Bool) -> MapMarkerVisuals {
+        guard let liveness else {
+            return MapMarkerVisuals(
+                haloSize: isSelected ? 44 : 30,
+                middleSize: 22,
+                dotSize: 0,
+                haloOpacity: 0,
+                middleOpacity: 0,
+                glowRadius: 0,
+                shape: .dashedRing,
+                colorRole: .amber
+            )
+        }
+
+        switch liveness.state {
+        case .live:
+            return style(score: score, isSelected: isSelected)
+        case .opensLater:
+            return MapMarkerVisuals(
+                haloSize: isSelected ? 48 : 34,
+                middleSize: isSelected ? 30 : 22,
+                dotSize: 0,
+                haloOpacity: 0.12,
+                middleOpacity: 0,
+                glowRadius: isSelected ? 12 : 6,
+                shape: .hollowRing,
+                colorRole: .purple
+            )
+        case .closedToday:
+            return MapMarkerVisuals(
+                haloSize: isSelected ? 42 : 28,
+                middleSize: isSelected ? 28 : 18,
+                dotSize: 0,
+                haloOpacity: 0,
+                middleOpacity: 0,
+                glowRadius: 0,
+                shape: .outline,
+                colorRole: .gray
+            )
+        case .unknown:
+            return MapMarkerVisuals(
+                haloSize: isSelected ? 44 : 30,
+                middleSize: isSelected ? 28 : 20,
+                dotSize: 0,
+                haloOpacity: 0,
+                middleOpacity: 0,
+                glowRadius: 0,
+                shape: .dashedRing,
+                colorRole: .amber
+            )
+        }
     }
 }
 

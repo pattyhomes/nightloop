@@ -479,6 +479,7 @@ describe("Nightloop v1 admin/data ops API", () => {
     const admin = await createAdminUser();
     const marketId = await getSfMarketId();
     const duplicateVenueId = await createTempVenue(marketId, "Phase 2 Existing Discovery");
+    const discoveryPlaceId = `ChIJ-new-discovery-lounge-${testRunId}`;
     await pool.query(
       `
         UPDATE venues
@@ -524,7 +525,7 @@ describe("Nightloop v1 admin/data ops API", () => {
               googleMapsUri: "https://maps.google.com/?cid=duplicate"
             },
             {
-              id: "ChIJ-new-discovery-lounge",
+              id: discoveryPlaceId,
               displayName: { text: "Phase 2 Discovery Lounge", languageCode: "en" },
               formattedAddress: "1 Discovery Way, San Francisco, CA 94103",
               location: { latitude: 37.782, longitude: -122.413 },
@@ -601,6 +602,7 @@ describe("Nightloop v1 admin/data ops API", () => {
     const admin = await createAdminUser();
     const marketId = await getSfMarketId();
     await createManualCuratedCandidate(marketId, "Phase 2 Curated Club");
+    const curatedPlaceId = `ChIJ-curated-club-${testRunId}`;
 
     const googleApp = createApp({
       config: {
@@ -620,7 +622,7 @@ describe("Nightloop v1 admin/data ops API", () => {
         json: async () => ({
           places: [
             {
-              id: "ChIJ-curated-club",
+              id: curatedPlaceId,
               displayName: { text: "Phase 2 Curated Club - Provider Name", languageCode: "en" },
               formattedAddress: "10 Curated Way, San Francisco, CA 94103",
               location: { latitude: 37.7823, longitude: -122.4112 },
@@ -670,7 +672,8 @@ describe("Nightloop v1 admin/data ops API", () => {
     expect(proposed.metadata_patch.notability_reason).toBe("test notable nightlife venue");
 
     const publicVenue = await pool.query<{ count: string }>(
-      "select count(*)::text from venues where metadata->>'google_place_id' = 'ChIJ-curated-club'"
+      "select count(*)::text from venues where metadata->>'google_place_id' = $1",
+      [curatedPlaceId]
     );
     expect(Number(publicVenue.rows[0]?.count ?? 0)).toBe(0);
   });
@@ -680,6 +683,7 @@ describe("Nightloop v1 admin/data ops API", () => {
     const marketId = await getSfMarketId();
     await createManualCuratedCandidate(marketId, "Phase 2 Duplicate Curated Club");
     const duplicateVenueId = await createTempVenue(marketId, "Phase 2 Duplicate Curated Club");
+    const duplicatePlaceId = `ChIJ-curated-duplicate-${testRunId}`;
     await pool.query(
       `
         UPDATE venues
@@ -692,7 +696,7 @@ describe("Nightloop v1 admin/data ops API", () => {
         duplicateVenueId,
         JSON.stringify({
           test_run_id: testRunId,
-          google_place_id: "ChIJ-curated-duplicate"
+          google_place_id: duplicatePlaceId
         })
       ]
     );
@@ -715,7 +719,7 @@ describe("Nightloop v1 admin/data ops API", () => {
         json: async () => ({
           places: [
             {
-              id: "ChIJ-curated-duplicate",
+              id: duplicatePlaceId,
               displayName: { text: "Phase 2 Duplicate Curated Club", languageCode: "en" },
               formattedAddress: "10 Curated Way, San Francisco, CA 94103",
               location: { latitude: 37.7823, longitude: -122.4112 },

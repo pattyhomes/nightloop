@@ -15,6 +15,7 @@ struct VenueDetailView: View {
     @State private var signalMessage: String?
     @State private var submittingSignal: SignalKind?
     @State private var isSaved = false
+    @State private var isShowingDetailedReport = false
 
     var venue: VenueItem? {
         detail?.venue ?? initialVenue
@@ -65,6 +66,9 @@ struct VenueDetailView: View {
                     verify: { locationManager.requestLocationAccess() },
                     submit: { kind in
                         Task { await submitSignal(venueID: venue.id, kind: kind) }
+                    },
+                    moreDetails: {
+                        isShowingDetailedReport = true
                     }
                 )
                 .padding(.horizontal, 16)
@@ -74,6 +78,14 @@ struct VenueDetailView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
+        .sheet(isPresented: $isShowingDetailedReport) {
+            if let venue {
+                DetailedSignalSheet(venue: venue) { kind, details in
+                    isShowingDetailedReport = false
+                    Task { await submitSignal(venueID: venue.id, kind: kind, details: details) }
+                }
+            }
+        }
     }
 
     private var topControls: some View {
@@ -124,6 +136,7 @@ struct VenueDetailView: View {
         VStack(alignment: .leading, spacing: 18) {
             titleBlock(venue)
             energyBar(venue)
+            HoursStatusBlock(venue: venue)
             statsRow(venue)
             whyNightloopCard(venue)
             liveTrendCard(venue)
@@ -221,11 +234,28 @@ struct VenueDetailView: View {
         }
     }
 
+    @ViewBuilder
     private func liveTrendCard(_ venue: VenueItem) -> some View {
+        if venue.liveness?.state != .live {
+            NightloopCard(fill: Color.white.opacity(0.04)) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        NightloopSectionHeader(title: "Tonight preview")
+                        Spacer()
+                        ConfidencePips(confidence: venue.liveness?.confidence)
+                    }
+                    Text(venue.liveness?.supportingText ?? "Nightloop is using source-backed venue quality until live reports are dense enough.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .lineSpacing(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else {
         NightloopCard(fill: Color.white.opacity(0.04)) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    NightloopSectionHeader(title: "Live trend · last 3 hours")
+                    NightloopSectionHeader(title: "Live reports · last 90 min")
                     Spacer()
                     Text("\(venue.recentSignalCount) reports")
                         .font(.caption.weight(.bold))
@@ -244,6 +274,7 @@ struct VenueDetailView: View {
                 .font(.caption2.monospaced())
                 .foregroundStyle(NightloopTheme.inkDim)
             }
+        }
         }
     }
 
@@ -315,7 +346,7 @@ struct VenueDetailView: View {
         isLoading = false
     }
 
-    private func submitSignal(venueID: String, kind: SignalKind) async {
+    private func submitSignal(venueID: String, kind: SignalKind, details: SignalDetails? = nil) async {
         guard let token = authStore.accessToken else { return }
         guard let venue else { return }
         guard let userCoordinate = locationManager.userCoordinate else {
@@ -334,7 +365,8 @@ struct VenueDetailView: View {
                 venueID: venueID,
                 kind: kind,
                 bearerToken: token,
-                userCoordinate: userCoordinate
+                userCoordinate: userCoordinate,
+                details: details
             )
             signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
             await load()
@@ -417,6 +449,7 @@ private struct SignalVerificationTray: View {
     let submittingSignal: SignalKind?
     let verify: () -> Void
     let submit: (SignalKind) -> Void
+    let moreDetails: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -438,6 +471,17 @@ private struct SignalVerificationTray: View {
 
             if status == .verified {
                 SignalChoiceGrid(submittingSignal: submittingSignal, submit: submit)
+                Button(action: moreDetails) {
+                    Label("More details", systemImage: "slider.horizontal.3")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.055))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(submittingSignal != nil)
             } else {
                 Text(locationError ?? statusMessage)
                     .font(.caption.weight(.semibold))

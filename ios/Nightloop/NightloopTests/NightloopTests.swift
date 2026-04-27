@@ -250,6 +250,8 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.mode, "tonight_preview")
         XCTAssertEqual(response.items.first?.venue.name, "Halcyon")
         XCTAssertEqual(response.items.first?.venue.hours?.claimsOpenNow, false)
+        XCTAssertEqual(response.items.first?.venue.liveness?.state, .opensLater)
+        XCTAssertEqual(response.items.first?.venue.liveness?.badgeTitle, "Opens 10:00 PM")
         XCTAssertEqual(response.items.first?.reason, "Source-backed SoMa nightlife for tonight.")
     }
 
@@ -297,6 +299,60 @@ final class NightloopTests: XCTestCase {
         )
     }
 
+    func testDetailedSignalRequestIncludesStructuredDetailsOnly() async throws {
+        URLProtocolMock.requestHandler = { request in
+            let body = try XCTUnwrap(Self.bodyData(from: request))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let details = try XCTUnwrap(object["details"] as? [String: Any])
+            XCTAssertEqual(details["wait_minutes"] as? Int, 25)
+            XCTAssertEqual(details["cover_amount_dollars"] as? Int, 20)
+            XCTAssertEqual(details["crowd_level"] as? String, "packed")
+            XCTAssertEqual(details["vibe_tags"] as? [String], ["dance", "queer"])
+            XCTAssertEqual(details["music_tags"] as? [String], ["house"])
+            XCTAssertEqual(details["event_live"] as? Bool, true)
+            XCTAssertNil(details["free_text"])
+            XCTAssertNil(details["latitude"])
+            XCTAssertNil(details["longitude"])
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 201,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "signal_id": "signal-1",
+              "venue_id": "venue-1",
+              "points_awarded": 2,
+              "new_signal_scout_points": 12
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        _ = try await client.submitSignal(
+            venueID: "venue-1",
+            kind: .longLine,
+            bearerToken: "test-token",
+            userCoordinate: Coordinate(latitude: 37.7751, longitude: -122.4105),
+            details: SignalDetails(
+                waitMinutes: 25,
+                coverAmountDollars: 20,
+                crowdLevel: "packed",
+                vibeTags: ["dance", "queer"],
+                musicTags: ["house"],
+                eventLive: true
+            )
+        )
+    }
+
     func testBackendErrorEnvelopeDecodes() throws {
         let data = Data("""
         {
@@ -322,6 +378,10 @@ final class NightloopTests: XCTestCase {
         let response = try decoder.decode(VenueListResponse.self, from: data)
         XCTAssertEqual(response.items.first?.pulse.score, 82)
         XCTAssertEqual(response.items.first?.pulse.label, "Packed")
+        XCTAssertEqual(response.items.first?.liveness?.state, .opensLater)
+        XCTAssertEqual(response.items.first?.liveness?.hoursState, .sourceVerified)
+        XCTAssertEqual(response.items.first?.liveness?.confidence, .medium)
+        XCTAssertEqual(response.items.first?.hours?.hoursState, .sourceVerified)
     }
 
     func testMarketConfigFixtureDecodesNeighborhoodLabels() async throws {
@@ -464,6 +524,34 @@ final class NightloopTests: XCTestCase {
         XCTAssertLessThan(chill.haloOpacity, packed.haloOpacity)
         XCTAssertGreaterThan(selected.haloSize, packed.haloSize)
         XCTAssertGreaterThan(selected.glowRadius, packed.glowRadius)
+    }
+
+    func testMarkerVisualsFollowLivenessContract() {
+        let live = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .live, hoursState: .sourceVerified, confidence: .high),
+            score: 90,
+            isSelected: false
+        )
+        let opensLater = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .opensLater, hoursState: .sourceVerified, confidence: .medium),
+            score: 90,
+            isSelected: false
+        )
+        let unknown = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .unknown, hoursState: .unknown, confidence: .low),
+            score: 90,
+            isSelected: false
+        )
+        let closed = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .closedToday, hoursState: .sourceVerified, confidence: .high),
+            score: 90,
+            isSelected: false
+        )
+
+        XCTAssertEqual(live.shape, .filledBloom)
+        XCTAssertEqual(opensLater.shape, .hollowRing)
+        XCTAssertEqual(unknown.shape, .dashedRing)
+        XCTAssertEqual(closed.shape, .outline)
     }
 
     func testSignalKindRawValuesMatchBackend() {
@@ -654,15 +742,20 @@ final class NightloopTests: XCTestCase {
             signalCount: 0,
             recentSignalCount: 0,
             confidence: "high",
+            liveness: Self.livenessFixture(state: .unknown, hoursState: .unknown, confidence: .low),
             event: nil,
             hours: VenueHours(
                 status: "unknown",
                 source: "unknown",
+                hoursState: .unknown,
                 confidence: "low",
                 verifiedAt: nil,
                 fetchedAt: nil,
+                opensAt: nil,
+                closesAt: nil,
                 label: "Hours unknown",
                 claimsOpenNow: false,
+                weeklyHours: nil,
                 metadata: nil
             ),
             friendSummary: FriendSummary(friendsHereCount: 0, firstFriendName: nil),
@@ -747,16 +840,40 @@ final class NightloopTests: XCTestCase {
               "signal_count": 12,
               "recent_signal_count": 4,
               "confidence": "high",
+              "liveness": {
+                "state": "opens_later",
+                "hours_state": "source_verified",
+                "confidence": "medium",
+                "opens_at": "10:00 PM",
+                "closes_at": null,
+                "expected_pulse_level": 3,
+                "live_signal_count": 0,
+                "live_unique_user_count": 0,
+                "copy": {
+                  "label": "Opens later",
+                  "supporting_text": "Source-backed hours say it opens at 10:00 PM.",
+                  "provenance": "Hours source: Google Places"
+                },
+                "provenance": {
+                  "source": "provider:google_places",
+                  "verified_at": "2026-04-27T00:00:00.000Z",
+                  "fetched_at": "2026-04-27T00:00:00.000Z"
+                }
+              },
               "event": null,
               "hours": {
-                "status": "unknown",
-                "source": "unknown",
-                "confidence": "low",
-                "verified_at": null,
-                "fetched_at": null,
-                "label": "Hours unknown",
+                "status": "verified_hours",
+                "source": "provider:google_places",
+                "hours_state": "source_verified",
+                "confidence": "high",
+                "verified_at": "2026-04-27T00:00:00.000Z",
+                "fetched_at": "2026-04-27T00:00:00.000Z",
+                "opens_at": "10:00 PM",
+                "closes_at": null,
+                "label": "Hours verified",
                 "claims_open_now": false,
-                "metadata": {}
+                "weekly_hours": {},
+                "metadata": { "is_open_now": true }
               },
               "friend_summary": { "friends_here_count": 0, "first_friend_name": null },
               "image": null,
@@ -792,15 +909,24 @@ final class NightloopTests: XCTestCase {
             signalCount: 0,
             recentSignalCount: 0,
             confidence: "high",
+            liveness: Self.livenessFixture(
+                state: level >= 3 ? .live : .opensLater,
+                hoursState: .sourceVerified,
+                confidence: level >= 3 ? .high : .medium
+            ),
             event: nil,
             hours: VenueHours(
                 status: "unknown",
                 source: "unknown",
+                hoursState: .unknown,
                 confidence: "low",
                 verifiedAt: nil,
                 fetchedAt: nil,
+                opensAt: nil,
+                closesAt: nil,
                 label: "Hours unknown",
                 claimsOpenNow: false,
+                weeklyHours: nil,
                 metadata: nil
             ),
             friendSummary: FriendSummary(friendsHereCount: 0, firstFriendName: nil),
@@ -810,6 +936,33 @@ final class NightloopTests: XCTestCase {
             lastSignalAt: nil,
             computedAt: nil,
             sourceSummary: nil
+        )
+    }
+
+    private static func livenessFixture(
+        state: VenueLivenessState,
+        hoursState: HoursState,
+        confidence: RecommendationConfidence
+    ) -> VenueLiveness {
+        VenueLiveness(
+            state: state,
+            hoursState: hoursState,
+            confidence: confidence,
+            opensAt: state == .opensLater ? "10:00 PM" : nil,
+            closesAt: state == .live ? "2:00 AM" : nil,
+            expectedPulseLevel: 3,
+            liveSignalCount: state == .live ? 3 : 0,
+            liveUniqueUserCount: state == .live ? 2 : 0,
+            copy: VenueLivenessCopy(
+                label: state == .live ? "Live now" : "Tonight preview",
+                supportingText: "Source-backed fixture.",
+                provenance: "Hours source: Google Places"
+            ),
+            provenance: VenueLivenessProvenance(
+                source: "provider:google_places",
+                verifiedAt: "2026-04-27T00:00:00.000Z",
+                fetchedAt: "2026-04-27T00:00:00.000Z"
+            )
         )
     }
 

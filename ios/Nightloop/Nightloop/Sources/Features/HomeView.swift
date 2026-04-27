@@ -42,31 +42,14 @@ struct HomeView: View {
                     header
 
                     if let recommendationFeed {
-                        livePulseStrip(counts: recommendationFeed.counts, mode: recommendationFeed.mode)
+                        trustPulseStrip(feed: recommendationFeed)
                         filterStrip(counts: recommendationFeed.counts)
 
                         if let hero = personalizedItems.first {
                             heroCard(hero, recommendation: recommendationByVenueID[hero.id])
                         }
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            NightloopSectionHeader(title: "Tonight's pulse", trailing: "\(max(personalizedItems.count - 1, 0)) more")
-
-                            ForEach(personalizedItems.dropFirst()) { venue in
-                                NavigationLink {
-                                    VenueDetailView(
-                                        apiClient: apiClient,
-                                        authStore: authStore,
-                                        venueID: venue.id,
-                                        initialVenue: venue,
-                                        onAccountChanged: onAccountChanged
-                                    )
-                                } label: {
-                                    VenueRow(venue: venue)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
+                        recommendationSections(feed: recommendationFeed)
                     } else if isLoading {
                         LoadingStateView(title: "Loading SF venues")
                     } else if let errorMessage {
@@ -83,7 +66,7 @@ struct HomeView: View {
             }
 
             if let signalMessage {
-                SignalToast(message: signalMessage, isError: !signalMessage.contains("+"))
+                SignalToast(message: signalMessage, isError: isToastError(signalMessage))
                     .padding(.bottom, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -136,26 +119,39 @@ struct HomeView: View {
         return formatter.string(from: Date())
     }
 
-    private func livePulseStrip(counts: VenueCounts, mode: String) -> some View {
-        HStack(spacing: 12) {
+    private func isToastError(_ message: String) -> Bool {
+        !message.contains("+") &&
+            message != "Reminders coming soon" &&
+            !message.localizedCaseInsensitiveContains("open details")
+    }
+
+    private func trustPulseStrip(feed: RecommendationListResponse) -> some View {
+        let liveCount = feed.items.filter { $0.venue.liveness?.state == .live }.count
+        let isLive = liveCount > 0
+        return HStack(spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(NightloopTheme.rose.opacity(0.35))
+                    .fill((isLive ? NightloopTheme.rose : NightloopTheme.purple).opacity(0.35))
                     .frame(width: 30, height: 30)
-                    .shadow(color: NightloopTheme.rose.opacity(0.65), radius: 14)
+                    .shadow(color: (isLive ? NightloopTheme.rose : NightloopTheme.purple).opacity(0.65), radius: 14)
                 Circle()
-                    .fill(.white)
+                    .fill(isLive ? .white : .clear)
+                    .overlay {
+                        if !isLive {
+                            Circle().stroke(.white.opacity(0.9), lineWidth: 2)
+                        }
+                    }
                     .frame(width: 10, height: 10)
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(mode == "tonight_preview" ? "TONIGHT PREVIEW" : "LIVE PULSE")
+                Text(isLive ? "LIVE PULSE" : "TONIGHT PREVIEW")
                     .font(.caption2.weight(.black))
                     .tracking(1.5)
                     .foregroundStyle(Color(hex: "#e9d5ff"))
-                Text(mode == "tonight_preview"
-                     ? "Source-backed picks for tonight · live signals subdued"
-                     : "\(counts.packed) packed · \(counts.active) active · \(counts.chill) chill")
+                Text(isLive
+                     ? "\(liveCount) live · \(feed.counts.active) active · \(feed.counts.chill) chill"
+                     : "Source-backed picks for tonight · no unverified live claims")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(NightloopTheme.ink)
             }
@@ -219,7 +215,7 @@ struct HomeView: View {
                 ZStack(alignment: .topLeading) {
                     VenueArtView(venue: venue, height: 200, cornerRadius: 0)
                     HStack(spacing: 6) {
-                        PulsePill(level: venue.pulse.level, label: venue.pulse.label)
+                        LivenessChip(liveness: venue.liveness)
                         Text("#1 tonight")
                             .font(.caption2.weight(.black))
                             .foregroundStyle(NightloopTheme.ink)
@@ -235,6 +231,7 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             NightloopSectionHeader(title: "\(venue.pulse.label) · \(venue.trend)", trailing: "\(venue.signalCount) signals")
+                            ConfidencePips(confidence: venue.liveness?.confidence)
                         }
                         Text(venue.name)
                             .font(.title.weight(.black))
@@ -250,8 +247,13 @@ struct HomeView: View {
                         .font(.footnote)
                         .foregroundStyle(NightloopTheme.inkMuted)
 
-                    SignalButton(title: "Verify at venue", systemImage: "location.fill") {
-                        signalMessage = "Open details or the map to verify you're there before signaling."
+                    HStack(spacing: 10) {
+                        SignalButton(title: "Verify at venue", systemImage: "location.fill") {
+                            signalMessage = "Open details or the map to verify you're there before signaling."
+                        }
+                        SignalButton(title: "Remind me", systemImage: "bell.fill") {
+                            signalMessage = "Reminders coming soon"
+                        }
                     }
                 }
                 .padding(16)
@@ -264,6 +266,43 @@ struct HomeView: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func recommendationSections(feed: RecommendationListResponse) -> some View {
+        let remaining = Array(feed.items.dropFirst())
+        let high = remaining.filter { $0.confidence == .high && $0.venue.liveness?.state != .closedToday }
+        let medium = remaining.filter { ($0.confidence ?? $0.venue.liveness?.confidence) == .medium && $0.venue.liveness?.state != .closedToday }
+        let review = remaining.filter {
+            let state = $0.venue.liveness?.state ?? .unknown
+            return state == .unknown || state == .closedToday || ($0.confidence ?? $0.venue.liveness?.confidence) == .low
+        }
+
+        if remaining.isEmpty {
+            EmptyStateView(title: "Tonight preview is sparse", message: "Nightloop needs more source-backed venues before making more recommendations.")
+        } else {
+            RecommendationSection(
+                title: "High-confidence tonight",
+                items: high,
+                apiClient: apiClient,
+                authStore: authStore,
+                onAccountChanged: onAccountChanged
+            )
+            RecommendationSection(
+                title: "Worth watching",
+                items: medium,
+                apiClient: apiClient,
+                authStore: authStore,
+                onAccountChanged: onAccountChanged
+            )
+            RecommendationSection(
+                title: "Closed or unverified",
+                items: review,
+                apiClient: apiClient,
+                authStore: authStore,
+                onAccountChanged: onAccountChanged
+            )
+        }
     }
 
     private func load() async {
@@ -442,14 +481,8 @@ private struct VenueRow: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(EnergyTone.from(score: venue.pulse.score).color)
-                        .frame(width: 6, height: 6)
-                    Text("\(venue.pulse.label) · \(venue.trend)")
-                        .font(.caption2.weight(.black))
-                        .tracking(1.1)
-                        .foregroundStyle(EnergyTone.from(score: venue.pulse.score).color)
-                        .lineLimit(1)
+                    LivenessChip(liveness: venue.liveness, compact: true)
+                    ConfidencePips(confidence: venue.liveness?.confidence)
                 }
 
                 Text(venue.name)
@@ -476,6 +509,36 @@ private struct VenueRow: View {
         .overlay {
             RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous)
                 .stroke(NightloopTheme.hairline)
+        }
+    }
+}
+
+private struct RecommendationSection: View {
+    let title: String
+    let items: [RecommendationItem]
+    let apiClient: NightloopAPIClient
+    @ObservedObject var authStore: AuthStore
+    let onAccountChanged: (MeResponse) -> Void
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                NightloopSectionHeader(title: title, trailing: "\(items.count)")
+                ForEach(items) { item in
+                    NavigationLink {
+                        VenueDetailView(
+                            apiClient: apiClient,
+                            authStore: authStore,
+                            venueID: item.venue.id,
+                            initialVenue: item.venue,
+                            onAccountChanged: onAccountChanged
+                        )
+                    } label: {
+                        VenueRow(venue: item.venue)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 }

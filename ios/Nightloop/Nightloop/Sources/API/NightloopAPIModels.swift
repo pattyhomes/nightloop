@@ -168,12 +168,61 @@ struct FriendSummary: Codable, Equatable {
 struct VenueHours: Codable, Equatable {
     let status: String
     let source: String
+    let hoursState: HoursState?
     let confidence: String
     let verifiedAt: String?
     let fetchedAt: String?
+    let opensAt: String?
+    let closesAt: String?
     let label: String
     let claimsOpenNow: Bool
+    let weeklyHours: JSONValue?
     let metadata: JSONValue?
+}
+
+enum VenueLivenessState: String, Codable, Equatable {
+    case live
+    case opensLater = "opens_later"
+    case closedToday = "closed_today"
+    case unknown
+}
+
+enum HoursState: String, Codable, Equatable {
+    case sourceVerified = "source_verified"
+    case unknown
+    case temporaryClosed = "temporary_closed"
+    case manualHold = "manual_hold"
+}
+
+enum RecommendationConfidence: String, Codable, Equatable {
+    case high
+    case medium
+    case low
+}
+
+struct VenueLivenessCopy: Codable, Equatable {
+    let label: String
+    let supportingText: String
+    let provenance: String
+}
+
+struct VenueLivenessProvenance: Codable, Equatable {
+    let source: String
+    let verifiedAt: String?
+    let fetchedAt: String?
+}
+
+struct VenueLiveness: Codable, Equatable {
+    let state: VenueLivenessState
+    let hoursState: HoursState
+    let confidence: RecommendationConfidence
+    let opensAt: String?
+    let closesAt: String?
+    let expectedPulseLevel: Int
+    let liveSignalCount: Int
+    let liveUniqueUserCount: Int
+    let copy: VenueLivenessCopy?
+    let provenance: VenueLivenessProvenance?
 }
 
 struct VenueItem: Codable, Identifiable, Equatable {
@@ -191,6 +240,7 @@ struct VenueItem: Codable, Identifiable, Equatable {
     let signalCount: Int
     let recentSignalCount: Int
     let confidence: String
+    let liveness: VenueLiveness?
     let event: VenueEvent?
     let hours: VenueHours?
     let friendSummary: FriendSummary
@@ -232,6 +282,8 @@ struct RecommendationItem: Decodable, Identifiable, Equatable {
     let score: Double
     let mode: String
     let reason: String
+    let confidence: RecommendationConfidence?
+    let liveness: VenueLiveness?
     let venue: VenueItem
     let factors: RecommendationFactors?
 
@@ -321,6 +373,15 @@ enum SignalKind: String, Codable, CaseIterable, Identifiable {
         case .eventLive: return "music.note"
         }
     }
+}
+
+struct SignalDetails: Codable, Equatable {
+    var waitMinutes: Int?
+    var coverAmountDollars: Int?
+    var crowdLevel: String?
+    var vibeTags: [String]?
+    var musicTags: [String]?
+    var eventLive: Bool?
 }
 
 struct SignalResponse: Decodable, Equatable {

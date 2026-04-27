@@ -134,8 +134,84 @@ describe("Nightloop v1 API", () => {
     return row;
   }
 
+  async function getQuietSfVenue(): Promise<{ id: string; latitude: number; longitude: number }> {
+    const result = await pool.query<{ id: string; latitude: number; longitude: number }>(
+      `
+        select v.id, v.latitude, v.longitude
+        from venues v
+        join markets m on m.id = v.market_id
+        where m.slug = 'san-francisco'
+          and v.is_active = true
+          and v.admin_status = 'approved'
+          and not exists (
+            select 1
+            from signals s
+            where s.venue_id = v.id
+              and s.kind is not null
+              and s.expires_at > now()
+          )
+        order by v.name
+        limit 1
+      `
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("Expected at least one quiet SF venue seed to exist.");
+    }
+    return row;
+  }
+
   async function getFirstSfVenueId(): Promise<string> {
     return (await getFirstSfVenue()).id;
+  }
+
+  async function upsertTestVerifiedSchedule(venueId: string, metadata: Record<string, unknown>): Promise<void> {
+    const marketId = await getSfMarketId();
+    await pool.query(
+      `
+        insert into venue_schedules (
+          venue_id,
+          market_id,
+          source,
+          status,
+          timezone,
+          weekly_hours,
+          confidence,
+          verified_at,
+          fetched_at,
+          metadata
+        )
+        values (
+          $1::uuid,
+          $2::uuid,
+          'provider:foursquare',
+          'verified_hours',
+          'America/Los_Angeles',
+          $3::jsonb,
+          0.92,
+          now(),
+          now(),
+          $4::jsonb
+        )
+        on conflict (venue_id, source) do update set
+          status = excluded.status,
+          weekly_hours = excluded.weekly_hours,
+          confidence = excluded.confidence,
+          verified_at = excluded.verified_at,
+          fetched_at = excluded.fetched_at,
+          metadata = excluded.metadata,
+          updated_at = now()
+      `,
+      [
+        venueId,
+        marketId,
+        JSON.stringify({
+          friday: [{ opens_at: "21:00", closes_at: "02:00" }],
+          saturday: [{ opens_at: "21:00", closes_at: "02:00" }]
+        }),
+        JSON.stringify({ ...metadata, test_run_id: testRunId })
+      ]
+    );
   }
 
   beforeAll(async () => {
@@ -154,6 +230,8 @@ describe("Nightloop v1 API", () => {
   });
 
   afterAll(async () => {
+    await pool.query("delete from venue_schedules where metadata->>'test_run_id' = $1", [testRunId]);
+
     if (authUserIds.length > 0) {
       await pool.query(
         `
@@ -386,6 +464,11 @@ describe("Nightloop v1 API", () => {
           level: expect.any(Number),
           label: expect.any(String),
           score: expect.any(Number)
+        }),
+        liveness: expect.objectContaining({
+          state: expect.stringMatching(/^(live|opens_later|closed_today|unknown)$/),
+          hours_state: expect.stringMatching(/^(source_verified|unknown|temporary_closed|manual_hold)$/),
+          confidence: expect.stringMatching(/^(high|medium|low)$/)
         })
       })
     );
@@ -397,7 +480,7 @@ describe("Nightloop v1 API", () => {
     const secondUser = await createTestUser();
     await attestEligible(user);
     await attestEligible(secondUser);
-    const venue = await getFirstSfVenue();
+    const venue = await getQuietSfVenue();
 
     const packed = await request(app)
       .post("/api/v1/signals")
@@ -449,7 +532,7 @@ describe("Nightloop v1 API", () => {
   it("requires proximity verification for user signals without storing raw coordinates", async () => {
     const user = await createTestUser();
     await attestEligible(user);
-    const venue = await getFirstSfVenue();
+    const venue = await getQuietSfVenue();
 
     const missing = await request(app)
       .post("/api/v1/signals")
@@ -509,6 +592,152 @@ describe("Nightloop v1 API", () => {
     expect(result.rows[0]?.payload).toMatchObject({ nested: { note: "kept" } });
   });
 
+  it("accepts structured signal details while rejecting free text and raw coordinates", async () => {
+    const user = await createTestUser();
+    await attestEligible(user);
+    const venue = await getFirstSfVenue();
+
+    const freeText = await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "long_line",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        details: {
+          wait_minutes: 25,
+          free_text: "line is around the block"
+        },
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(400);
+    expect(freeText.body.error.code).toBe("VALIDATION_ERROR");
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "long_line",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        details: {
+          wait_minutes: 25,
+          cover_amount_dollars: 20,
+          crowd_level: "packed",
+          vibe_tags: ["dance", "queer"],
+          music_tags: ["house"],
+          event_live: true
+        },
+        metadata: {
+          test_run_id: testRunId,
+          coordinates: [venue.latitude, venue.longitude]
+        }
+      })
+      .expect(201);
+
+    const result = await pool.query<{ payload: Record<string, unknown> }>(
+      `
+        select payload
+        from signals
+        where payload->>'test_run_id' = $1
+          and kind = 'long_line'
+        order by created_at desc
+        limit 1
+      `,
+      [testRunId]
+    );
+
+    expect(result.rows[0]?.payload).toMatchObject({
+      details: {
+        wait_minutes: 25,
+        cover_amount_dollars: 20,
+        crowd_level: "packed",
+        vibe_tags: ["dance", "queer"],
+        music_tags: ["house"],
+        event_live: true
+      }
+    });
+    expect(JSON.stringify(result.rows[0]?.payload)).not.toContain("coordinates");
+    expect(JSON.stringify(result.rows[0]?.payload)).not.toContain("latitude");
+    expect(JSON.stringify(result.rows[0]?.payload)).not.toContain("longitude");
+  });
+
+  it("requires source-verified open hours plus fresh multi-user density before claiming live now", async () => {
+    const first = await createTestUser();
+    const second = await createTestUser();
+    await attestEligible(first);
+    await attestEligible(second);
+    const venue = await getQuietSfVenue();
+    await upsertTestVerifiedSchedule(venue.id, {
+      is_open_now: true,
+      opens_at: "9:00 PM",
+      closes_at: "2:00 AM"
+    });
+
+    const observed = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${first.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "packed",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        observed_at: observed(70),
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(201);
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${first.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "short_line",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        observed_at: observed(50),
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(201);
+
+    const sparse = await request(app)
+      .get(`/api/v1/venues/${venue.id}`)
+      .set("Authorization", `Bearer ${first.token}`)
+      .expect(200);
+    expect(sparse.body.venue.liveness).toMatchObject({
+      state: "unknown",
+      hours_state: "source_verified",
+      live_signal_count: 2,
+      live_unique_user_count: 1
+    });
+    expect(sparse.body.venue.hours.claims_open_now).toBe(false);
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${second.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "event_live",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        observed_at: observed(25),
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(201);
+
+    const dense = await request(app)
+      .get(`/api/v1/venues/${venue.id}`)
+      .set("Authorization", `Bearer ${first.token}`)
+      .expect(200);
+    expect(dense.body.venue.liveness).toMatchObject({
+      state: "live",
+      hours_state: "source_verified",
+      confidence: "high",
+      live_signal_count: 3,
+      live_unique_user_count: 2
+    });
+    expect(dense.body.venue.hours.claims_open_now).toBe(true);
+  });
+
   it("rate-limits repeated user signals for the same venue with a cooldown", async () => {
     const user = await createTestUser();
     await attestEligible(user);
@@ -559,10 +788,17 @@ describe("Nightloop v1 API", () => {
         venue: expect.objectContaining({
           id: expect.any(String),
           market_id: marketId,
+          liveness: expect.objectContaining({
+            state: expect.stringMatching(/^(live|opens_later|closed_today|unknown)$/),
+            hours_state: expect.stringMatching(/^(source_verified|unknown|temporary_closed|manual_hold)$/),
+            live_signal_count: expect.any(Number),
+            live_unique_user_count: expect.any(Number)
+          }),
           hours: expect.objectContaining({
-            claims_open_now: false
+            claims_open_now: expect.any(Boolean)
           })
-        })
+        }),
+        confidence: expect.stringMatching(/^(high|medium|low)$/)
       })
     );
     expect(JSON.stringify(response.body.items[0])).not.toContain("raw_payload");

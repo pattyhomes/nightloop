@@ -1,6 +1,7 @@
 import { dbQuery } from "../../lib/db";
 import { notFoundError, validationError } from "../../lib/apiError";
 import { findMarketByIdOrSlug } from "./marketService";
+import { buildVenueLiveness } from "./livenessService";
 
 type PulseLabel = "Chill" | "Active" | "Packed";
 
@@ -21,6 +22,8 @@ export type VenueFeedRow = {
   wait_minutes: number | null;
   signal_count: number | null;
   recent_signal_count: number | null;
+  live_signal_count?: number | null;
+  live_unique_user_count?: number | null;
   confidence: number | null;
   last_signal_at: string | null;
   computed_at: string | null;
@@ -29,6 +32,7 @@ export type VenueFeedRow = {
   current_event: Record<string, unknown> | null;
   schedule_status: string | null;
   schedule_source: string | null;
+  schedule_weekly_hours: Record<string, unknown> | null;
   schedule_confidence: number | null;
   schedule_verified_at: string | null;
   schedule_fetched_at: string | null;
@@ -78,6 +82,18 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
   const level = Math.max(1, Math.min(3, Number(row.pulse_level ?? 1)));
   const energyScore = Math.max(0, Math.min(100, Math.round(Number(row.energy_score ?? 28))));
   const label = row.energy_label ?? toPulseLabel(level);
+  const liveness = buildVenueLiveness({
+    scheduleStatus: row.schedule_status,
+    scheduleSource: row.schedule_source,
+    scheduleConfidence: row.schedule_confidence,
+    scheduleVerifiedAt: row.schedule_verified_at,
+    scheduleFetchedAt: row.schedule_fetched_at,
+    scheduleMetadata: row.schedule_metadata,
+    pulseLevel: row.pulse_level,
+    recentSignalCount: row.recent_signal_count,
+    liveSignalCount: row.live_signal_count,
+    liveUniqueUserCount: row.live_unique_user_count
+  });
   const distanceMiles = origin
     ? Math.round(haversineMiles(origin.lat, origin.lng, Number(row.latitude), Number(row.longitude)) * 10) / 10
     : null;
@@ -107,13 +123,17 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
     signal_count: Number(row.signal_count ?? 0),
     recent_signal_count: Number(row.recent_signal_count ?? 0),
     confidence: confidenceLabel(row.confidence),
+    liveness,
     event: row.current_event,
     hours: {
       status: row.schedule_status ?? "unknown",
       source: row.schedule_source ?? "unknown",
+      hours_state: liveness.hours_state,
       confidence: confidenceLabel(row.schedule_confidence),
       verified_at: row.schedule_verified_at,
       fetched_at: row.schedule_fetched_at,
+      opens_at: liveness.opens_at,
+      closes_at: liveness.closes_at,
       label:
         row.schedule_status === "verified_hours"
           ? "Hours verified"
@@ -122,7 +142,8 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
             : row.schedule_status === "manual_hold"
               ? "Hours under review"
               : "Hours unknown",
-      claims_open_now: false,
+      claims_open_now: liveness.state === "live",
+      weekly_hours: row.schedule_weekly_hours ?? {},
       metadata: row.schedule_metadata ?? {}
     },
     friend_summary: {
@@ -175,6 +196,8 @@ export async function listVenues(query: VenueQuery) {
         vls.wait_minutes,
         COALESCE(vls.signal_count, 0) AS signal_count,
         COALESCE(vls.recent_signal_count, 0) AS recent_signal_count,
+        COALESCE(signal_pack.live_signal_count, COALESCE(vls.recent_signal_count, 0)) AS live_signal_count,
+        COALESCE(signal_pack.live_unique_user_count, 0) AS live_unique_user_count,
         COALESCE(vls.confidence, 0.25) AS confidence,
         vls.last_signal_at,
         vls.computed_at,
@@ -183,6 +206,7 @@ export async function listVenues(query: VenueQuery) {
         event_pack.current_event,
         schedule_pack.status AS schedule_status,
         schedule_pack.source AS schedule_source,
+        COALESCE(schedule_pack.weekly_hours, '{}'::jsonb) AS schedule_weekly_hours,
         schedule_pack.confidence AS schedule_confidence,
         schedule_pack.verified_at AS schedule_verified_at,
         schedule_pack.fetched_at AS schedule_fetched_at,
@@ -190,6 +214,15 @@ export async function listVenues(query: VenueQuery) {
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS live_signal_count,
+          COUNT(DISTINCT s.user_id)::int AS live_unique_user_count
+        FROM signals s
+        WHERE s.venue_id = v.id
+          AND s.kind IS NOT NULL
+          AND s.expires_at > NOW()
+      ) signal_pack ON true
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(
           jsonb_build_object(
@@ -230,6 +263,7 @@ export async function listVenues(query: VenueQuery) {
         SELECT
           vs.status,
           vs.source,
+          vs.weekly_hours,
           vs.confidence,
           vs.verified_at,
           vs.fetched_at,
@@ -310,6 +344,8 @@ export async function getVenue(idOrSlug: string) {
         vls.wait_minutes,
         COALESCE(vls.signal_count, 0) AS signal_count,
         COALESCE(vls.recent_signal_count, 0) AS recent_signal_count,
+        COALESCE(signal_pack.live_signal_count, COALESCE(vls.recent_signal_count, 0)) AS live_signal_count,
+        COALESCE(signal_pack.live_unique_user_count, 0) AS live_unique_user_count,
         COALESCE(vls.confidence, 0.25) AS confidence,
         vls.last_signal_at,
         vls.computed_at,
@@ -318,6 +354,7 @@ export async function getVenue(idOrSlug: string) {
         event_pack.current_event,
         schedule_pack.status AS schedule_status,
         schedule_pack.source AS schedule_source,
+        COALESCE(schedule_pack.weekly_hours, '{}'::jsonb) AS schedule_weekly_hours,
         schedule_pack.confidence AS schedule_confidence,
         schedule_pack.verified_at AS schedule_verified_at,
         schedule_pack.fetched_at AS schedule_fetched_at,
@@ -325,6 +362,15 @@ export async function getVenue(idOrSlug: string) {
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS live_signal_count,
+          COUNT(DISTINCT s.user_id)::int AS live_unique_user_count
+        FROM signals s
+        WHERE s.venue_id = v.id
+          AND s.kind IS NOT NULL
+          AND s.expires_at > NOW()
+      ) signal_pack ON true
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(
           jsonb_build_object(
@@ -365,6 +411,7 @@ export async function getVenue(idOrSlug: string) {
         SELECT
           vs.status,
           vs.source,
+          vs.weekly_hours,
           vs.confidence,
           vs.verified_at,
           vs.fetched_at,

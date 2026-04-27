@@ -184,9 +184,10 @@ struct NightloopAPIClient {
         venueID: String,
         kind: SignalKind,
         bearerToken: String,
-        userCoordinate: Coordinate
+        userCoordinate: Coordinate,
+        details: SignalDetails? = nil
     ) async throws -> SignalResponse {
-        let body = SignalBody(venueID: venueID, kind: kind, location: userCoordinate)
+        let body = SignalBody(venueID: venueID, kind: kind, location: userCoordinate, details: details)
         return try await send(path: "signals", method: "POST", bearerToken: bearerToken, body: body)
     }
 
@@ -292,11 +293,13 @@ private struct SignalBody: Encodable {
     let venueID: String
     let kind: SignalKind
     let location: Coordinate
+    let details: SignalDetails?
 
     enum CodingKeys: String, CodingKey {
         case venueID = "venue_id"
         case kind
         case location
+        case details
     }
 }
 

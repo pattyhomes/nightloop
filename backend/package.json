@@ -16,7 +16,10 @@
     "import:sf-notable": "tsx src/scripts/importSfNotableVenues.ts",
     "import:datasf-poe": "tsx src/scripts/importDatasfPoeVenues.ts",
     "import:nyc-sla": "tsx src/scripts/importNycSlaVenues.ts",
-    "audit:venue-provenance": "tsx src/scripts/auditVenueProvenance.ts"
+    "audit:venue-provenance": "tsx src/scripts/auditVenueProvenance.ts",
+    "audit:sf-trust": "tsx src/scripts/auditSfTrust.ts",
+    "hours:google": "tsx src/scripts/syncGoogleHours.ts",
+    "recommendations:refresh-inputs": "tsx src/scripts/refreshRecommendationInputs.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",
