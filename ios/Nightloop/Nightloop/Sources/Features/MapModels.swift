@@ -2,6 +2,7 @@ import CoreLocation
 import Foundation
 import MapboxMaps
 import SwiftUI
+import UIKit
 
 enum MapPulseFilter: String, CaseIterable, Equatable, Identifiable {
     case all
@@ -147,8 +148,54 @@ enum NightloopMapOrnaments {
             scaleBar: ScaleBarViewOptions(visibility: .hidden),
             compass: CompassViewOptions(visibility: .adaptive),
             logo: LogoViewOptions(position: .bottomLeading, margins: CGPoint(x: 10, y: bottomMargin)),
-            attributionButton: AttributionButtonOptions(position: .bottomTrailing, margins: CGPoint(x: 10, y: bottomMargin))
+            attributionButton: AttributionButtonOptions(
+                position: .bottomLeading,
+                margins: CGPoint(x: 96, y: bottomMargin),
+                tintColor: UIColor.white.withAlphaComponent(0.62)
+            )
         )
+    }
+}
+
+enum MapChromeLayout {
+    static func headerTopPadding(safeAreaTop: CGFloat) -> CGFloat {
+        8
+    }
+
+    static func zoomTopPadding(safeAreaTop: CGFloat) -> CGFloat {
+        max(112, safeAreaTop + 48)
+    }
+}
+
+enum SignalProximityStatus: Equatable {
+    case needsLocation
+    case verified
+    case tooFar
+}
+
+enum SignalProximity {
+    static let radiusMeters = 200.0
+
+    static func status(userCoordinate: Coordinate?, venueCoordinate: Coordinate) -> SignalProximityStatus {
+        guard let userCoordinate else {
+            return .needsLocation
+        }
+
+        return distanceMeters(from: userCoordinate, to: venueCoordinate) <= radiusMeters ? .verified : .tooFar
+    }
+
+    static func distanceMeters(from origin: Coordinate, to destination: Coordinate) -> Double {
+        let earthMeters = 6_371_000.0
+        let dLat = radians(destination.latitude - origin.latitude)
+        let dLng = radians(destination.longitude - origin.longitude)
+        let a = sin(dLat / 2) * sin(dLat / 2) +
+            cos(radians(origin.latitude)) * cos(radians(destination.latitude)) *
+            sin(dLng / 2) * sin(dLng / 2)
+        return earthMeters * 2 * atan2(sqrt(a), sqrt(1 - a))
+    }
+
+    private static func radians(_ value: Double) -> Double {
+        value * .pi / 180
     }
 }
 

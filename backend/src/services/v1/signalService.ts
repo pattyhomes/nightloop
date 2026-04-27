@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import type { AccountState } from "./accountService";
 import { requireEligible } from "./accountService";
 import { dbQuery, dbTransaction } from "../../lib/db";
-import { notFoundError } from "../../lib/apiError";
+import { ApiError, notFoundError } from "../../lib/apiError";
 
 export type UserSignalKind = "packed" | "short_line" | "long_line" | "dead" | "event_live";
 
@@ -55,6 +55,8 @@ const SIGNAL_CONFIG: Record<UserSignalKind, SignalKindConfig> = {
 type VenueRow = {
   id: string;
   market_id: string;
+  latitude: number;
+  longitude: number;
 };
 
 type RecentSignalRow = {
@@ -89,10 +91,75 @@ function levelForScore(score: number): 1 | 2 | 3 {
   return 1;
 }
 
+const SIGNAL_PROXIMITY_RADIUS_METERS = 200;
+
+function toRad(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function distanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const earthMeters = 6_371_000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return earthMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function distanceBucket(distance: number): "at_venue" | "nearby" {
+  return distance <= 50 ? "at_venue" : "nearby";
+}
+
+const COORDINATE_METADATA_KEYS = new Set([
+  "lat",
+  "lng",
+  "latitude",
+  "longitude",
+  "location",
+  "coordinate",
+  "coordinates"
+]);
+
+function sanitizeMetadataValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeMetadataValue);
+  }
+
+  if (value && typeof value === "object") {
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      if (COORDINATE_METADATA_KEYS.has(key.toLowerCase())) {
+        continue;
+      }
+      sanitized[key] = sanitizeMetadataValue(nestedValue);
+    }
+    return sanitized;
+  }
+
+  return value;
+}
+
+function metadataWithoutCoordinates(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (COORDINATE_METADATA_KEYS.has(key.toLowerCase())) {
+      continue;
+    }
+    sanitized[key] = sanitizeMetadataValue(value);
+  }
+  return sanitized;
+}
+
 async function getVenueForSignal(venueId: string): Promise<VenueRow> {
   const result = await dbQuery<VenueRow>(
     `
-      SELECT id, market_id
+      SELECT id, market_id, latitude, longitude
       FROM venues
       WHERE id = $1::uuid
         AND is_active = true
@@ -214,6 +281,10 @@ export async function submitUserSignal(input: {
   account: AccountState;
   venueId: string;
   kind: UserSignalKind;
+  location?: {
+    latitude: number;
+    longitude: number;
+  };
   observedAt?: string;
   metadata?: Record<string, unknown>;
 }) {
@@ -221,11 +292,40 @@ export async function submitUserSignal(input: {
 
   const config = SIGNAL_CONFIG[input.kind];
   const venue = await getVenueForSignal(input.venueId);
+  if (!input.location) {
+    throw new ApiError(
+      403,
+      "SIGNAL_LOCATION_REQUIRED",
+      "Share location while you are at the venue to send a live signal."
+    );
+  }
+
+  const distance = distanceMeters(
+    input.location.latitude,
+    input.location.longitude,
+    Number(venue.latitude),
+    Number(venue.longitude)
+  );
+  if (distance > SIGNAL_PROXIMITY_RADIUS_METERS) {
+    throw new ApiError(
+      403,
+      "SIGNAL_TOO_FAR",
+      "Signals can only be sent when you are at the venue.",
+      {
+        radius_meters: SIGNAL_PROXIMITY_RADIUS_METERS,
+        distance_meters: Math.round(distance)
+      }
+    );
+  }
+
   const observedAt = input.observedAt ?? new Date().toISOString();
   const payload = {
-    ...(input.metadata ?? {}),
+    ...metadataWithoutCoordinates(input.metadata),
     kind: input.kind,
-    source: "ios"
+    source: "ios",
+    proximity_verified: true,
+    proximity_radius_meters: SIGNAL_PROXIMITY_RADIUS_METERS,
+    proximity_bucket: distanceBucket(distance)
   };
 
   const result = await dbTransaction(async (client) => {

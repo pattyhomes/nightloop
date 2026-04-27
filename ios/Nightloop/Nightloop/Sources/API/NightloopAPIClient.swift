@@ -159,8 +159,13 @@ struct NightloopAPIClient {
         try await send(path: "venues/\(id)", bearerToken: bearerToken)
     }
 
-    func submitSignal(venueID: String, kind: SignalKind, bearerToken: String) async throws -> SignalResponse {
-        let body = SignalBody(venueID: venueID, kind: kind)
+    func submitSignal(
+        venueID: String,
+        kind: SignalKind,
+        bearerToken: String,
+        userCoordinate: Coordinate
+    ) async throws -> SignalResponse {
+        let body = SignalBody(venueID: venueID, kind: kind, location: userCoordinate)
         return try await send(path: "signals", method: "POST", bearerToken: bearerToken, body: body)
     }
 
@@ -265,10 +270,12 @@ private struct ProfilePatchBody: Encodable {
 private struct SignalBody: Encodable {
     let venueID: String
     let kind: SignalKind
+    let location: Coordinate
 
     enum CodingKeys: String, CodingKey {
         case venueID = "venue_id"
         case kind
+        case location
     }
 }
 

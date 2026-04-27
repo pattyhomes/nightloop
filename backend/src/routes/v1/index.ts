@@ -85,6 +85,12 @@ const SignalSchema = z
   .object({
     venue_id: z.string().uuid(),
     kind: z.enum(["packed", "short_line", "long_line", "dead", "event_live"]),
+    location: z
+      .object({
+        latitude: z.coerce.number().min(-90).max(90),
+        longitude: z.coerce.number().min(-180).max(180)
+      })
+      .optional(),
     observed_at: z.string().datetime().optional(),
     metadata: z.record(z.string(), z.unknown()).optional()
   })
@@ -322,6 +328,7 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
         account: accountFromRequest(req),
         venueId: body.venue_id,
         kind: body.kind,
+        location: body.location,
         observedAt: body.observed_at,
         metadata: body.metadata
       });

@@ -13,7 +13,8 @@
     "ingest:ra": "tsx src/scripts/fetchRAEvents.ts",
     "enrich:foursquare": "tsx src/scripts/enrichVenuesFoursquare.ts",
     "review:google-qa": "tsx src/scripts/reviewGooglePlacesQa.ts",
-    "import:sf-notable": "tsx src/scripts/importSfNotableVenues.ts"
+    "import:sf-notable": "tsx src/scripts/importSfNotableVenues.ts",
+    "audit:venue-provenance": "tsx src/scripts/auditVenueProvenance.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

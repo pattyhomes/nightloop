@@ -147,6 +147,50 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(requestIndex, 2)
     }
 
+    func testSignalRequestIncludesVerificationLocation() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/signals")
+            XCTAssertEqual(request.httpMethod, "POST")
+
+            let body = try XCTUnwrap(Self.bodyData(from: request))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(object["venue_id"] as? String, "venue-1")
+            XCTAssertEqual(object["kind"] as? String, "packed")
+            let location = try XCTUnwrap(object["location"] as? [String: Any])
+            XCTAssertEqual(location["latitude"] as? Double, 37.7751)
+            XCTAssertEqual(location["longitude"] as? Double, -122.4105)
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 201,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "signal_id": "signal-1",
+              "venue_id": "venue-1",
+              "points_awarded": 3,
+              "new_signal_scout_points": 12
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        _ = try await client.submitSignal(
+            venueID: "venue-1",
+            kind: .packed,
+            bearerToken: "test-token",
+            userCoordinate: Coordinate(latitude: 37.7751, longitude: -122.4105)
+        )
+    }
+
     func testBackendErrorEnvelopeDecodes() throws {
         let data = Data("""
         {
@@ -269,6 +313,8 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(layout.fabBottomPadding, 358)
         XCTAssertEqual(layout.signalMenuBottomPadding, 426)
         XCTAssertEqual(layout.ornamentBottomMargin, 404)
+        XCTAssertEqual(MapChromeLayout.headerTopPadding(safeAreaTop: 59), 8)
+        XCTAssertEqual(MapChromeLayout.zoomTopPadding(safeAreaTop: 59), 112)
     }
 
     func testMapZoomControlClampsZoom() {
@@ -297,7 +343,31 @@ final class NightloopTests: XCTestCase {
 
         XCTAssertEqual(options.scaleBar.visibility, .hidden)
         XCTAssertEqual(options.logo.position, .bottomLeading)
-        XCTAssertEqual(options.attributionButton.position, .bottomTrailing)
+        XCTAssertEqual(options.attributionButton.position, .bottomLeading)
+        XCTAssertEqual(options.attributionButton.margins.x, 96)
+        XCTAssertEqual(options.attributionButton.tintColor, UIColor.white.withAlphaComponent(0.62))
+    }
+
+    func testSignalProximityStatusUsesTwoHundredMeterRadius() {
+        let venue = Coordinate(latitude: 37.7751, longitude: -122.4105)
+        XCTAssertEqual(
+            SignalProximity.status(userCoordinate: nil, venueCoordinate: venue),
+            .needsLocation
+        )
+        XCTAssertEqual(
+            SignalProximity.status(
+                userCoordinate: Coordinate(latitude: 37.7752, longitude: -122.4105),
+                venueCoordinate: venue
+            ),
+            .verified
+        )
+        XCTAssertEqual(
+            SignalProximity.status(
+                userCoordinate: Coordinate(latitude: 37.7951, longitude: -122.4105),
+                venueCoordinate: venue
+            ),
+            .tooFar
+        )
     }
 
     func testMapSettingsHideNeighborhoodLabelsControl() {

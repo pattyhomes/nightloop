@@ -90,10 +90,10 @@ struct MapShellView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, max(proxy.safeAreaInsets.top + 2, 12))
+                .padding(.top, MapChromeLayout.headerTopPadding(safeAreaTop: proxy.safeAreaInsets.top))
 
                 zoomControls
-                    .padding(.top, max(proxy.safeAreaInsets.top + 112, 128))
+                    .padding(.top, MapChromeLayout.zoomTopPadding(safeAreaTop: proxy.safeAreaInsets.top))
                     .padding(.trailing, 16)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 
@@ -210,30 +210,22 @@ struct MapShellView: View {
     }
 
     private var mapHeader: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(NightloopTheme.good)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: NightloopTheme.good.opacity(0.8), radius: 8)
-                Text("Tonight · \(marketConfig?.market.displayName ?? me.profile?.selectedMarketId.map { _ in "San Francisco" } ?? "San Francisco")")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(NightloopTheme.ink)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 42)
-            .background(NightloopTheme.surface.opacity(0.82))
-            .clipShape(Capsule())
-            .overlay { Capsule().stroke(NightloopTheme.hairline) }
-
-            GlassIconButton(systemName: "location.fill") {
-                locationPromptSeen = true
-                locationManager.requestLocationAccess()
-            }
-            .accessibilityLabel("Use my location")
+        HStack(spacing: 8) {
+            Circle()
+                .fill(NightloopTheme.good)
+                .frame(width: 8, height: 8)
+                .shadow(color: NightloopTheme.good.opacity(0.8), radius: 8)
+            Text("Tonight · \(marketConfig?.market.displayName ?? me.profile?.selectedMarketId.map { _ in "San Francisco" } ?? "San Francisco")")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(NightloopTheme.ink)
+                .lineLimit(1)
+            Spacer()
         }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(NightloopTheme.surface.opacity(0.82))
+        .clipShape(Capsule())
+        .overlay { Capsule().stroke(NightloopTheme.hairline) }
     }
 
     private var filterStrip: some View {
@@ -343,6 +335,10 @@ struct MapShellView: View {
     private var signalFAB: some View {
         Button {
             guard selectedVenue != nil else { return }
+            guard canSignalSelectedVenue else {
+                verifySelectedVenueForSignal()
+                return
+            }
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                 isSignalMenuOpen.toggle()
             }
@@ -395,7 +391,7 @@ struct MapShellView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(isSubmittingSignal)
+                .disabled(isSubmittingSignal || !canSignalSelectedVenue)
             }
         }
         .padding(8)
@@ -537,10 +533,27 @@ struct MapShellView: View {
     private func submitSignal(kind: SignalKind) async {
         guard let selectedVenue, let token = authStore.accessToken else { return }
         guard !isSubmittingSignal else { return }
+        guard let userCoordinate = locationManager.userCoordinate else {
+            verifySelectedVenueForSignal()
+            return
+        }
+        guard SignalProximity.status(
+            userCoordinate: userCoordinate,
+            venueCoordinate: selectedVenue.coordinate
+        ) == .verified else {
+            signalMessage = "Signals unlock when you're at the venue."
+            isSignalMenuOpen = false
+            return
+        }
 
         isSubmittingSignal = true
         do {
-            let result = try await apiClient.submitSignal(venueID: selectedVenue.id, kind: kind, bearerToken: token)
+            let result = try await apiClient.submitSignal(
+                venueID: selectedVenue.id,
+                kind: kind,
+                bearerToken: token,
+                userCoordinate: userCoordinate
+            )
             signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
             isSignalMenuOpen = false
             await load()
@@ -566,6 +579,29 @@ struct MapShellView: View {
         case .shortLine, .longLine: return 2
         case .dead: return 1
         case .eventLive: return 4
+        }
+    }
+
+    private var canSignalSelectedVenue: Bool {
+        guard let selectedVenue else { return false }
+        return SignalProximity.status(
+            userCoordinate: locationManager.userCoordinate,
+            venueCoordinate: selectedVenue.coordinate
+        ) == .verified
+    }
+
+    private func verifySelectedVenueForSignal() {
+        guard let selectedVenue else { return }
+        switch SignalProximity.status(userCoordinate: locationManager.userCoordinate, venueCoordinate: selectedVenue.coordinate) {
+        case .needsLocation:
+            signalMessage = "Share location to verify you're at \(selectedVenue.name)."
+            locationPromptSeen = true
+            locationManager.requestLocationAccess()
+        case .tooFar:
+            signalMessage = "Signals unlock when you're at the venue."
+            isSignalMenuOpen = false
+        case .verified:
+            break
         }
     }
 }

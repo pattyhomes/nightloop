@@ -8,6 +8,7 @@ struct VenueDetailView: View {
     let onAccountChanged: (MeResponse) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var locationManager = NightloopLocationManager()
     @State private var detail: VenueDetailResponse?
     @State private var errorMessage: String?
     @State private var isLoading = true
@@ -29,7 +30,7 @@ struct VenueDetailView: View {
                         detailHero(venue)
                         detailContent(venue)
                     }
-                    .padding(.bottom, 18)
+                    .padding(.bottom, 190)
                 }
                 .ignoresSafeArea(edges: .top)
                 .overlay(alignment: .top) {
@@ -50,8 +51,25 @@ struct VenueDetailView: View {
 
             if let signalMessage {
                 SignalToast(message: signalMessage, isError: !signalMessage.contains("+"))
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 162)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if let venue {
+                SignalVerificationTray(
+                    venue: venue,
+                    status: signalStatus(for: venue),
+                    isDenied: locationManager.isDenied,
+                    locationError: locationManager.locationError,
+                    submittingSignal: submittingSignal,
+                    verify: { locationManager.requestLocationAccess() },
+                    submit: { kind in
+                        Task { await submitSignal(venueID: venue.id, kind: kind) }
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -114,7 +132,6 @@ struct VenueDetailView: View {
                 eventCard(eventTitle)
             }
             infoSection(venue)
-            signalGrid(venue)
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -266,45 +283,6 @@ struct VenueDetailView: View {
         }
     }
 
-    private func signalGrid(_ venue: VenueItem) -> some View {
-        NightloopCard(fill: Color.white.opacity(0.04)) {
-            VStack(alignment: .leading, spacing: 12) {
-                NightloopSectionHeader(title: "Send a signal from here")
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
-                    ForEach(SignalKind.allCases) { kind in
-                        Button {
-                            Task { await submitSignal(venueID: venue.id, kind: kind) }
-                        } label: {
-                            if submittingSignal == kind {
-                                ProgressView().tint(kind == .packed ? NightloopTheme.fab : NightloopTheme.purple)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 9)
-                            } else {
-                                VStack(spacing: 4) {
-                                    Image(systemName: kind.symbol)
-                                        .font(.callout.weight(.bold))
-                                    Text(shortSignalLabel(kind))
-                                        .font(.caption2.weight(.bold))
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.7)
-                                }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 9)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(NightloopTheme.ink)
-                        .background(submittingSignal == kind ? NightloopTheme.good : Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .disabled(submittingSignal != nil)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
     private func infoSection(_ venue: VenueItem) -> some View {
         NightloopCard(fill: Color.white.opacity(0.035)) {
             VStack(alignment: .leading, spacing: 12) {
@@ -338,10 +316,25 @@ struct VenueDetailView: View {
 
     private func submitSignal(venueID: String, kind: SignalKind) async {
         guard let token = authStore.accessToken else { return }
+        guard let venue else { return }
+        guard let userCoordinate = locationManager.userCoordinate else {
+            signalMessage = "Share location to verify you're at \(venue.name)."
+            locationManager.requestLocationAccess()
+            return
+        }
+        guard SignalProximity.status(userCoordinate: userCoordinate, venueCoordinate: venue.coordinate) == .verified else {
+            signalMessage = "Signals unlock when you're at the venue."
+            return
+        }
 
         submittingSignal = kind
         do {
-            let result = try await apiClient.submitSignal(venueID: venueID, kind: kind, bearerToken: token)
+            let result = try await apiClient.submitSignal(
+                venueID: venueID,
+                kind: kind,
+                bearerToken: token,
+                userCoordinate: userCoordinate
+            )
             signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
             await load()
             if let updatedMe = try? await apiClient.me(bearerToken: token) {
@@ -398,6 +391,150 @@ struct VenueDetailView: View {
         if raw.contains("lounge") { tags.append("Lounge") }
         if raw.contains("bar") { tags.append("Mixed") }
         return tags.isEmpty ? ["Nightlife"] : Array(tags.prefix(3))
+    }
+
+    private func shortSignalLabel(_ kind: SignalKind) -> String {
+        switch kind {
+        case .packed: return "Packed"
+        case .shortLine: return "Short"
+        case .longLine: return "Long"
+        case .dead: return "Dead"
+        case .eventLive: return "Event"
+        }
+    }
+
+    private func signalStatus(for venue: VenueItem) -> SignalProximityStatus {
+        SignalProximity.status(userCoordinate: locationManager.userCoordinate, venueCoordinate: venue.coordinate)
+    }
+}
+
+private struct SignalVerificationTray: View {
+    let venue: VenueItem
+    let status: SignalProximityStatus
+    let isDenied: Bool
+    let locationError: String?
+    let submittingSignal: SignalKind?
+    let verify: () -> Void
+    let submit: (SignalKind) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: statusColor.opacity(0.75), radius: 8)
+                Text(statusTitle)
+                    .font(.caption.weight(.black))
+                    .tracking(1.1)
+                    .foregroundStyle(statusColor)
+                Spacer()
+                Text("LIVE SIGNAL")
+                    .font(.caption2.weight(.black))
+                    .tracking(1.2)
+                    .foregroundStyle(NightloopTheme.inkDim)
+            }
+
+            if status == .verified {
+                SignalChoiceGrid(submittingSignal: submittingSignal, submit: submit)
+            } else {
+                Text(locationError ?? statusMessage)
+                    .font(.caption.weight(.semibold))
+                    .lineSpacing(2)
+                    .foregroundStyle(NightloopTheme.inkMuted)
+
+                Button(action: verify) {
+                    Label(isDenied ? "Location unavailable" : "Verify you're here", systemImage: "location.fill")
+                        .font(.subheadline.weight(.black))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(isDenied ? Color.white.opacity(0.10) : NightloopTheme.fab)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isDenied)
+            }
+        }
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [NightloopTheme.surface.opacity(0.98), NightloopTheme.background.opacity(0.98)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.45), radius: 26, x: 0, y: 12)
+    }
+
+    private var statusTitle: String {
+        switch status {
+        case .needsLocation: return "Verify at \(venue.name)"
+        case .tooFar: return "Too far to signal"
+        case .verified: return "You're at \(venue.name)"
+        }
+    }
+
+    private var statusMessage: String {
+        switch status {
+        case .needsLocation:
+            return "Nightloop only accepts live signals when you are at the venue. We do not store your precise coordinates."
+        case .tooFar:
+            return "Move closer to the venue to report what it feels like right now."
+        case .verified:
+            return ""
+        }
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case .needsLocation: return NightloopTheme.amber
+        case .tooFar: return NightloopTheme.rose
+        case .verified: return NightloopTheme.good
+        }
+    }
+}
+
+private struct SignalChoiceGrid: View {
+    let submittingSignal: SignalKind?
+    let submit: (SignalKind) -> Void
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
+            ForEach(SignalKind.allCases) { kind in
+                Button {
+                    submit(kind)
+                } label: {
+                    if submittingSignal == kind {
+                        ProgressView()
+                            .tint(kind == .packed ? NightloopTheme.fab : NightloopTheme.purple)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                    } else {
+                        VStack(spacing: 4) {
+                            Image(systemName: kind.symbol)
+                                .font(.callout.weight(.bold))
+                            Text(shortSignalLabel(kind))
+                                .font(.caption2.weight(.bold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(NightloopTheme.ink)
+                .background(submittingSignal == kind ? NightloopTheme.good : Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .disabled(submittingSignal != nil)
+            }
+        }
     }
 
     private func shortSignalLabel(_ kind: SignalKind) -> String {

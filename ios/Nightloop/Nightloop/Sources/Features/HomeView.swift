@@ -15,7 +15,6 @@ struct HomeView: View {
     @State private var errorMessage: String?
     @State private var signalMessage: String?
     @State private var isShowingMarketSheet = false
-    @State private var submittingVenueID: String?
 
     private var activeMarketID: String? {
         selectedMarketID ?? me.profile?.selectedMarketId ?? markets.first?.id
@@ -245,10 +244,9 @@ struct HomeView: View {
                         .font(.footnote)
                         .foregroundStyle(NightloopTheme.inkMuted)
 
-                    SignalButton(title: "Tap Packed", systemImage: "flame.fill") {
-                        Task { await submitSignal(venueID: venue.id, kind: .packed) }
+                    SignalButton(title: "Verify at venue", systemImage: "location.fill") {
+                        signalMessage = "Open details or the map to verify you're there before signaling."
                     }
-                    .disabled(submittingVenueID == venue.id)
                 }
                 .padding(16)
             }
@@ -288,23 +286,6 @@ struct HomeView: View {
         isLoading = false
     }
 
-    private func submitSignal(venueID: String, kind: SignalKind) async {
-        guard let token = authStore.accessToken else { return }
-        guard submittingVenueID == nil else { return }
-
-        submittingVenueID = venueID
-        do {
-            let result = try await apiClient.submitSignal(venueID: venueID, kind: kind, bearerToken: token)
-            signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
-            await load()
-            if let updatedMe = try? await apiClient.me(bearerToken: token) {
-                onAccountChanged(updatedMe)
-            }
-        } catch {
-            signalMessage = error.localizedDescription
-        }
-        submittingVenueID = nil
-    }
 }
 
 private enum PulseFilter: String, Equatable {

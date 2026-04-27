@@ -116,10 +116,10 @@ describe("Nightloop v1 API", () => {
     return row.id;
   }
 
-  async function getFirstSfVenueId(): Promise<string> {
-    const result = await pool.query<{ id: string }>(
+  async function getFirstSfVenue(): Promise<{ id: string; latitude: number; longitude: number }> {
+    const result = await pool.query<{ id: string; latitude: number; longitude: number }>(
       `
-        select v.id
+        select v.id, v.latitude, v.longitude
         from venues v
         join markets m on m.id = v.market_id
         where m.slug = 'san-francisco'
@@ -131,7 +131,11 @@ describe("Nightloop v1 API", () => {
     if (!row) {
       throw new Error("Expected SF venue seed to exist.");
     }
-    return row.id;
+    return row;
+  }
+
+  async function getFirstSfVenueId(): Promise<string> {
+    return (await getFirstSfVenue()).id;
   }
 
   beforeAll(async () => {
@@ -391,12 +395,17 @@ describe("Nightloop v1 API", () => {
   it("stores user signals with design-default points and a server-side expiry", async () => {
     const user = await createTestUser();
     await attestEligible(user);
-    const venueId = await getFirstSfVenueId();
+    const venue = await getFirstSfVenue();
 
     const packed = await request(app)
       .post("/api/v1/signals")
       .set("Authorization", `Bearer ${user.token}`)
-      .send({ venue_id: venueId, kind: "packed", metadata: { test_run_id: testRunId } })
+      .send({
+        venue_id: venue.id,
+        kind: "packed",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
       .expect(201);
 
     expect(packed.body.points_awarded).toBe(3);
@@ -405,7 +414,12 @@ describe("Nightloop v1 API", () => {
     const liveEvent = await request(app)
       .post("/api/v1/signals")
       .set("Authorization", `Bearer ${user.token}`)
-      .send({ venue_id: venueId, kind: "event_live", metadata: { test_run_id: testRunId } })
+      .send({
+        venue_id: venue.id,
+        kind: "event_live",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
       .expect(201);
 
     expect(liveEvent.body.points_awarded).toBe(4);
@@ -430,12 +444,75 @@ describe("Nightloop v1 API", () => {
     expect(Date.parse(result.rows[0]?.expires_at ?? "")).toBeGreaterThan(Date.now() + 80 * 60 * 1000);
   });
 
+  it("requires proximity verification for user signals without storing raw coordinates", async () => {
+    const user = await createTestUser();
+    await attestEligible(user);
+    const venue = await getFirstSfVenue();
+
+    const missing = await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({ venue_id: venue.id, kind: "packed", metadata: { test_run_id: testRunId } })
+      .expect(403);
+    expect(missing.body.error.code).toBe("SIGNAL_LOCATION_REQUIRED");
+
+    const far = await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "packed",
+        location: { latitude: venue.latitude + 0.02, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(403);
+    expect(far.body.error.code).toBe("SIGNAL_TOO_FAR");
+
+    const accepted = await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "short_line",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: {
+          test_run_id: testRunId,
+          location: { latitude: venue.latitude, longitude: venue.longitude },
+          nested: { coordinates: [venue.latitude, venue.longitude], note: "kept" }
+        }
+      })
+      .expect(201);
+    expect(accepted.body.points_awarded).toBe(2);
+
+    const result = await pool.query<{ payload: Record<string, unknown> }>(
+      `
+        select payload
+        from signals
+        where payload->>'test_run_id' = $1
+          and kind = 'short_line'
+        order by created_at desc
+        limit 1
+      `,
+      [testRunId]
+    );
+
+    expect(result.rows[0]?.payload).toMatchObject({
+      proximity_verified: true,
+      proximity_radius_meters: 200,
+      proximity_bucket: "at_venue"
+    });
+    expect(JSON.stringify(result.rows[0]?.payload)).not.toContain("latitude");
+    expect(JSON.stringify(result.rows[0]?.payload)).not.toContain("longitude");
+    expect(JSON.stringify(result.rows[0]?.payload)).not.toContain("coordinates");
+    expect(result.rows[0]?.payload).toMatchObject({ nested: { note: "kept" } });
+  });
+
   it("returns only the current user's recent signals with a capped limit", async () => {
     const first = await createTestUser();
     const second = await createTestUser();
     await attestEligible(first);
     await attestEligible(second);
-    const venueId = await getFirstSfVenueId();
+    const venue = await getFirstSfVenue();
 
     const empty = await request(app)
       .get("/api/v1/me/signals")
@@ -446,19 +523,34 @@ describe("Nightloop v1 API", () => {
     await request(app)
       .post("/api/v1/signals")
       .set("Authorization", `Bearer ${first.token}`)
-      .send({ venue_id: venueId, kind: "packed", metadata: { test_run_id: testRunId } })
+      .send({
+        venue_id: venue.id,
+        kind: "packed",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
       .expect(201);
 
     await request(app)
       .post("/api/v1/signals")
       .set("Authorization", `Bearer ${first.token}`)
-      .send({ venue_id: venueId, kind: "short_line", metadata: { test_run_id: testRunId } })
+      .send({
+        venue_id: venue.id,
+        kind: "short_line",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
       .expect(201);
 
     await request(app)
       .post("/api/v1/signals")
       .set("Authorization", `Bearer ${second.token}`)
-      .send({ venue_id: venueId, kind: "event_live", metadata: { test_run_id: testRunId } })
+      .send({
+        venue_id: venue.id,
+        kind: "event_live",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
       .expect(201);
 
     const unauthorized = await request(app).get("/api/v1/me/signals").expect(401);
@@ -473,7 +565,7 @@ describe("Nightloop v1 API", () => {
     expect(recent.body.items[0]).toEqual(
       expect.objectContaining({
         id: expect.any(String),
-        venue_id: venueId,
+        venue_id: venue.id,
         venue_name: expect.any(String),
         venue_neighborhood: expect.any(String),
         kind: "short_line",
