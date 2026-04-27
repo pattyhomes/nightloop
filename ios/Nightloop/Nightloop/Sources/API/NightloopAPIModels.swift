@@ -284,6 +284,7 @@ struct RecommendationItem: Decodable, Identifiable, Equatable {
     let reason: String
     let confidence: RecommendationConfidence?
     let liveness: VenueLiveness?
+    let expectedPulseBasis: [String]?
     let venue: VenueItem
     let factors: RecommendationFactors?
 

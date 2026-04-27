@@ -2,6 +2,7 @@ import { dbQuery } from "../../lib/db";
 import { notFoundError, validationError } from "../../lib/apiError";
 import { findMarketByIdOrSlug } from "./marketService";
 import { buildVenueLiveness } from "./livenessService";
+import { PUBLIC_VENUE_SQL } from "./recommendationTrust";
 
 type PulseLabel = "Chill" | "Active" | "Packed";
 
@@ -62,6 +63,49 @@ function confidenceLabel(value: number | null): "low" | "medium" | "high" {
   return "low";
 }
 
+function eventTime(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatEventTime(value: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(value);
+}
+
+function eventScheduleOverride(event: Record<string, unknown> | null): {
+  source: string;
+  metadata: Record<string, unknown>;
+} | null {
+  if (!event) return null;
+  const startsAt = eventTime(event.starts_at);
+  const explicitEnd = eventTime(event.ends_at);
+  if (!startsAt) return null;
+  const endsAt = explicitEnd ?? new Date(startsAt.getTime() + 4 * 60 * 60 * 1000);
+  const now = new Date();
+  if (endsAt < now) return null;
+  const isOpenNow = startsAt <= now && endsAt > now;
+  return {
+    source: typeof event.source === "string" ? event.source : "manual",
+    metadata: {
+      is_open_now: isOpenNow,
+      opens_later: startsAt > now,
+      opens_at: formatEventTime(startsAt),
+      closes_at: formatEventTime(endsAt),
+      event_context: {
+        event_id: event.id,
+        source: event.source,
+        starts_at: event.starts_at,
+        ends_at: event.ends_at ?? endsAt.toISOString()
+      }
+    }
+  };
+}
+
 function haversineMiles(
   lat1: number,
   lng1: number,
@@ -82,13 +126,19 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
   const level = Math.max(1, Math.min(3, Number(row.pulse_level ?? 1)));
   const energyScore = Math.max(0, Math.min(100, Math.round(Number(row.energy_score ?? 28))));
   const label = row.energy_label ?? toPulseLabel(level);
+  const eventOverride = eventScheduleOverride(row.current_event);
+  const effectiveScheduleStatus = eventOverride ? "verified_hours" : row.schedule_status;
+  const effectiveScheduleSource = eventOverride?.source ?? row.schedule_source;
+  const effectiveScheduleMetadata = eventOverride
+    ? { ...(row.schedule_metadata ?? {}), ...eventOverride.metadata }
+    : row.schedule_metadata;
   const liveness = buildVenueLiveness({
-    scheduleStatus: row.schedule_status,
-    scheduleSource: row.schedule_source,
+    scheduleStatus: effectiveScheduleStatus,
+    scheduleSource: effectiveScheduleSource,
     scheduleConfidence: row.schedule_confidence,
     scheduleVerifiedAt: row.schedule_verified_at,
     scheduleFetchedAt: row.schedule_fetched_at,
-    scheduleMetadata: row.schedule_metadata,
+    scheduleMetadata: effectiveScheduleMetadata,
     pulseLevel: row.pulse_level,
     recentSignalCount: row.recent_signal_count,
     liveSignalCount: row.live_signal_count,
@@ -126,8 +176,8 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
     liveness,
     event: row.current_event,
     hours: {
-      status: row.schedule_status ?? "unknown",
-      source: row.schedule_source ?? "unknown",
+      status: effectiveScheduleStatus ?? "unknown",
+      source: effectiveScheduleSource ?? "unknown",
       hours_state: liveness.hours_state,
       confidence: confidenceLabel(row.schedule_confidence),
       verified_at: row.schedule_verified_at,
@@ -135,16 +185,16 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
       opens_at: liveness.opens_at,
       closes_at: liveness.closes_at,
       label:
-        row.schedule_status === "verified_hours"
+        effectiveScheduleStatus === "verified_hours"
           ? "Hours verified"
-          : row.schedule_status === "temporarily_closed"
+          : effectiveScheduleStatus === "temporarily_closed"
             ? "Temporarily closed"
-            : row.schedule_status === "manual_hold"
+            : effectiveScheduleStatus === "manual_hold"
               ? "Hours under review"
               : "Hours unknown",
       claims_open_now: liveness.state === "live",
       weekly_hours: row.schedule_weekly_hours ?? {},
-      metadata: row.schedule_metadata ?? {}
+      metadata: effectiveScheduleMetadata ?? {}
     },
     friend_summary: {
       friends_here_count: 0,
@@ -255,13 +305,17 @@ export async function listVenues(query: VenueQuery) {
         FROM events e
         WHERE e.venue_id = v.id
           AND e.is_approved = true
-          AND e.starts_at >= NOW() - INTERVAL '6 hours'
+          AND e.starts_at <= NOW() + INTERVAL '18 hours'
+          AND COALESCE(e.ends_at, e.starts_at + INTERVAL '4 hours') >= NOW() - INTERVAL '6 hours'
         ORDER BY e.starts_at ASC
         LIMIT 1
       ) event_pack ON true
       LEFT JOIN LATERAL (
         SELECT
-          vs.status,
+          CASE
+            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            ELSE vs.status
+          END AS status,
           vs.source,
           vs.weekly_hours,
           vs.confidence,
@@ -271,13 +325,21 @@ export async function listVenues(query: VenueQuery) {
         FROM venue_schedules vs
         WHERE vs.venue_id = v.id
         ORDER BY
-          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          CASE
+            WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.status = 'temporarily_closed' THEN 3
+            WHEN vs.status = 'manual_hold' THEN 4
+            ELSE 5
+          END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
         AND ($2::int IS NULL OR COALESCE(vls.pulse_level, 1) = $2::int)
         AND (
           $3::text IS NULL
@@ -298,6 +360,7 @@ export async function listVenues(query: VenueQuery) {
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
       GROUP BY COALESCE(vls.pulse_level, 1)
     `,
     [market.id]
@@ -403,13 +466,17 @@ export async function getVenue(idOrSlug: string) {
         FROM events e
         WHERE e.venue_id = v.id
           AND e.is_approved = true
-          AND e.starts_at >= NOW() - INTERVAL '6 hours'
+          AND e.starts_at <= NOW() + INTERVAL '18 hours'
+          AND COALESCE(e.ends_at, e.starts_at + INTERVAL '4 hours') >= NOW() - INTERVAL '6 hours'
         ORDER BY e.starts_at ASC
         LIMIT 1
       ) event_pack ON true
       LEFT JOIN LATERAL (
         SELECT
-          vs.status,
+          CASE
+            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            ELSE vs.status
+          END AS status,
           vs.source,
           vs.weekly_hours,
           vs.confidence,
@@ -419,11 +486,21 @@ export async function getVenue(idOrSlug: string) {
         FROM venue_schedules vs
         WHERE vs.venue_id = v.id
         ORDER BY
-          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          CASE
+            WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.status = 'temporarily_closed' THEN 3
+            WHEN vs.status = 'manual_hold' THEN 4
+            ELSE 5
+          END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
-      WHERE v.id::text = $1 OR v.slug = $1
+      WHERE (v.id::text = $1 OR v.slug = $1)
+        AND v.is_active = true
+        AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
       LIMIT 1
     `,
     [idOrSlug]

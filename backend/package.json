@@ -19,6 +19,9 @@
     "audit:venue-provenance": "tsx src/scripts/auditVenueProvenance.ts",
     "audit:sf-trust": "tsx src/scripts/auditSfTrust.ts",
     "hours:google": "tsx src/scripts/syncGoogleHours.ts",
+    "hours:foursquare": "tsx src/scripts/syncFoursquareHours.ts",
+    "events:sync": "tsx src/scripts/syncVenueEvents.ts",
+    "neighborhoods:sf": "tsx src/scripts/normalizeSfNeighborhoods.ts",
     "recommendations:refresh-inputs": "tsx src/scripts/refreshRecommendationInputs.ts"
   },
   "dependencies": {

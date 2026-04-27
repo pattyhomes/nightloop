@@ -5,6 +5,12 @@ import { requireEligible } from "./accountService";
 import { findMarketByIdOrSlug, type MarketRow } from "./marketService";
 import { formatVenue, type VenueFeedRow } from "./venueService";
 import { buildVenueLiveness, type VenueLiveness } from "./livenessService";
+import {
+  calculateExpectedPulse,
+  PUBLIC_VENUE_SQL,
+  rerankForDiversity,
+  type ExpectedPulse
+} from "./recommendationTrust";
 
 type PulseFilter = "chill" | "active" | "packed";
 
@@ -31,6 +37,7 @@ type ScoredRecommendation = {
   reason: string;
   mode: "tonight_preview" | "live_now";
   liveness: VenueLiveness;
+  expectedPulse: ExpectedPulse;
   factors: {
     venue_quality: number;
     preference_match: number;
@@ -138,6 +145,48 @@ function eventScore(row: RecommendationRow): number {
   return clamp(Number(row.event_score ?? 0));
 }
 
+function eventTime(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatEventTime(value: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(value);
+}
+
+function eventScheduleOverride(event: Record<string, unknown> | null): {
+  source: string;
+  metadata: Record<string, unknown>;
+} | null {
+  if (!event) return null;
+  const startsAt = eventTime(event.starts_at);
+  const explicitEnd = eventTime(event.ends_at);
+  if (!startsAt) return null;
+  const endsAt = explicitEnd ?? new Date(startsAt.getTime() + 4 * 60 * 60 * 1000);
+  const now = new Date();
+  if (endsAt < now) return null;
+  return {
+    source: typeof event.source === "string" ? event.source : "manual",
+    metadata: {
+      is_open_now: startsAt <= now && endsAt > now,
+      opens_later: startsAt > now,
+      opens_at: formatEventTime(startsAt),
+      closes_at: formatEventTime(endsAt),
+      event_context: {
+        event_id: event.id,
+        source: event.source,
+        starts_at: event.starts_at,
+        ends_at: event.ends_at ?? endsAt.toISOString()
+      }
+    }
+  };
+}
+
 function hoursScore(row: RecommendationRow): number {
   if (row.schedule_status === "verified_hours") return clamp(Math.max(Number(row.schedule_confidence ?? 0.75), 0.72));
   if (row.schedule_status === "temporarily_closed") return 0.02;
@@ -149,11 +198,15 @@ function reasonFor(
   row: RecommendationRow,
   mode: ScoredRecommendation["mode"],
   factors: ScoredRecommendation["factors"],
-  liveness: VenueLiveness
+  liveness: VenueLiveness,
+  expectedPulse: ExpectedPulse
 ): string {
   const area = row.neighborhood ?? "SF";
   if (liveness.state === "live") {
     return `${liveness.live_signal_count} verified reports from ${liveness.live_unique_user_count} people in the last 90 minutes.`;
+  }
+  if (row.current_event) {
+    return expectedPulse.copy;
   }
   if (liveness.state === "opens_later" && liveness.opens_at) {
     return `Source-backed ${area} pick that opens later tonight.`;
@@ -178,13 +231,14 @@ function scoreRecommendation(
   mode: ScoredRecommendation["mode"]
 ): ScoredRecommendation {
   const hasPreferences = Object.values(account.preferences).some((values) => values.length > 0);
+  const eventOverride = eventScheduleOverride(row.current_event);
   const liveness = buildVenueLiveness({
-    scheduleStatus: row.schedule_status,
-    scheduleSource: row.schedule_source,
+    scheduleStatus: eventOverride ? "verified_hours" : row.schedule_status,
+    scheduleSource: eventOverride?.source ?? row.schedule_source,
     scheduleConfidence: row.schedule_confidence,
     scheduleVerifiedAt: row.schedule_verified_at,
     scheduleFetchedAt: row.schedule_fetched_at,
-    scheduleMetadata: row.schedule_metadata,
+    scheduleMetadata: eventOverride ? { ...(row.schedule_metadata ?? {}), ...eventOverride.metadata } : row.schedule_metadata,
     pulseLevel: row.pulse_level,
     recentSignalCount: row.recent_signal_count,
     liveSignalCount: row.live_signal_count,
@@ -198,6 +252,13 @@ function scoreRecommendation(
     source_confidence: sourceConfidence(row),
     hours_confidence: hoursScore(row)
   };
+  const expectedPulse = calculateExpectedPulse({
+    category: row.category,
+    eventContext: { has_event_tonight: Boolean(row.current_event) },
+    fsqPopularity: Number(row.venue_metadata?.foursquare_popularity ?? row.schedule_metadata?.popularity ?? NaN),
+    fsqPrice: Number(row.venue_metadata?.foursquare_price ?? row.schedule_metadata?.price ?? NaN),
+    sourceQuality: factors.venue_quality
+  });
 
   const score = hasPreferences
     ? factors.venue_quality * 0.34 +
@@ -225,8 +286,9 @@ function scoreRecommendation(
     score: adjusted,
     mode,
     liveness,
+    expectedPulse,
     factors,
-    reason: reasonFor(row, mode, factors, liveness)
+    reason: reasonFor(row, mode, factors, liveness, expectedPulse)
   };
 }
 
@@ -331,13 +393,17 @@ export async function listRecommendations(query: RecommendationQuery) {
         FROM events e
         WHERE e.venue_id = v.id
           AND e.is_approved = true
-          AND e.starts_at >= NOW() - INTERVAL '6 hours'
+          AND e.starts_at <= NOW() + INTERVAL '18 hours'
+          AND COALESCE(e.ends_at, e.starts_at + INTERVAL '4 hours') >= NOW() - INTERVAL '6 hours'
         ORDER BY e.starts_at ASC
         LIMIT 1
       ) event_pack ON true
       LEFT JOIN LATERAL (
         SELECT
-          vs.status,
+          CASE
+            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            ELSE vs.status
+          END AS status,
           vs.source,
           vs.weekly_hours,
           vs.confidence,
@@ -347,22 +413,43 @@ export async function listRecommendations(query: RecommendationQuery) {
         FROM venue_schedules vs
         WHERE vs.venue_id = v.id
         ORDER BY
-          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          CASE
+            WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.status = 'temporarily_closed' THEN 3
+            WHEN vs.status = 'manual_hold' THEN 4
+            ELSE 5
+          END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
         AND ($2::int IS NULL OR COALESCE(vls.pulse_level, 1) = $2::int)
       LIMIT 300
     `,
     [market.id, pulseLevel ?? null]
   );
 
-  const scored = result.rows
-    .map((row) => scoreRecommendation(row, query.account, mode))
-    .sort((left, right) => right.score - left.score)
+  const scored = rerankForDiversity(
+    result.rows
+      .map((row) => scoreRecommendation(row, query.account, mode))
+      .sort((left, right) => right.score - left.score)
+      .map((item) => ({
+        ...item,
+        id: item.row.id,
+        neighborhood: item.row.neighborhood,
+        category: item.row.category
+      })),
+    {
+      neighborhoodSoftCap: 5,
+      categorySoftCap: 12,
+      window: 20
+    }
+  )
     .slice(0, limit);
 
   const counts = { all: 0, packed: 0, active: 0, chill: 0, friends: 0 };
@@ -387,6 +474,7 @@ export async function listRecommendations(query: RecommendationQuery) {
       reason: item.reason,
       confidence: item.liveness.confidence,
       liveness: item.liveness,
+      expected_pulse_basis: item.expectedPulse.basis,
       venue: formatVenue(item.row),
       factors: {
         venue_quality: Math.round(item.factors.venue_quality * 100),

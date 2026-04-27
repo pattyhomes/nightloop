@@ -2,12 +2,20 @@ import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, getDBClient } from "../lib/db";
 import { loadConfig } from "../lib/config";
+import {
+  GOOGLE_HOURS_FIELD_MASK,
+  normalizeGooglePlaceHours,
+  type GooglePlaceHours,
+  type ProviderSchedulePlan
+} from "../services/v1/providerHours";
+import { PUBLIC_VENUE_SQL } from "../services/v1/recommendationTrust";
 
 type Args = {
   apply: boolean;
   market: string;
   limit: number;
   fetchDryRun: boolean;
+  summaryOnly: boolean;
 };
 
 type VenueCandidate = {
@@ -18,29 +26,14 @@ type VenueCandidate = {
   google_place_id: string;
 };
 
-type GooglePlaceHours = {
-  id?: string;
-  businessStatus?: string;
-  utcOffsetMinutes?: number;
-  regularOpeningHours?: {
-    openNow?: boolean;
-    periods?: unknown[];
-    weekdayDescriptions?: string[];
-  };
-  currentOpeningHours?: {
-    openNow?: boolean;
-    periods?: unknown[];
-    weekdayDescriptions?: string[];
-  };
-};
-
 function parseArgs(argv: string[]): Args {
   const apply = argv.includes("--apply");
   return {
     apply,
     market: argv.find((arg) => arg.startsWith("--market="))?.slice("--market=".length) ?? "san-francisco",
     limit: Number(argv.find((arg) => arg.startsWith("--limit="))?.slice("--limit=".length) ?? (apply ? "5" : "50")),
-    fetchDryRun: argv.includes("--fetch-dry-run")
+    fetchDryRun: argv.includes("--fetch-dry-run"),
+    summaryOnly: argv.includes("--summary")
   };
 }
 
@@ -78,16 +71,47 @@ async function loadCandidates(marketId: string, limit: number): Promise<VenueCan
         ORDER BY pr.updated_at DESC
         LIMIT 1
       ) google_record ON true
+      LEFT JOIN LATERAL (
+        SELECT status, expires_at
+        FROM venue_schedules vs
+        WHERE vs.venue_id = v.id
+          AND vs.source = 'provider:google_places'
+        ORDER BY COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
+        LIMIT 1
+      ) google_hours ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
+        AND (
+          google_hours.status IS NULL
+          OR google_hours.expires_at IS NULL
+          OR google_hours.expires_at <= NOW()
+        )
         AND COALESCE(
           v.metadata->>'google_place_id',
           google_record.provider_record_id,
           google_record.normalized_payload->>'place_id',
           google_record.normalized_payload->>'google_place_id'
         ) IS NOT NULL
+        AND COALESCE(
+          v.metadata->>'google_place_id',
+          google_record.provider_record_id,
+          google_record.normalized_payload->>'place_id',
+          google_record.normalized_payload->>'google_place_id'
+        ) NOT ILIKE 'unmatched-google-%'
       ORDER BY
+        CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM venue_schedules vs
+            WHERE vs.venue_id = v.id
+              AND vs.source = 'provider:google_places'
+              AND vs.expires_at IS NOT NULL
+              AND vs.expires_at <= NOW()
+          ) THEN 0
+          ELSE 1
+        END,
         CASE
           WHEN EXISTS (
             SELECT 1
@@ -110,8 +134,7 @@ async function fetchGoogleHours(placeId: string, apiKey: string): Promise<Google
   const response = await fetch(url, {
     headers: {
       "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask":
-        "id,businessStatus,utcOffsetMinutes,regularOpeningHours,currentOpeningHours"
+      "X-Goog-FieldMask": GOOGLE_HOURS_FIELD_MASK
     }
   });
 
@@ -123,46 +146,7 @@ async function fetchGoogleHours(placeId: string, apiKey: string): Promise<Google
   return (await response.json()) as GooglePlaceHours;
 }
 
-function plannedSchedule(candidate: VenueCandidate, place: GooglePlaceHours | null) {
-  const regular = place?.regularOpeningHours;
-  const current = place?.currentOpeningHours;
-  const businessStatus = place?.businessStatus ?? "UNKNOWN";
-  const hasHours = Boolean((regular?.periods?.length ?? 0) > 0 || (regular?.weekdayDescriptions?.length ?? 0) > 0);
-  const status =
-    businessStatus === "CLOSED_TEMPORARILY"
-      ? "temporarily_closed"
-      : hasHours
-        ? "verified_hours"
-        : "unknown";
-  const openNow = current?.openNow ?? regular?.openNow ?? null;
-
-  return {
-    venue_id: candidate.id,
-    venue_name: candidate.name,
-    google_place_id: candidate.google_place_id,
-    status,
-    source: "provider:google_places",
-    timezone: candidate.timezone,
-    confidence: status === "verified_hours" ? 0.9 : status === "temporarily_closed" ? 0.85 : 0.25,
-    weekly_hours: {
-      regular_periods: regular?.periods ?? [],
-      regular_weekday_descriptions: regular?.weekdayDescriptions ?? [],
-      current_periods: current?.periods ?? [],
-      current_weekday_descriptions: current?.weekdayDescriptions ?? []
-    },
-    metadata: {
-      google_place_id: candidate.google_place_id,
-      google_place_resource_id: place?.id ?? null,
-      business_status: businessStatus,
-      utc_offset_minutes: place?.utcOffsetMinutes ?? null,
-      is_open_now: openNow,
-      source_provider: "google_places",
-      fetched_by: "syncGoogleHours"
-    }
-  };
-}
-
-async function applySchedule(candidate: VenueCandidate, plan: ReturnType<typeof plannedSchedule>): Promise<void> {
+async function applySchedule(candidate: VenueCandidate, plan: ProviderSchedulePlan): Promise<void> {
   await dbQuery(
     `
       INSERT INTO venue_schedules (
@@ -175,6 +159,7 @@ async function applySchedule(candidate: VenueCandidate, plan: ReturnType<typeof 
         confidence,
         verified_at,
         fetched_at,
+        expires_at,
         metadata
       )
       VALUES (
@@ -187,7 +172,8 @@ async function applySchedule(candidate: VenueCandidate, plan: ReturnType<typeof 
         $6,
         CASE WHEN $3 = 'verified_hours' THEN NOW() ELSE NULL END,
         NOW(),
-        $7::jsonb
+        $7::timestamptz,
+        $8::jsonb
       )
       ON CONFLICT (venue_id, source) DO UPDATE SET
         status = EXCLUDED.status,
@@ -196,6 +182,7 @@ async function applySchedule(candidate: VenueCandidate, plan: ReturnType<typeof 
         confidence = EXCLUDED.confidence,
         verified_at = EXCLUDED.verified_at,
         fetched_at = EXCLUDED.fetched_at,
+        expires_at = EXCLUDED.expires_at,
         metadata = EXCLUDED.metadata,
         updated_at = NOW()
     `,
@@ -206,6 +193,7 @@ async function applySchedule(candidate: VenueCandidate, plan: ReturnType<typeof 
       plan.timezone,
       JSON.stringify(plan.weekly_hours),
       plan.confidence,
+      plan.expires_at,
       JSON.stringify(plan.metadata)
     ]
   );
@@ -247,10 +235,10 @@ async function main(): Promise<void> {
     throw new Error("GOOGLE_PLACES_API_KEY is required for --apply or --fetch-dry-run.");
   }
 
-  const plans: Array<ReturnType<typeof plannedSchedule>> = [];
+  const plans: ProviderSchedulePlan[] = [];
   for (const candidate of candidates) {
     const place = await fetchGoogleHours(candidate.google_place_id, config.googlePlacesApiKey);
-    const plan = plannedSchedule(candidate, place);
+    const plan = normalizeGooglePlaceHours(candidate, place);
     plans.push(plan);
     if (args.apply) await applySchedule(candidate, plan);
   }
@@ -258,7 +246,11 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     ...summary,
     writes_completed: args.apply ? plans.length : 0,
-    plans
+    statuses: plans.reduce<Record<string, number>>((acc, plan) => {
+      acc[plan.status] = (acc[plan.status] ?? 0) + 1;
+      return acc;
+    }, {}),
+    plans: args.summaryOnly ? undefined : plans
   }, null, 2));
 }
 

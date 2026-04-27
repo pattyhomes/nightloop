@@ -134,7 +134,11 @@ describe("Nightloop v1 admin/data ops API", () => {
     return row.id;
   }
 
-  async function createTempVenue(marketId: string, name = "Phase 2 Test Venue"): Promise<string> {
+  async function createTempVenue(
+    marketId: string,
+    name = "Phase 2 Test Venue",
+    options: { source?: string; metadata?: Record<string, unknown> } = {}
+  ): Promise<string> {
     const slug = `phase2-${testRunId.slice(0, 8)}-${randomUUID().slice(0, 8)}`;
     tempVenueSlugs.push(slug);
     const result = await pool.query<{ id: string }>(
@@ -162,8 +166,8 @@ describe("Nightloop v1 admin/data ops API", () => {
           'US',
           37.7749,
           -122.4194,
-          'phase2-test',
-          '{"neighborhood":"SOMA"}'::jsonb,
+          $4,
+          $5::jsonb,
           $3::uuid,
           'bar',
           true,
@@ -171,7 +175,13 @@ describe("Nightloop v1 admin/data ops API", () => {
         )
         RETURNING id
       `,
-      [slug, name, marketId]
+      [
+        slug,
+        name,
+        marketId,
+        options.source ?? "phase2-test",
+        JSON.stringify(options.metadata ?? { neighborhood: "SOMA" })
+      ]
     );
 
     return result.rows[0]?.id ?? "";
@@ -1449,7 +1459,10 @@ describe("Nightloop v1 admin/data ops API", () => {
     const admin = await createAdminUser();
     const consumer = await createEligibleUser();
     const marketId = await getSfMarketId();
-    const venueId = await createTempVenue(marketId, "Phase 2 Asset Venue");
+    const venueId = await createTempVenue(marketId, "Licensed Asset Venue", {
+      source: "manual",
+      metadata: { neighborhood: "SoMa" }
+    });
 
     const invalidAsset = await request(app)
       .post("/api/v1/admin/venue-assets")

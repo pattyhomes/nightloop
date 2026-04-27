@@ -111,6 +111,8 @@ function confidenceFor(input: {
 function sourceLabel(source: string): string {
   if (source === "provider:google_places") return "Google Places";
   if (source === "provider:foursquare") return "Foursquare";
+  if (source === "eventbrite") return "Eventbrite";
+  if (source === "venue_website") return "venue website";
   if (source === "manual") return "Nightloop ops";
   if (source === "datasf_poe") return "DataSF evidence";
   return "Unverified source";

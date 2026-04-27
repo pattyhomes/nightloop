@@ -184,7 +184,7 @@ describe("Nightloop v1 API", () => {
         values (
           $1::uuid,
           $2::uuid,
-          'provider:foursquare',
+          'manual',
           'verified_hours',
           'America/Los_Angeles',
           $3::jsonb,
@@ -230,7 +230,13 @@ describe("Nightloop v1 API", () => {
   });
 
   afterAll(async () => {
+    await pool.query("delete from events where metadata->>'test_run_id' = $1", [testRunId]);
     await pool.query("delete from venue_schedules where metadata->>'test_run_id' = $1", [testRunId]);
+    await pool.query(
+      "delete from venue_recommendation_inputs where venue_id in (select id from venues where metadata->>'test_run_id' = $1)",
+      [testRunId]
+    );
+    await pool.query("delete from venues where metadata->>'test_run_id' = $1", [testRunId]);
 
     if (authUserIds.length > 0) {
       await pool.query(
@@ -473,6 +479,66 @@ describe("Nightloop v1 API", () => {
       })
     );
     expect(response.body.counts.all).toBeGreaterThan(0);
+  });
+
+  it("excludes fixture and test-source venues from public venue and recommendation APIs", async () => {
+    const user = await createTestUser();
+    await attestEligible(user);
+    const marketId = await getSfMarketId();
+    const fixtureName = `Phase 58 Fixture ${testRunId.slice(0, 8)}`;
+
+    await pool.query(
+      `
+        insert into venues (
+          slug,
+          name,
+          city,
+          state,
+          country_code,
+          latitude,
+          longitude,
+          source,
+          metadata,
+          market_id,
+          canonical_type,
+          is_active,
+          admin_status
+        )
+        values (
+          $1,
+          $2,
+          'San Francisco',
+          'CA',
+          'US',
+          37.775,
+          -122.4183,
+          'phase2-test',
+          $3::jsonb,
+          $4::uuid,
+          'club',
+          true,
+          'approved'
+        )
+      `,
+      [
+        `phase58-fixture-${testRunId}`,
+        fixtureName,
+        JSON.stringify({ test_run_id: testRunId, neighborhood: "SoMa", fixture: true }),
+        marketId
+      ]
+    );
+
+    const venueSearch = await request(app)
+      .get(`/api/v1/venues?market_id=${marketId}&q=${encodeURIComponent(fixtureName)}&limit=10`)
+      .set("Authorization", `Bearer ${user.token}`)
+      .expect(200);
+    expect(JSON.stringify(venueSearch.body)).not.toContain(fixtureName);
+
+    const recommendations = await request(app)
+      .get(`/api/v1/recommendations?market_id=${marketId}&limit=60`)
+      .set("Authorization", `Bearer ${user.token}`)
+      .expect(200);
+    expect(JSON.stringify(recommendations.body)).not.toContain(fixtureName);
   });
 
   it("stores user signals with design-default points and a server-side expiry", async () => {

@@ -31,7 +31,7 @@ export type AdminActor = {
 
 type ProviderRunRow = {
   id: string;
-  provider: "foursquare" | "google_places" | "resident_advisor" | "manual" | "datasf_poe";
+  provider: "foursquare" | "google_places" | "resident_advisor" | "manual" | "datasf_poe" | "eventbrite" | "venue_website";
   market_id: string;
   status: "pending" | "running" | "completed" | "failed" | "blocked";
   mode: "fixture" | "dry_run" | "live";
@@ -2304,7 +2304,7 @@ export async function importEvents(input: {
     title: string;
     startsAt: string;
     endsAt?: string | null;
-    source: "manual" | "foursquare" | "google_places" | "resident_advisor";
+    source: "manual" | "foursquare" | "google_places" | "resident_advisor" | "eventbrite" | "venue_website";
     sourceEventId?: string | null;
     url?: string | null;
     isApproved: boolean;

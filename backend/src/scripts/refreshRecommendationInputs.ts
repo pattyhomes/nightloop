@@ -1,6 +1,7 @@
 import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, getDBClient } from "../lib/db";
+import { PUBLIC_VENUE_SQL } from "../services/v1/recommendationTrust";
 
 type Args = {
   market: string;
@@ -51,6 +52,7 @@ function sourceQuality(row: VenueInputRow): number {
   if (metadata.google_place_id) score += 0.12;
   if (metadata.datasf_poe_record_id) score += 0.08;
   if (metadata.foursquare_id) score += 0.05;
+  if (numberFromMetadata(metadata.foursquare_popularity) != null) score += Math.min(0.08, Number(metadata.foursquare_popularity) * 0.08);
   if (Number(row.provider_count) >= 2) score += 0.08;
   if (Number(row.approved_asset_count) > 0) score += 0.04;
   if (["club", "lounge", "live_music", "karaoke", "bar"].includes(type)) score += 0.04;
@@ -63,7 +65,7 @@ function sourceConfidence(row: VenueInputRow): number {
   if (row.source?.startsWith("curated:")) score += 0.14;
   if (metadata.google_place_id || row.schedule_source === "provider:google_places") score += 0.20;
   if (metadata.datasf_poe_record_id) score += 0.12;
-  if (metadata.foursquare_id) score += 0.08;
+  if (metadata.foursquare_id || row.schedule_source === "provider:foursquare") score += 0.08;
   if (Number(row.provider_count) >= 2) score += 0.10;
   return clamp(score);
 }
@@ -156,20 +158,35 @@ async function loadRows(marketId: string, limit: number): Promise<VenueInputRow[
         FROM events e
         WHERE e.venue_id = v.id
           AND e.is_approved = true
-          AND e.starts_at >= NOW() - INTERVAL '6 hours'
+          AND e.starts_at <= NOW() + INTERVAL '18 hours'
+          AND COALESCE(e.ends_at, e.starts_at + INTERVAL '4 hours') >= NOW() - INTERVAL '6 hours'
       ) event_pack ON true
       LEFT JOIN LATERAL (
-        SELECT status, source, confidence
+        SELECT
+          CASE
+            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            ELSE vs.status
+          END AS status,
+          vs.source,
+          vs.confidence
         FROM venue_schedules vs
         WHERE vs.venue_id = v.id
         ORDER BY
-          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          CASE
+            WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.status = 'temporarily_closed' THEN 3
+            WHEN vs.status = 'manual_hold' THEN 4
+            ELSE 5
+          END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
       ORDER BY v.name ASC
       LIMIT CASE WHEN $2::int > 0 THEN $2::int ELSE 100000 END
     `,

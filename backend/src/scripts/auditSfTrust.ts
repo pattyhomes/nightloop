@@ -1,6 +1,7 @@
 import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, getDBClient } from "../lib/db";
+import { PUBLIC_VENUE_SQL } from "../services/v1/recommendationTrust";
 
 type Args = {
   json: boolean;
@@ -68,6 +69,7 @@ async function loadAudit(args: Args) {
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
       GROUP BY 1, 2, 3
       ORDER BY COUNT(*) DESC, 1 ASC, 2 ASC
     `,
@@ -83,10 +85,11 @@ async function loadAudit(args: Args) {
   }>(
     `
       SELECT id, name, COALESCE(metadata->>'neighborhood', metadata->>'district') AS neighborhood, source, metadata
-      FROM venues
-      WHERE market_id = $1::uuid
-        AND is_active = true
-        AND admin_status = 'approved'
+      FROM venues v
+      WHERE v.market_id = $1::uuid
+        AND v.is_active = true
+        AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
         AND (
           COALESCE(metadata->>'neighborhood', metadata->>'district') IS NULL
           OR COALESCE(metadata->>'neighborhood', metadata->>'district') IN ('', 'Unknown', 'SOMA')
@@ -116,22 +119,25 @@ async function loadAudit(args: Args) {
     status: string | null;
     source: string | null;
     fresh: string;
+    expired: string;
     stale_or_unknown: string;
     count: string;
   }>(
     `
       WITH approved AS (
         SELECT id
-        FROM venues
-        WHERE market_id = $1::uuid
-          AND is_active = true
-          AND admin_status = 'approved'
+        FROM venues v
+        WHERE v.market_id = $1::uuid
+          AND v.is_active = true
+          AND v.admin_status = 'approved'
+          ${PUBLIC_VENUE_SQL}
       ),
       latest AS (
         SELECT DISTINCT ON (vs.venue_id)
           vs.venue_id,
           vs.status,
           vs.source,
+          vs.expires_at,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) AS checked_at
         FROM venue_schedules vs
         JOIN approved a ON a.id = vs.venue_id
@@ -143,6 +149,7 @@ async function loadAudit(args: Args) {
         COALESCE(latest.status, 'missing') AS status,
         COALESCE(latest.source, 'missing') AS source,
         COUNT(*) FILTER (WHERE latest.checked_at >= NOW() - INTERVAL '30 days')::text AS fresh,
+        COUNT(*) FILTER (WHERE latest.expires_at IS NOT NULL AND latest.expires_at <= NOW())::text AS expired,
         COUNT(*) FILTER (WHERE latest.checked_at IS NULL OR latest.checked_at < NOW() - INTERVAL '30 days')::text AS stale_or_unknown,
         COUNT(*)::text AS count
       FROM approved a
@@ -170,6 +177,7 @@ async function loadAudit(args: Args) {
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
     `,
     [marketId]
   );
@@ -221,6 +229,7 @@ async function loadAudit(args: Args) {
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
       ORDER BY COALESCE(vri.baseline_score, 0) DESC, COALESCE(vri.venue_quality_score, 0) DESC, v.name ASC
       LIMIT $2
     `,
@@ -280,6 +289,7 @@ async function loadAudit(args: Args) {
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
         AND COALESCE(vr.live_signals, 0) > 0
       ORDER BY
         CASE
@@ -291,6 +301,82 @@ async function loadAudit(args: Args) {
         COALESCE(vr.live_signals, 0) DESC,
         v.name ASC
       LIMIT 100
+    `,
+    [marketId]
+  );
+
+  const fixtureDetection = await dbQuery<{ count: string; examples: string[] }>(
+    `
+      SELECT
+        COUNT(*)::text AS count,
+        COALESCE(array_agg(name ORDER BY name) FILTER (WHERE name IS NOT NULL), ARRAY[]::text[]) AS examples
+      FROM venues
+      WHERE market_id = $1::uuid
+        AND is_active = true
+        AND admin_status = 'approved'
+        AND (
+          COALESCE(source, '') = 'phase2-test'
+          OR COALESCE(metadata->>'fixture', 'false') = 'true'
+          OR COALESCE(metadata->>'test_run_id', '') <> ''
+          OR name ILIKE 'Phase 2 %'
+        )
+    `,
+    [marketId]
+  );
+
+  const fsqCoverage = await dbQuery<{
+    with_foursquare_id: string;
+    with_foursquare_schedule: string;
+    with_popularity: string;
+  }>(
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE v.metadata->>'foursquare_id' IS NOT NULL)::text AS with_foursquare_id,
+        COUNT(*) FILTER (WHERE fsq_schedule.venue_id IS NOT NULL)::text AS with_foursquare_schedule,
+        COUNT(*) FILTER (
+          WHERE v.metadata->>'foursquare_popularity' IS NOT NULL
+             OR fsq_schedule.metadata->>'popularity' IS NOT NULL
+        )::text AS with_popularity
+      FROM venues v
+      LEFT JOIN LATERAL (
+        SELECT venue_id, metadata
+        FROM venue_schedules vs
+        WHERE vs.venue_id = v.id
+          AND vs.source = 'provider:foursquare'
+        ORDER BY COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
+        LIMIT 1
+      ) fsq_schedule ON true
+      WHERE v.market_id = $1::uuid
+        AND v.is_active = true
+        AND v.admin_status = 'approved'
+        ${PUBLIC_VENUE_SQL}
+    `,
+    [marketId]
+  );
+
+  const eventCoverage = await dbQuery<{
+    configured_sources: string;
+    trusted_sources: string;
+    approved_future_events: string;
+    review_future_events: string;
+  }>(
+    `
+      WITH public_venues AS (
+        SELECT v.id
+        FROM venues v
+        WHERE v.market_id = $1::uuid
+          AND v.is_active = true
+          AND v.admin_status = 'approved'
+          ${PUBLIC_VENUE_SQL}
+      )
+      SELECT
+        COUNT(DISTINCT ves.id)::text AS configured_sources,
+        COUNT(DISTINCT ves.id) FILTER (WHERE ves.trust_status = 'trusted')::text AS trusted_sources,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.is_approved = true AND e.starts_at >= NOW() - INTERVAL '6 hours')::text AS approved_future_events,
+        COUNT(DISTINCT e.id) FILTER (WHERE e.is_approved = false AND e.starts_at >= NOW() - INTERVAL '6 hours')::text AS review_future_events
+      FROM public_venues pv
+      LEFT JOIN venue_event_sources ves ON ves.venue_id = pv.id
+      LEFT JOIN events e ON e.venue_id = pv.id
     `,
     [marketId]
   );
@@ -321,6 +407,7 @@ async function loadAudit(args: Args) {
       status: row.status ?? "missing",
       source: row.source ?? "missing",
       fresh: Number(row.fresh),
+      expired: Number(row.expired),
       stale_or_unknown: Number(row.stale_or_unknown),
       count: Number(row.count)
     })),
@@ -342,6 +429,33 @@ async function loadAudit(args: Args) {
       live_signals: Number(row.live_signals),
       unique_users: Number(row.unique_users)
     })),
+    recommendation_top_20_diversity: {
+      neighborhoods: topRecommendations.rows.slice(0, 20).reduce<Record<string, number>>((acc, row) => {
+        const key = normalizedNeighborhood(row.neighborhood);
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {}),
+      categories: topRecommendations.rows.slice(0, 20).reduce<Record<string, number>>((acc, row) => {
+        const key = row.category ?? "unknown";
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {})
+    },
+    fixture_detection: {
+      count: Number(fixtureDetection.rows[0]?.count ?? 0),
+      examples: (fixtureDetection.rows[0]?.examples ?? []).slice(0, 20)
+    },
+    foursquare_coverage: {
+      with_foursquare_id: Number(fsqCoverage.rows[0]?.with_foursquare_id ?? 0),
+      with_foursquare_schedule: Number(fsqCoverage.rows[0]?.with_foursquare_schedule ?? 0),
+      with_popularity: Number(fsqCoverage.rows[0]?.with_popularity ?? 0)
+    },
+    event_coverage: {
+      configured_sources: Number(eventCoverage.rows[0]?.configured_sources ?? 0),
+      trusted_sources: Number(eventCoverage.rows[0]?.trusted_sources ?? 0),
+      approved_future_events: Number(eventCoverage.rows[0]?.approved_future_events ?? 0),
+      review_future_events: Number(eventCoverage.rows[0]?.review_future_events ?? 0)
+    },
     signal_integrity: signalIntegrity.rows.map((row) => ({
       ...row,
       live_signals: Number(row.live_signals),
@@ -376,6 +490,18 @@ function printAudit(audit: Awaited<ReturnType<typeof loadAudit>>): void {
 
   console.log("\nRecommendation top-N factor audit");
   console.table(audit.recommendation_top_n);
+
+  console.log("\nFixture/test venue detection");
+  console.table([audit.fixture_detection]);
+
+  console.log("\nFoursquare coverage");
+  console.table([audit.foursquare_coverage]);
+
+  console.log("\nEvent coverage");
+  console.table([audit.event_coverage]);
+
+  console.log("\nTop-20 diversity");
+  console.log(JSON.stringify(audit.recommendation_top_20_diversity, null, 2));
 
   console.log("\nSignal integrity");
   console.table(audit.signal_integrity);

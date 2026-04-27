@@ -112,7 +112,7 @@ const EventImportSchema = z
             title: z.string().trim().min(1).max(120),
             starts_at: z.string().datetime(),
             ends_at: z.string().datetime().nullable().optional(),
-            source: z.enum(["manual", "foursquare", "google_places", "resident_advisor"]).default("manual"),
+            source: z.enum(["manual", "foursquare", "google_places", "resident_advisor", "eventbrite", "venue_website"]).default("manual"),
             source_event_id: z.string().trim().min(1).max(160).nullable().optional(),
             url: z.string().url().nullable().optional(),
             is_approved: z.boolean().default(false),

@@ -38,7 +38,13 @@ matches remain manual holds.
 
 ## Hours
 
-Do not broadly fetch Google `regularOpeningHours` yet. Phase 5.6 adds an hours
-model that can represent unknown, manual, provider-sourced, temporary closure,
-and confidence/freshness states. Unknown hours must never render as open or
-closed in the consumer app.
+Phase 5.8 enables broad, capped Google hours enrichment for approved SF venues.
+The backend requests `regularOpeningHours`, `currentOpeningHours`,
+`regularSecondaryOpeningHours`, `currentSecondaryOpeningHours`, `businessStatus`,
+`utcOffsetMinutes`, and `timeZone` from Place Details. Provider-derived rows are
+stored in `venue_schedules` with `source = provider:google_places`, provenance
+metadata, normalized periods, `fetched_at`, and a 30-day `expires_at` TTL.
+
+Google hours are source evidence, not nightlife ground truth. Event/admin hours
+take precedence, missing Google hours become explicit `unknown`, and unknown
+hours must never render as open, closed, or live in the consumer app.

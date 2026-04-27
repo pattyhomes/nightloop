@@ -218,7 +218,8 @@ final class NightloopTests: XCTestCase {
                   "rank": 1,
                   "score": 84.5,
                   "mode": "tonight_preview",
-                  "reason": "Source-backed SoMa nightlife for tonight.",
+                  "reason": "Expected tonight with a source-backed event, based on venue type and current timing.",
+                  "expected_pulse_basis": ["time_curve:saturday_late", "archetype:club", "event:tonight"],
                   "factors": {
                     "venue_quality": 85,
                     "preference_match": 40,
@@ -252,7 +253,8 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.items.first?.venue.hours?.claimsOpenNow, false)
         XCTAssertEqual(response.items.first?.venue.liveness?.state, .opensLater)
         XCTAssertEqual(response.items.first?.venue.liveness?.badgeTitle, "Opens 10:00 PM")
-        XCTAssertEqual(response.items.first?.reason, "Source-backed SoMa nightlife for tonight.")
+        XCTAssertEqual(response.items.first?.reason, "Expected tonight with a source-backed event, based on venue type and current timing.")
+        XCTAssertEqual(response.items.first?.expectedPulseBasis, ["time_curve:saturday_late", "archetype:club", "event:tonight"])
     }
 
     func testSignalRequestIncludesVerificationLocation() async throws {
