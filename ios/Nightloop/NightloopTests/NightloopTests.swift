@@ -1,4 +1,5 @@
 import XCTest
+import MapboxMaps
 @testable import Nightloop
 
 final class NightloopTests: XCTestCase {
@@ -267,6 +268,7 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(layout.toastBottomPadding, 410)
         XCTAssertEqual(layout.fabBottomPadding, 358)
         XCTAssertEqual(layout.signalMenuBottomPadding, 426)
+        XCTAssertEqual(layout.ornamentBottomMargin, 404)
     }
 
     func testMapZoomControlClampsZoom() {
@@ -288,6 +290,30 @@ final class NightloopTests: XCTestCase {
             market: nil
         ))
         XCTAssertTrue(MapStyleResolver.shouldFallbackToDark(configured: "paste_style_here", market: nil))
+    }
+
+    func testMapOrnamentsHideScaleBarAndKeepAttributionAnchors() {
+        let options = NightloopMapOrnaments.options
+
+        XCTAssertEqual(options.scaleBar.visibility, .hidden)
+        XCTAssertEqual(options.logo.position, .bottomLeading)
+        XCTAssertEqual(options.attributionButton.position, .bottomTrailing)
+    }
+
+    func testMapSettingsHideNeighborhoodLabelsControl() {
+        XCTAssertFalse(MapSettingsOption.visible.contains(.neighborhoodLabels))
+        XCTAssertEqual(MapSettingsOption.visible, [.streetGrid])
+    }
+
+    func testMarkerVisualsDeclutterNonSelectedLowEnergyMarkers() {
+        let chill = MapMarkerVisuals.style(score: 28, isSelected: false)
+        let packed = MapMarkerVisuals.style(score: 92, isSelected: false)
+        let selected = MapMarkerVisuals.style(score: 28, isSelected: true)
+
+        XCTAssertLessThan(chill.haloSize, packed.haloSize)
+        XCTAssertLessThan(chill.haloOpacity, packed.haloOpacity)
+        XCTAssertGreaterThan(selected.haloSize, packed.haloSize)
+        XCTAssertGreaterThan(selected.glowRadius, packed.glowRadius)
     }
 
     func testSignalKindRawValuesMatchBackend() {

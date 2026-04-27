@@ -31,6 +31,10 @@ neighborhood readability for Nightloop's own labels and markers to dominate.
   silently replace the configured style.
 - The map sheet has three snap points: peek for mostly full-screen map, half for
   the default selected-venue browse state, and full for list-focused browsing.
+- The Studio style owns neighborhood/place labels; iOS does not draw duplicate
+  neighborhood capsules on top of the basemap.
+- The Mapbox scale bar is hidden. Logo and attribution remain anchored above
+  the active sheet where practical.
 - Compact `+ / -` zoom controls are visible for simulator testing and
   accessibility. Reevaluate whether they stay visible, become accessibility-only,
   or move behind debug tooling before TestFlight/App Store hardening.

@@ -81,7 +81,7 @@ struct MapShellView: View {
             let overlayLayout = MapOverlayLayout(sheetHeight: sheetHeight)
 
             ZStack(alignment: .bottom) {
-                mapView
+                mapView(ornamentBottomMargin: overlayLayout.ornamentBottomMargin)
                     .ignoresSafeArea()
 
                 VStack(spacing: 12) {
@@ -90,7 +90,7 @@ struct MapShellView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, max(proxy.safeAreaInsets.top + 6, 18))
+                .padding(.top, max(proxy.safeAreaInsets.top + 2, 12))
 
                 zoomControls
                     .padding(.top, max(proxy.safeAreaInsets.top + 112, 128))
@@ -146,7 +146,7 @@ struct MapShellView: View {
         }
     }
 
-    private var mapView: some View {
+    private func mapView(ornamentBottomMargin: CGFloat) -> some View {
         Map(viewport: $viewport) {
             ForEvery(markers) { marker in
                 MapViewAnnotation(coordinate: marker.coordinate) {
@@ -160,24 +160,9 @@ struct MapShellView: View {
                 .allowOverlap(true)
                 .allowZElevate(true)
             }
-
-            if me.settings?.mapShowNeighborhoodLabels ?? true {
-                ForEvery(marketConfig?.neighborhoods.filter { $0.labelCoordinate != nil } ?? []) { neighborhood in
-                    if let coordinate = neighborhood.labelCoordinate {
-                        MapViewAnnotation(
-                            coordinate: CLLocationCoordinate2D(
-                                latitude: coordinate.latitude,
-                                longitude: coordinate.longitude
-                            )
-                        ) {
-                            NeighborhoodMapLabel(title: neighborhood.displayName)
-                        }
-                        .allowOverlap(false)
-                    }
-                }
-            }
         }
         .mapStyle(mapStyle)
+        .ornamentOptions(NightloopMapOrnaments.options(bottomMargin: ornamentBottomMargin))
         .onStyleLoaded { _ in
             // Style loaded. Nonfatal tile/glyph/sprite events should not force
             // Nightloop away from the configured Studio style.
@@ -592,41 +577,26 @@ private struct MapPulseMarker: View {
 
     var body: some View {
         Button(action: action) {
+            let visuals = MapMarkerVisuals.style(score: marker.score, isSelected: isSelected)
             ZStack {
                 Circle()
-                    .fill(marker.tone.color.opacity(isSelected ? 0.24 : 0.16))
-                    .frame(width: isSelected ? 52 : 36, height: isSelected ? 52 : 36)
+                    .fill(marker.tone.color.opacity(visuals.haloOpacity))
+                    .frame(width: visuals.haloSize, height: visuals.haloSize)
                     .blur(radius: 1)
                 Circle()
-                    .fill(marker.tone.color.opacity(0.24))
-                    .frame(width: isSelected ? 34 : 24, height: isSelected ? 34 : 24)
+                    .fill(marker.tone.color.opacity(visuals.middleOpacity))
+                    .frame(width: visuals.middleSize, height: visuals.middleSize)
                 Circle()
                     .fill(marker.tone.color)
-                    .frame(width: isSelected ? 16 : 11, height: isSelected ? 16 : 11)
+                    .frame(width: visuals.dotSize, height: visuals.dotSize)
                     .overlay {
                         Circle().stroke(.white.opacity(0.85), lineWidth: isSelected ? 2 : 1.2)
                     }
-                    .shadow(color: marker.tone.color.opacity(0.9), radius: isSelected ? 18 : 12)
+                    .shadow(color: marker.tone.color.opacity(0.85), radius: visuals.glowRadius)
             }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(marker.venue.name), \(marker.venue.pulse.label)")
-    }
-}
-
-private struct NeighborhoodMapLabel: View {
-    let title: String
-
-    var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 9, weight: .black))
-            .tracking(1.3)
-            .foregroundStyle(NightloopTheme.inkMuted)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(NightloopTheme.background.opacity(0.48))
-            .clipShape(Capsule())
-            .overlay { Capsule().stroke(NightloopTheme.hairlineSoft) }
     }
 }
 
@@ -844,34 +814,55 @@ private struct LocationPromptCard: View {
     let dismiss: () -> Void
 
     var body: some View {
-        NightloopCard(padding: 14, radius: 18, fill: NightloopTheme.surface.opacity(0.94)) {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Sort nearby spots?", systemImage: "location.circle.fill")
-                    .font(.headline.weight(.black))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.good)
+                    .frame(width: 22, height: 22)
+                    .background(NightloopTheme.good.opacity(0.12))
+                    .clipShape(Circle())
+                Text("Sort by nearby")
+                    .font(.caption.weight(.black))
+                    .tracking(0.4)
                     .foregroundStyle(NightloopTheme.ink)
-                Text(errorMessage ?? "Share location while the app is open to sort the map by distance. Nightloop does not store your precise location.")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(NightloopTheme.inkMuted)
-                HStack {
-                    Button("Not now", action: dismiss)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(NightloopTheme.inkMuted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.white.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Spacer()
+            }
 
-                    Button("Share location", action: share)
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(isDenied ? Color.white.opacity(0.08) : NightloopTheme.purple)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .disabled(isDenied)
+            Text(errorMessage ?? "Use location while the app is open. Precise location is only sent for this venue search and is not stored.")
+                .font(.caption2.weight(.semibold))
+                .lineSpacing(2)
+                .foregroundStyle(NightloopTheme.inkMuted)
+
+            HStack(spacing: 8) {
+                Button("Not now", action: dismiss)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                Button(isDenied ? "Unavailable" : "Share") {
+                    share()
                 }
+                .font(.caption.weight(.black))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(isDenied ? Color.white.opacity(0.08) : NightloopTheme.purple)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .disabled(isDenied)
             }
         }
+        .padding(12)
+        .background(NightloopTheme.surface.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 8)
     }
 }
 

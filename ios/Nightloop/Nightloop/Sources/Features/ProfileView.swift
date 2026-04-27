@@ -481,11 +481,25 @@ private struct MapSettingsView: View {
 
     var body: some View {
         SettingsSubpage(title: "Map", statusMessage: statusMessage) {
-            AutoSavingToggle(title: "Neighborhood labels", subtitle: "Show market neighborhood names on the map.", isOn: settings.mapShowNeighborhoodLabels) { value in
-                await update(settings.with(mapShowNeighborhoodLabels: value))
-            }
-            AutoSavingToggle(title: "Street grid", subtitle: "Show street grid detail when the map phase lands.", isOn: settings.mapShowStreetGrid) { value in
-                await update(settings.with(mapShowStreetGrid: value))
+            ForEach(MapSettingsOption.visible, id: \.self) { option in
+                switch option {
+                case .neighborhoodLabels:
+                    AutoSavingToggle(
+                        title: option.title,
+                        subtitle: option.subtitle,
+                        isOn: settings.mapShowNeighborhoodLabels
+                    ) { value in
+                        await update(settings.with(mapShowNeighborhoodLabels: value))
+                    }
+                case .streetGrid:
+                    AutoSavingToggle(
+                        title: option.title,
+                        subtitle: option.subtitle,
+                        isOn: settings.mapShowStreetGrid
+                    ) { value in
+                        await update(settings.with(mapShowStreetGrid: value))
+                    }
+                }
             }
         }
     }
@@ -493,6 +507,29 @@ private struct MapSettingsView: View {
     private func update(_ updated: UserSettings) async {
         settings = updated
         _ = await saveSettings(updated)
+    }
+}
+
+enum MapSettingsOption: Equatable, Hashable {
+    case neighborhoodLabels
+    case streetGrid
+
+    static let visible: [MapSettingsOption] = [.streetGrid]
+
+    var title: String {
+        switch self {
+        case .neighborhoodLabels: return "Neighborhood labels"
+        case .streetGrid: return "Street grid"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .neighborhoodLabels:
+            return "Show market neighborhood names on the map."
+        case .streetGrid:
+            return "Show street grid detail on the map."
+        }
     }
 }
 

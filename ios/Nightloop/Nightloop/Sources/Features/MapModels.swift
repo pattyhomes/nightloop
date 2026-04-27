@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import MapboxMaps
 import SwiftUI
 
 enum MapPulseFilter: String, CaseIterable, Equatable, Identifiable {
@@ -83,6 +84,74 @@ struct VenueMapMarker: Identifiable, Equatable {
     }
 }
 
+struct MapMarkerVisuals: Equatable {
+    let haloSize: CGFloat
+    let middleSize: CGFloat
+    let dotSize: CGFloat
+    let haloOpacity: Double
+    let middleOpacity: Double
+    let glowRadius: CGFloat
+
+    static func style(score: Int, isSelected: Bool) -> MapMarkerVisuals {
+        if isSelected {
+            return MapMarkerVisuals(
+                haloSize: 54,
+                middleSize: 34,
+                dotSize: 16,
+                haloOpacity: 0.24,
+                middleOpacity: 0.24,
+                glowRadius: 18
+            )
+        }
+
+        if score >= 67 {
+            return MapMarkerVisuals(
+                haloSize: 40,
+                middleSize: 25,
+                dotSize: 12,
+                haloOpacity: 0.18,
+                middleOpacity: 0.22,
+                glowRadius: 13
+            )
+        }
+
+        if score >= 34 {
+            return MapMarkerVisuals(
+                haloSize: 30,
+                middleSize: 20,
+                dotSize: 9,
+                haloOpacity: 0.1,
+                middleOpacity: 0.15,
+                glowRadius: 8
+            )
+        }
+
+        return MapMarkerVisuals(
+            haloSize: 24,
+            middleSize: 16,
+            dotSize: 7,
+            haloOpacity: 0.07,
+            middleOpacity: 0.12,
+            glowRadius: 6
+        )
+    }
+}
+
+enum NightloopMapOrnaments {
+    static var options: OrnamentOptions {
+        options(bottomMargin: 98)
+    }
+
+    static func options(bottomMargin: CGFloat) -> OrnamentOptions {
+        OrnamentOptions(
+            scaleBar: ScaleBarViewOptions(visibility: .hidden),
+            compass: CompassViewOptions(visibility: .adaptive),
+            logo: LogoViewOptions(position: .bottomLeading, margins: CGPoint(x: 10, y: bottomMargin)),
+            attributionButton: AttributionButtonOptions(position: .bottomTrailing, margins: CGPoint(x: 10, y: bottomMargin))
+        )
+    }
+}
+
 struct MapVenueFilter {
     static func selectedVenueID(current: String?, venues: [VenueItem]) -> String? {
         if let current, venues.contains(where: { $0.id == current }) {
@@ -142,6 +211,10 @@ struct MapOverlayLayout {
 
     var signalMenuBottomPadding: CGFloat {
         sheetHeight + 34
+    }
+
+    var ornamentBottomMargin: CGFloat {
+        sheetHeight + 12
     }
 }
 
