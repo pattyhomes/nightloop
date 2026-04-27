@@ -1,6 +1,5 @@
 import CoreLocation
 import Foundation
-import MapboxMaps
 import SwiftUI
 import UIKit
 
@@ -75,6 +74,18 @@ struct VenueMapMarker: Identifiable, Equatable {
         }
     }
 
+    static func visibleMarkers(from venues: [VenueItem], selectedVenueID: String?, limit: Int = 72) -> [VenueMapMarker] {
+        let sorted = venues.sorted { lhs, rhs in
+            if lhs.id == selectedVenueID { return true }
+            if rhs.id == selectedVenueID { return false }
+            if lhs.pulse.score == rhs.pulse.score {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhs.pulse.score > rhs.pulse.score
+        }
+        return markers(from: Array(sorted.prefix(limit)))
+    }
+
     static func == (lhs: VenueMapMarker, rhs: VenueMapMarker) -> Bool {
         lhs.id == rhs.id &&
             lhs.venue == rhs.venue &&
@@ -138,22 +149,26 @@ struct MapMarkerVisuals: Equatable {
     }
 }
 
-enum NightloopMapOrnaments {
-    static var options: OrnamentOptions {
-        options(bottomMargin: 98)
-    }
+struct GoogleMapCamera: Equatable {
+    var center: CLLocationCoordinate2D
+    var zoom: Double
 
-    static func options(bottomMargin: CGFloat) -> OrnamentOptions {
-        OrnamentOptions(
-            scaleBar: ScaleBarViewOptions(visibility: .hidden),
-            compass: CompassViewOptions(visibility: .adaptive),
-            logo: LogoViewOptions(position: .bottomLeading, margins: CGPoint(x: 10, y: bottomMargin)),
-            attributionButton: AttributionButtonOptions(
-                position: .bottomLeading,
-                margins: CGPoint(x: 96, y: bottomMargin),
-                tintColor: UIColor.white.withAlphaComponent(0.62)
-            )
-        )
+    static let sanFrancisco = GoogleMapCamera(
+        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
+        zoom: 12.2
+    )
+
+    static func == (lhs: GoogleMapCamera, rhs: GoogleMapCamera) -> Bool {
+        abs(lhs.center.latitude - rhs.center.latitude) < 0.000001 &&
+            abs(lhs.center.longitude - rhs.center.longitude) < 0.000001 &&
+            abs(lhs.zoom - rhs.zoom) < 0.001
+    }
+}
+
+enum GoogleMapConfigState {
+    static func isConfigured(apiKey: String?) -> Bool {
+        guard let apiKey else { return false }
+        return !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -164,6 +179,12 @@ enum MapChromeLayout {
 
     static func zoomTopPadding(safeAreaTop: CGFloat) -> CGFloat {
         max(112, safeAreaTop + 48)
+    }
+}
+
+enum GoogleMapPadding {
+    static func edgeInsets(bottomSheetHeight: CGFloat) -> UIEdgeInsets {
+        UIEdgeInsets(top: 94, left: 10, bottom: bottomSheetHeight + 18, right: 12)
     }
 }
 
@@ -259,10 +280,6 @@ struct MapOverlayLayout {
     var signalMenuBottomPadding: CGFloat {
         sheetHeight + 34
     }
-
-    var ornamentBottomMargin: CGFloat {
-        sheetHeight + 12
-    }
 }
 
 enum MapZoomControl {
@@ -271,31 +288,5 @@ enum MapZoomControl {
 
     static func nextZoom(current: Double, delta: Double) -> Double {
         min(maximumZoom, max(minimumZoom, current + delta))
-    }
-}
-
-enum MapStyleResolver {
-    static func preferredURI(configured: String?, market: String?) -> String? {
-        if let configured = usableStyleURI(configured) {
-            return configured
-        }
-        return usableStyleURI(market)
-    }
-
-    static func shouldFallbackToDark(configured: String?, market: String?) -> Bool {
-        preferredURI(configured: configured, market: market) == nil
-    }
-
-    private static func usableStyleURI(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
-            return nil
-        }
-        guard !trimmed.contains("$("), !trimmed.localizedCaseInsensitiveContains("paste_") else {
-            return nil
-        }
-        guard trimmed.hasPrefix("mapbox://") else {
-            return nil
-        }
-        return trimmed
     }
 }

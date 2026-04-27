@@ -1,5 +1,5 @@
 import CoreLocation
-import MapboxMaps
+import GoogleMaps
 import SwiftUI
 
 struct MapShellView: View {
@@ -16,7 +16,7 @@ struct MapShellView: View {
     @State private var counts: VenueCounts?
     @State private var selectedPulse: MapPulseFilter = .all
     @State private var selectedVenueID: String?
-    @State private var viewport: Viewport = .camera(center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), zoom: 12.2)
+    @State private var camera: GoogleMapCamera = .sanFrancisco
     @State private var errorMessage: String?
     @State private var signalMessage: String?
     @State private var isLoading = true
@@ -33,30 +33,19 @@ struct MapShellView: View {
     }
 
     private var markers: [VenueMapMarker] {
-        VenueMapMarker.markers(from: venues)
+        VenueMapMarker.visibleMarkers(from: venues, selectedVenueID: selectedVenueID)
     }
 
     private var rankedVenues: [VenueItem] {
         MapVenueFilter.rankedVenues(from: venues)
     }
 
-    private var mapStyle: MapStyle {
-        let configuredURI = MapStyleResolver.preferredURI(
-            configured: authStore.config.mapboxStyleURI,
-            market: marketConfig?.market.mapboxStyleUri
-        )
-        if let configuredURI, let uri = StyleURI(rawValue: configuredURI) {
-            return MapStyle(uri: uri)
-        }
-        return .dark
-    }
-
     var body: some View {
         ZStack {
-            if authStore.config.isMapboxConfigured {
+            if authStore.config.isGoogleMapsConfigured {
                 mapContent
             } else {
-                MissingMapboxConfigView()
+                MissingGoogleMapsConfigView()
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -81,8 +70,8 @@ struct MapShellView: View {
             let overlayLayout = MapOverlayLayout(sheetHeight: sheetHeight)
 
             ZStack(alignment: .bottom) {
-                mapView(ornamentBottomMargin: overlayLayout.ornamentBottomMargin)
-                    .ignoresSafeArea()
+                mapView(bottomSheetHeight: sheetHeight)
+                    .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 12) {
                     mapHeader
@@ -146,30 +135,16 @@ struct MapShellView: View {
         }
     }
 
-    private func mapView(ornamentBottomMargin: CGFloat) -> some View {
-        Map(viewport: $viewport) {
-            ForEvery(markers) { marker in
-                MapViewAnnotation(coordinate: marker.coordinate) {
-                    MapPulseMarker(
-                        marker: marker,
-                        isSelected: marker.id == selectedVenueID
-                    ) {
-                        select(marker.venue)
-                    }
-                }
-                .allowOverlap(true)
-                .allowZElevate(true)
-            }
-        }
-        .mapStyle(mapStyle)
-        .ornamentOptions(NightloopMapOrnaments.options(bottomMargin: ornamentBottomMargin))
-        .onStyleLoaded { _ in
-            // Style loaded. Nonfatal tile/glyph/sprite events should not force
-            // Nightloop away from the configured Studio style.
-        }
-        .onCameraChanged { event in
-            rememberCameraState(event.cameraState)
-        }
+    private func mapView(bottomSheetHeight: CGFloat) -> some View {
+        GoogleNightloopMapView(
+            markers: markers,
+            selectedVenueID: selectedVenueID,
+            camera: $camera,
+            mapID: authStore.config.googleMapID,
+            bottomSheetHeight: bottomSheetHeight,
+            cameraDidIdle: rememberCameraState,
+            selectVenue: select
+        )
         .overlay {
             LinearGradient(
                 colors: [NightloopTheme.background.opacity(0.22), .clear, NightloopTheme.background.opacity(0.56)],
@@ -437,7 +412,7 @@ struct MapShellView: View {
     }
 
     private func load() async {
-        guard authStore.config.isMapboxConfigured else {
+        guard authStore.config.isGoogleMapsConfigured else {
             isLoading = false
             return
         }
@@ -505,11 +480,11 @@ struct MapShellView: View {
         withAnimation(.easeInOut(duration: 0.25)) {
             currentMapCenter = center
             currentMapZoom = zoom
-            viewport = .camera(center: center, zoom: zoom)
+            camera = GoogleMapCamera(center: center, zoom: zoom)
         }
     }
 
-    private func rememberCameraState(_ cameraState: CameraState) {
+    private func rememberCameraState(_ cameraState: GoogleMapCamera) {
         let center = cameraState.center
         let zoom = cameraState.zoom
         guard abs(zoom - currentMapZoom) > 0.05 ||
@@ -526,7 +501,7 @@ struct MapShellView: View {
         let nextZoom = MapZoomControl.nextZoom(current: currentMapZoom, delta: delta)
         currentMapZoom = nextZoom
         withAnimation(.easeInOut(duration: 0.2)) {
-            viewport = .camera(center: currentMapCenter, zoom: nextZoom)
+            camera = GoogleMapCamera(center: currentMapCenter, zoom: nextZoom)
         }
     }
 
@@ -606,33 +581,195 @@ struct MapShellView: View {
     }
 }
 
-private struct MapPulseMarker: View {
-    let marker: VenueMapMarker
-    let isSelected: Bool
-    let action: () -> Void
+private struct GoogleNightloopMapView: UIViewRepresentable {
+    let markers: [VenueMapMarker]
+    let selectedVenueID: String?
+    @Binding var camera: GoogleMapCamera
+    let mapID: String?
+    let bottomSheetHeight: CGFloat
+    let cameraDidIdle: (GoogleMapCamera) -> Void
+    let selectVenue: (VenueItem) -> Void
 
-    var body: some View {
-        Button(action: action) {
-            let visuals = MapMarkerVisuals.style(score: marker.score, isSelected: isSelected)
-            ZStack {
-                Circle()
-                    .fill(marker.tone.color.opacity(visuals.haloOpacity))
-                    .frame(width: visuals.haloSize, height: visuals.haloSize)
-                    .blur(radius: 1)
-                Circle()
-                    .fill(marker.tone.color.opacity(visuals.middleOpacity))
-                    .frame(width: visuals.middleSize, height: visuals.middleSize)
-                Circle()
-                    .fill(marker.tone.color)
-                    .frame(width: visuals.dotSize, height: visuals.dotSize)
-                    .overlay {
-                        Circle().stroke(.white.opacity(0.85), lineWidth: isSelected ? 2 : 1.2)
-                    }
-                    .shadow(color: marker.tone.color.opacity(0.85), radius: visuals.glowRadius)
+    func makeCoordinator() -> Coordinator {
+        Coordinator(camera: $camera, cameraDidIdle: cameraDidIdle, selectVenue: selectVenue)
+    }
+
+    func makeUIView(context: Context) -> GMSMapView {
+        let options = GMSMapViewOptions()
+        options.camera = GMSCameraPosition(
+            latitude: camera.center.latitude,
+            longitude: camera.center.longitude,
+            zoom: Float(camera.zoom)
+        )
+        if GoogleMapStyleSource.shouldUseCloudMapID(
+            localStyleIsBundled: NightloopGoogleMapStyle.isBundled(),
+            configuredMapID: mapID
+        ), let mapID {
+            options.mapID = GMSMapID(identifier: mapID)
+        }
+
+        let mapView = GMSMapView(options: options)
+        mapView.delegate = context.coordinator
+        mapView.settings.compassButton = false
+        mapView.settings.myLocationButton = false
+        mapView.settings.rotateGestures = false
+        mapView.isBuildingsEnabled = false
+        context.coordinator.applyLocalStyle(to: mapView)
+        context.coordinator.applyPadding(bottomSheetHeight: bottomSheetHeight, to: mapView)
+        context.coordinator.appliedCamera = camera
+        context.coordinator.syncMarkers(markers, selectedVenueID: selectedVenueID, on: mapView)
+        return mapView
+    }
+
+    func updateUIView(_ mapView: GMSMapView, context: Context) {
+        context.coordinator.cameraDidIdle = cameraDidIdle
+        context.coordinator.selectVenue = selectVenue
+        context.coordinator.applyPadding(bottomSheetHeight: bottomSheetHeight, to: mapView)
+        if context.coordinator.appliedCamera != camera {
+            context.coordinator.appliedCamera = camera
+            mapView.animate(to: GMSCameraPosition(
+                latitude: camera.center.latitude,
+                longitude: camera.center.longitude,
+                zoom: Float(camera.zoom)
+            ))
+        }
+        context.coordinator.syncMarkers(markers, selectedVenueID: selectedVenueID, on: mapView)
+    }
+
+    final class Coordinator: NSObject, GMSMapViewDelegate {
+        @Binding var camera: GoogleMapCamera
+        var cameraDidIdle: (GoogleMapCamera) -> Void
+        var selectVenue: (VenueItem) -> Void
+        private var activeMarkers: [String: GMSMarker] = [:]
+        private var markerStates: [String: MarkerState] = [:]
+        var appliedCamera: GoogleMapCamera?
+        private var appliedBottomSheetHeight: CGFloat?
+        private var didApplyLocalStyle = false
+
+        init(
+            camera: Binding<GoogleMapCamera>,
+            cameraDidIdle: @escaping (GoogleMapCamera) -> Void,
+            selectVenue: @escaping (VenueItem) -> Void
+        ) {
+            _camera = camera
+            self.cameraDidIdle = cameraDidIdle
+            self.selectVenue = selectVenue
+        }
+
+        func applyLocalStyle(to mapView: GMSMapView) {
+            guard !didApplyLocalStyle else { return }
+            mapView.mapStyle = try? NightloopGoogleMapStyle.makeStyle()
+            didApplyLocalStyle = true
+        }
+
+        func applyPadding(bottomSheetHeight: CGFloat, to mapView: GMSMapView) {
+            guard appliedBottomSheetHeight.map({ abs($0 - bottomSheetHeight) > 0.5 }) ?? true else {
+                return
+            }
+            appliedBottomSheetHeight = bottomSheetHeight
+            mapView.padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: bottomSheetHeight)
+        }
+
+        func syncMarkers(_ markers: [VenueMapMarker], selectedVenueID: String?, on mapView: GMSMapView) {
+            let newIDs = Set(markers.map(\.id))
+            for (id, marker) in activeMarkers where !newIDs.contains(id) {
+                marker.map = nil
+                activeMarkers[id] = nil
+                markerStates[id] = nil
+            }
+
+            for markerModel in markers {
+                let marker = activeMarkers[markerModel.id] ?? GMSMarker()
+                let isSelected = markerModel.id == selectedVenueID
+                let nextState = MarkerState(marker: markerModel, isSelected: isSelected)
+                let shouldRefreshIcon = markerStates[markerModel.id] != nextState
+                marker.position = markerModel.coordinate
+                marker.userData = markerModel.venue
+                marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
+                marker.zIndex = isSelected ? 2 : 1
+                if shouldRefreshIcon {
+                    marker.iconView = PulseMarkerView(
+                        marker: markerModel,
+                        isSelected: isSelected
+                    )
+                    markerStates[markerModel.id] = nextState
+                }
+                marker.map = mapView
+                activeMarkers[markerModel.id] = marker
             }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(marker.venue.name), \(marker.venue.pulse.label)")
+
+        func mapView(_ mapView: GMSMapView, didTap marker: GMSMarker) -> Bool {
+            if let venue = marker.userData as? VenueItem {
+                selectVenue(venue)
+                return true
+            }
+            return false
+        }
+
+        func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {
+            let nextCamera = GoogleMapCamera(
+                center: position.target,
+                zoom: Double(position.zoom)
+            )
+            appliedCamera = nextCamera
+            camera = nextCamera
+            cameraDidIdle(nextCamera)
+        }
+    }
+}
+
+private struct MarkerState: Equatable {
+    let id: String
+    let latitude: Double
+    let longitude: Double
+    let score: Int
+    let isSelected: Bool
+
+    init(marker: VenueMapMarker, isSelected: Bool) {
+        id = marker.id
+        latitude = marker.coordinate.latitude
+        longitude = marker.coordinate.longitude
+        score = marker.score
+        self.isSelected = isSelected
+    }
+}
+
+private final class PulseMarkerView: UIView {
+    init(marker: VenueMapMarker, isSelected: Bool) {
+        let visuals = MapMarkerVisuals.style(score: marker.score, isSelected: isSelected)
+        let size = visuals.haloSize
+        super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+
+        let color = UIColor(marker.tone.color)
+        addCircle(size: visuals.haloSize, color: color.withAlphaComponent(visuals.haloOpacity), blur: visuals.glowRadius / 2)
+        addCircle(size: visuals.middleSize, color: color.withAlphaComponent(visuals.middleOpacity), blur: 0)
+        let dot = addCircle(size: visuals.dotSize, color: color, blur: visuals.glowRadius / 3)
+        dot.layer.borderWidth = isSelected ? 2 : 1.2
+        dot.layer.borderColor = UIColor.white.withAlphaComponent(0.86).cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @discardableResult
+    private func addCircle(size: CGFloat, color: UIColor, blur: CGFloat) -> UIView {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        view.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        view.backgroundColor = color
+        view.layer.cornerRadius = size / 2
+        if blur > 0 {
+            view.layer.shadowColor = color.cgColor
+            view.layer.shadowOpacity = 0.8
+            view.layer.shadowRadius = blur
+            view.layer.shadowOffset = .zero
+        }
+        addSubview(view)
+        return view
     }
 }
 
@@ -820,19 +957,19 @@ private struct MapRankedVenueRow: View {
     }
 }
 
-private struct MissingMapboxConfigView: View {
+private struct MissingGoogleMapsConfigView: View {
     var body: some View {
         ZStack {
             OrchidBackground(animated: true, gridOpacity: 0.045)
             NightloopCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Mapbox setup needed", systemImage: "map.fill")
+                    Label("Google Maps setup needed", systemImage: "map.fill")
                         .font(.title3.weight(.black))
                         .foregroundStyle(NightloopTheme.ink)
-                    Text("Add `MAPBOX_ACCESS_TOKEN` and `MAPBOX_STYLE_URI` to the ignored iOS config file to turn on the live map.")
+                    Text("Add `GOOGLE_MAPS_IOS_API_KEY` and `GOOGLE_MAP_ID` to the ignored iOS config file to turn on the live map.")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(NightloopTheme.inkMuted)
-                    Text("No backend, Google, Foursquare, or Supabase service secrets belong in the iOS app.")
+                    Text("No Google Places server key, Foursquare key, database URL, or Supabase service-role key belongs in the iOS app.")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(NightloopTheme.inkDim)
                 }

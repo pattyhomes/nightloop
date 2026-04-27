@@ -1,5 +1,6 @@
+import CoreLocation
+import GoogleMaps
 import XCTest
-import MapboxMaps
 @testable import Nightloop
 
 final class NightloopTests: XCTestCase {
@@ -12,7 +13,7 @@ final class NightloopTests: XCTestCase {
 
         XCTAssertEqual(config.apiBaseURL.absoluteString, "http://127.0.0.1:4000/api/v1")
         XCTAssertTrue(config.isSupabaseConfigured)
-        XCTAssertFalse(config.isMapboxConfigured)
+        XCTAssertFalse(config.isGoogleMapsConfigured)
     }
 
     func testConfigTreatsMissingSupabaseKeyAsUnconfigured() throws {
@@ -32,17 +33,17 @@ final class NightloopTests: XCTestCase {
             "NightloopSupabasePublishableKey": "sb_publishable_test",
             "NightloopAppleAuthEnabled": "YES",
             "NightloopPhoneAuthEnabled": "true",
-            "NightloopMapboxAccessToken": " pk.test-token ",
-            "NightloopMapboxStyleURI": " mapbox://styles/nightloop/midnight-orchid ",
+            "NightloopGoogleMapsIOSAPIKey": " AIza-test-key ",
+            "NightloopGoogleMapID": " map-id-123 ",
             "NightloopDebugPhoneTestNumber": " (415) 555-0134 ",
             "NightloopDebugPhoneTestCode": " 123456 "
         ])
 
         XCTAssertTrue(config.appleAuthEnabled)
         XCTAssertTrue(config.phoneAuthEnabled)
-        XCTAssertTrue(config.isMapboxConfigured)
-        XCTAssertEqual(config.mapboxAccessToken, "pk.test-token")
-        XCTAssertEqual(config.mapboxStyleURI, "mapbox://styles/nightloop/midnight-orchid")
+        XCTAssertTrue(config.isGoogleMapsConfigured)
+        XCTAssertEqual(config.googleMapsIOSAPIKey, "AIza-test-key")
+        XCTAssertEqual(config.googleMapID, "map-id-123")
         XCTAssertEqual(config.debugPhoneTestNumber, "(415) 555-0134")
         XCTAssertEqual(config.debugPhoneTestCode, "123456")
     }
@@ -58,30 +59,77 @@ final class NightloopTests: XCTestCase {
         XCTAssertFalse(config.phoneAuthEnabled)
     }
 
-    func testConfigIgnoresUnresolvedMapboxBuildSettings() throws {
+    func testConfigIgnoresUnresolvedGoogleMapsBuildSettings() throws {
         let config = try NightloopConfig(info: [
             "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
             "NightloopSupabaseURL": "https://example.supabase.co",
             "NightloopSupabasePublishableKey": "sb_publishable_test",
-            "NightloopMapboxAccessToken": "$(MAPBOX_ACCESS_TOKEN)",
-            "NightloopMapboxStyleURI": "paste_style_here"
+            "NightloopGoogleMapsIOSAPIKey": "$(GOOGLE_MAPS_IOS_API_KEY)",
+            "NightloopGoogleMapID": "paste_map_id_here"
         ])
 
-        XCTAssertNil(config.mapboxAccessToken)
-        XCTAssertNil(config.mapboxStyleURI)
-        XCTAssertFalse(config.isMapboxConfigured)
+        XCTAssertNil(config.googleMapsIOSAPIKey)
+        XCTAssertNil(config.googleMapID)
+        XCTAssertFalse(config.isGoogleMapsConfigured)
     }
 
-    func testConfigNormalizesEscapedMapboxStyleURI() throws {
-        let config = try NightloopConfig(info: [
-            "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",
-            "NightloopSupabaseURL": "https://example.supabase.co",
-            "NightloopSupabasePublishableKey": "sb_publishable_test",
-            "NightloopMapboxAccessToken": "pk.test-token",
-            "NightloopMapboxStyleURI": "mapbox:/$()/styles/chuck18/cmofbpqpc004501qp2igmbha1"
-        ])
+    func testGoogleMapConfigStateRequiresAPIKeyOnly() {
+        XCTAssertTrue(GoogleMapConfigState.isConfigured(apiKey: "AIza-test"))
+        XCTAssertFalse(GoogleMapConfigState.isConfigured(apiKey: nil))
+        XCTAssertFalse(GoogleMapConfigState.isConfigured(apiKey: " "))
+    }
 
-        XCTAssertEqual(config.mapboxStyleURI, "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1")
+    func testGoogleMapPaddingAccountsForSheetHeight() {
+        let padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: 392)
+
+        XCTAssertEqual(padding.top, 94)
+        XCTAssertEqual(padding.left, 10)
+        XCTAssertEqual(padding.bottom, 410)
+        XCTAssertEqual(padding.right, 12)
+    }
+
+    func testGoogleMapCameraEquatableUsesSmallTolerance() {
+        let left = GoogleMapCamera.sanFrancisco
+        let right = GoogleMapCamera(
+            center: CLLocationCoordinate2D(latitude: 37.7749001, longitude: -122.4194001),
+            zoom: 12.2004
+        )
+
+        XCTAssertEqual(left, right)
+        XCTAssertEqual(GoogleMapCamera.sanFrancisco.zoom, 12.2)
+    }
+
+    func testNightloopGoogleMapStyleJSONIsValidAndParsableByGoogleMaps() throws {
+        let jsonString = try NightloopGoogleMapStyle.jsonString()
+        let data = Data(jsonString.utf8)
+        let object = try JSONSerialization.jsonObject(with: data)
+        let styleRules = try XCTUnwrap(object as? [[String: Any]])
+
+        XCTAssertGreaterThan(styleRules.count, 10)
+        XCTAssertTrue(styleRules.contains { ($0["featureType"] as? String) == "poi" })
+        XCTAssertTrue(styleRules.contains { ($0["featureType"] as? String) == "transit" })
+        XCTAssertNoThrow(try GMSMapStyle(jsonString: jsonString))
+    }
+
+    func testGoogleMapStyleSourcePrefersBundledNightloopJSONOverCloudMapID() {
+        XCTAssertFalse(
+            GoogleMapStyleSource.shouldUseCloudMapID(
+                localStyleIsBundled: true,
+                configuredMapID: "google-cloud-map-id"
+            )
+        )
+        XCTAssertTrue(
+            GoogleMapStyleSource.shouldUseCloudMapID(
+                localStyleIsBundled: false,
+                configuredMapID: "google-cloud-map-id"
+            )
+        )
+        XCTAssertFalse(
+            GoogleMapStyleSource.shouldUseCloudMapID(
+                localStyleIsBundled: false,
+                configuredMapID: nil
+            )
+        )
     }
 
     func testConfigIgnoresUnresolvedDebugPhoneBuildSettings() throws {
@@ -145,6 +193,64 @@ final class NightloopTests: XCTestCase {
             userCoordinate: Coordinate(latitude: 37.77, longitude: -122.41)
         )
         XCTAssertEqual(requestIndex, 2)
+    }
+
+    func testRecommendationsRequestUsesProtectedEndpointAndDecodesTonightPreview() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/recommendations?market_id=sf&limit=30&pulse=packed")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "generated_at": "2026-04-27T00:00:00.000Z",
+              "mode": "tonight_preview",
+              "market": { "id": "market-1", "short_label": "SF" },
+              "counts": { "all": 1, "packed": 1, "active": 0, "chill": 0, "friends": 0 },
+              "next_cursor": null,
+              "items": [
+                {
+                  "rank": 1,
+                  "score": 84.5,
+                  "mode": "tonight_preview",
+                  "reason": "Source-backed SoMa nightlife for tonight.",
+                  "factors": {
+                    "venue_quality": 85,
+                    "preference_match": 40,
+                    "live_signals": 8,
+                    "event_relevance": 0,
+                    "source_confidence": 75,
+                    "hours_confidence": 35
+                  },
+                  "venue": \(String(data: Self.venueFixtureJSON(), encoding: .utf8)!)
+                }
+              ]
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let response = try await client.recommendations(
+            marketID: "sf",
+            bearerToken: "test-token",
+            pulse: "packed"
+        )
+
+        XCTAssertEqual(response.mode, "tonight_preview")
+        XCTAssertEqual(response.items.first?.venue.name, "Halcyon")
+        XCTAssertEqual(response.items.first?.venue.hours?.claimsOpenNow, false)
+        XCTAssertEqual(response.items.first?.reason, "Source-backed SoMa nightlife for tonight.")
     }
 
     func testSignalRequestIncludesVerificationLocation() async throws {
@@ -312,7 +418,6 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(layout.toastBottomPadding, 410)
         XCTAssertEqual(layout.fabBottomPadding, 358)
         XCTAssertEqual(layout.signalMenuBottomPadding, 426)
-        XCTAssertEqual(layout.ornamentBottomMargin, 404)
         XCTAssertEqual(MapChromeLayout.headerTopPadding(safeAreaTop: 59), 8)
         XCTAssertEqual(MapChromeLayout.zoomTopPadding(safeAreaTop: 59), 112)
     }
@@ -321,31 +426,6 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(MapZoomControl.nextZoom(current: 12, delta: 0.8), 12.8)
         XCTAssertEqual(MapZoomControl.nextZoom(current: 16.3, delta: 0.8), MapZoomControl.maximumZoom)
         XCTAssertEqual(MapZoomControl.nextZoom(current: 9.7, delta: -0.8), MapZoomControl.minimumZoom)
-    }
-
-    func testMapStyleResolverTrustsConfiguredStudioStyle() {
-        XCTAssertEqual(
-            MapStyleResolver.preferredURI(
-                configured: "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1",
-                market: "mapbox://styles/other/style"
-            ),
-            "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1"
-        )
-        XCTAssertFalse(MapStyleResolver.shouldFallbackToDark(
-            configured: "mapbox://styles/chuck18/cmofbpqpc004501qp2igmbha1",
-            market: nil
-        ))
-        XCTAssertTrue(MapStyleResolver.shouldFallbackToDark(configured: "paste_style_here", market: nil))
-    }
-
-    func testMapOrnamentsHideScaleBarAndKeepAttributionAnchors() {
-        let options = NightloopMapOrnaments.options
-
-        XCTAssertEqual(options.scaleBar.visibility, .hidden)
-        XCTAssertEqual(options.logo.position, .bottomLeading)
-        XCTAssertEqual(options.attributionButton.position, .bottomLeading)
-        XCTAssertEqual(options.attributionButton.margins.x, 96)
-        XCTAssertEqual(options.attributionButton.tintColor, UIColor.white.withAlphaComponent(0.62))
     }
 
     func testSignalProximityStatusUsesTwoHundredMeterRadius() {
@@ -575,6 +655,16 @@ final class NightloopTests: XCTestCase {
             recentSignalCount: 0,
             confidence: "high",
             event: nil,
+            hours: VenueHours(
+                status: "unknown",
+                source: "unknown",
+                confidence: "low",
+                verifiedAt: nil,
+                fetchedAt: nil,
+                label: "Hours unknown",
+                claimsOpenNow: false,
+                metadata: nil
+            ),
             friendSummary: FriendSummary(friendsHereCount: 0, firstFriendName: nil),
             image: nil,
             assets: [],
@@ -634,7 +724,15 @@ final class NightloopTests: XCTestCase {
           "counts": { "all": 1, "packed": 1, "active": 0, "chill": 0, "friends": 0 },
           "next_cursor": null,
           "items": [
-            {
+            \(String(data: venueFixtureJSON(), encoding: .utf8)!)
+          ]
+        }
+        """.utf8)
+    }
+
+    private static func venueFixtureJSON() -> Data {
+        Data("""
+        {
               "id": "venue-1",
               "slug": "halcyon",
               "name": "Halcyon",
@@ -650,6 +748,16 @@ final class NightloopTests: XCTestCase {
               "recent_signal_count": 4,
               "confidence": "high",
               "event": null,
+              "hours": {
+                "status": "unknown",
+                "source": "unknown",
+                "confidence": "low",
+                "verified_at": null,
+                "fetched_at": null,
+                "label": "Hours unknown",
+                "claims_open_now": false,
+                "metadata": {}
+              },
               "friend_summary": { "friends_here_count": 0, "first_friend_name": null },
               "image": null,
               "assets": [],
@@ -657,8 +765,6 @@ final class NightloopTests: XCTestCase {
               "last_signal_at": null,
               "computed_at": null,
               "source_summary": {}
-            }
-          ]
         }
         """.utf8)
     }
@@ -687,6 +793,16 @@ final class NightloopTests: XCTestCase {
             recentSignalCount: 0,
             confidence: "high",
             event: nil,
+            hours: VenueHours(
+                status: "unknown",
+                source: "unknown",
+                confidence: "low",
+                verifiedAt: nil,
+                fetchedAt: nil,
+                label: "Hours unknown",
+                claimsOpenNow: false,
+                metadata: nil
+            ),
             friendSummary: FriendSummary(friendsHereCount: 0, firstFriendName: nil),
             image: nil,
             assets: [],

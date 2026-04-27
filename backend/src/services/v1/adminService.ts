@@ -31,7 +31,7 @@ export type AdminActor = {
 
 type ProviderRunRow = {
   id: string;
-  provider: "foursquare" | "google_places" | "resident_advisor" | "manual";
+  provider: "foursquare" | "google_places" | "resident_advisor" | "manual" | "datasf_poe";
   market_id: string;
   status: "pending" | "running" | "completed" | "failed" | "blocked";
   mode: "fixture" | "dry_run" | "live";
@@ -445,18 +445,20 @@ export async function listAdminVenues(filters: { marketId?: string; q?: string; 
 }
 
 export async function createProviderImportRun(input: {
-  provider: "foursquare" | "google_places" | "resident_advisor" | "manual";
+  provider: "foursquare" | "google_places" | "resident_advisor" | "manual" | "datasf_poe";
   marketId: string;
   mode: "fixture" | "dry_run" | "live";
   cappedVenueCount: number;
   summary?: JsonRecord;
   actor: AdminActor;
 }) {
-  if (input.provider === "resident_advisor") {
+  if (input.provider === "resident_advisor" || input.provider === "datasf_poe") {
     throw new ApiError(
       409,
       "PROVIDER_DISABLED",
-      "Resident Advisor imports are disabled until Nightloop has licensed access."
+      input.provider === "resident_advisor"
+        ? "Resident Advisor imports are disabled until Nightloop has licensed access."
+        : "DataSF evidence imports run through the audited CLI importer, not live admin provider runs."
     );
   }
 

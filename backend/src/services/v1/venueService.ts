@@ -4,7 +4,7 @@ import { findMarketByIdOrSlug } from "./marketService";
 
 type PulseLabel = "Chill" | "Active" | "Packed";
 
-type VenueFeedRow = {
+export type VenueFeedRow = {
   id: string;
   slug: string | null;
   name: string;
@@ -27,6 +27,12 @@ type VenueFeedRow = {
   source_summary: Record<string, unknown> | null;
   assets: Array<Record<string, unknown>> | null;
   current_event: Record<string, unknown> | null;
+  schedule_status: string | null;
+  schedule_source: string | null;
+  schedule_confidence: number | null;
+  schedule_verified_at: string | null;
+  schedule_fetched_at: string | null;
+  schedule_metadata: Record<string, unknown> | null;
 };
 
 export type VenueQuery = {
@@ -68,7 +74,7 @@ function haversineMiles(
   return earthRadiusMiles * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: number }) {
+export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: number }) {
   const level = Math.max(1, Math.min(3, Number(row.pulse_level ?? 1)));
   const energyScore = Math.max(0, Math.min(100, Math.round(Number(row.energy_score ?? 28))));
   const label = row.energy_label ?? toPulseLabel(level);
@@ -102,6 +108,23 @@ function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: number }) {
     recent_signal_count: Number(row.recent_signal_count ?? 0),
     confidence: confidenceLabel(row.confidence),
     event: row.current_event,
+    hours: {
+      status: row.schedule_status ?? "unknown",
+      source: row.schedule_source ?? "unknown",
+      confidence: confidenceLabel(row.schedule_confidence),
+      verified_at: row.schedule_verified_at,
+      fetched_at: row.schedule_fetched_at,
+      label:
+        row.schedule_status === "verified_hours"
+          ? "Hours verified"
+          : row.schedule_status === "temporarily_closed"
+            ? "Temporarily closed"
+            : row.schedule_status === "manual_hold"
+              ? "Hours under review"
+              : "Hours unknown",
+      claims_open_now: false,
+      metadata: row.schedule_metadata ?? {}
+    },
     friend_summary: {
       friends_here_count: 0,
       first_friend_name: null
@@ -157,7 +180,13 @@ export async function listVenues(query: VenueQuery) {
         vls.computed_at,
         COALESCE(vls.source_summary, '{}'::jsonb) AS source_summary,
         COALESCE(asset_pack.assets, '[]'::jsonb) AS assets,
-        event_pack.current_event
+        event_pack.current_event,
+        schedule_pack.status AS schedule_status,
+        schedule_pack.source AS schedule_source,
+        schedule_pack.confidence AS schedule_confidence,
+        schedule_pack.verified_at AS schedule_verified_at,
+        schedule_pack.fetched_at AS schedule_fetched_at,
+        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
@@ -197,6 +226,21 @@ export async function listVenues(query: VenueQuery) {
         ORDER BY e.starts_at ASC
         LIMIT 1
       ) event_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          vs.status,
+          vs.source,
+          vs.confidence,
+          vs.verified_at,
+          vs.fetched_at,
+          vs.metadata
+        FROM venue_schedules vs
+        WHERE vs.venue_id = v.id
+        ORDER BY
+          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
+        LIMIT 1
+      ) schedule_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
@@ -271,7 +315,13 @@ export async function getVenue(idOrSlug: string) {
         vls.computed_at,
         COALESCE(vls.source_summary, '{}'::jsonb) AS source_summary,
         COALESCE(asset_pack.assets, '[]'::jsonb) AS assets,
-        event_pack.current_event
+        event_pack.current_event,
+        schedule_pack.status AS schedule_status,
+        schedule_pack.source AS schedule_source,
+        schedule_pack.confidence AS schedule_confidence,
+        schedule_pack.verified_at AS schedule_verified_at,
+        schedule_pack.fetched_at AS schedule_fetched_at,
+        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
@@ -311,6 +361,21 @@ export async function getVenue(idOrSlug: string) {
         ORDER BY e.starts_at ASC
         LIMIT 1
       ) event_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          vs.status,
+          vs.source,
+          vs.confidence,
+          vs.verified_at,
+          vs.fetched_at,
+          vs.metadata
+        FROM venue_schedules vs
+        WHERE vs.venue_id = v.id
+        ORDER BY
+          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
+        LIMIT 1
+      ) schedule_pack ON true
       WHERE v.id::text = $1 OR v.slug = $1
       LIMIT 1
     `,

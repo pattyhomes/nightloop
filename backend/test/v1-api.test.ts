@@ -394,7 +394,9 @@ describe("Nightloop v1 API", () => {
 
   it("stores user signals with design-default points and a server-side expiry", async () => {
     const user = await createTestUser();
+    const secondUser = await createTestUser();
     await attestEligible(user);
+    await attestEligible(secondUser);
     const venue = await getFirstSfVenue();
 
     const packed = await request(app)
@@ -413,7 +415,7 @@ describe("Nightloop v1 API", () => {
 
     const liveEvent = await request(app)
       .post("/api/v1/signals")
-      .set("Authorization", `Bearer ${user.token}`)
+      .set("Authorization", `Bearer ${secondUser.token}`)
       .send({
         venue_id: venue.id,
         kind: "event_live",
@@ -423,7 +425,7 @@ describe("Nightloop v1 API", () => {
       .expect(201);
 
     expect(liveEvent.body.points_awarded).toBe(4);
-    expect(liveEvent.body.new_signal_scout_points).toBe(7);
+    expect(liveEvent.body.new_signal_scout_points).toBe(4);
 
     const result = await pool.query<{
       kind: string;
@@ -507,6 +509,66 @@ describe("Nightloop v1 API", () => {
     expect(result.rows[0]?.payload).toMatchObject({ nested: { note: "kept" } });
   });
 
+  it("rate-limits repeated user signals for the same venue with a cooldown", async () => {
+    const user = await createTestUser();
+    await attestEligible(user);
+    const venue = await getFirstSfVenue();
+
+    await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "packed",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(201);
+
+    const blocked = await request(app)
+      .post("/api/v1/signals")
+      .set("Authorization", `Bearer ${user.token}`)
+      .send({
+        venue_id: venue.id,
+        kind: "dead",
+        location: { latitude: venue.latitude, longitude: venue.longitude },
+        metadata: { test_run_id: testRunId }
+      })
+      .expect(429);
+
+    expect(blocked.body.error.code).toBe("SIGNAL_COOLDOWN_ACTIVE");
+  });
+
+  it("returns bounded recommendations without raw provider data", async () => {
+    const user = await createTestUser();
+    await attestEligible(user);
+    const marketId = await getSfMarketId();
+
+    const response = await request(app)
+      .get(`/api/v1/recommendations?market_id=${marketId}&limit=5`)
+      .set("Authorization", `Bearer ${user.token}`)
+      .expect(200);
+
+    expect(response.body.mode).toMatch(/^(tonight_preview|live_now)$/);
+    expect(response.body.items.length).toBeGreaterThan(0);
+    expect(response.body.items[0]).toEqual(
+      expect.objectContaining({
+        rank: expect.any(Number),
+        score: expect.any(Number),
+        reason: expect.any(String),
+        venue: expect.objectContaining({
+          id: expect.any(String),
+          market_id: marketId,
+          hours: expect.objectContaining({
+            claims_open_now: false
+          })
+        })
+      })
+    );
+    expect(JSON.stringify(response.body.items[0])).not.toContain("raw_payload");
+    expect(JSON.stringify(response.body.items[0])).not.toContain("provider_records");
+  });
+
   it("returns only the current user's recent signals with a capped limit", async () => {
     const first = await createTestUser();
     const second = await createTestUser();
@@ -527,6 +589,7 @@ describe("Nightloop v1 API", () => {
         venue_id: venue.id,
         kind: "packed",
         location: { latitude: venue.latitude, longitude: venue.longitude },
+        observed_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
         metadata: { test_run_id: testRunId }
       })
       .expect(201);

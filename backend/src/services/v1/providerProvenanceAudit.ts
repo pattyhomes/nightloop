@@ -3,10 +3,12 @@ import { dbQuery } from "../../lib/db";
 export type ProviderProvenance =
   | "nightloop_owned"
   | "manual_curated"
+  | "datasf_evidence"
+  | "foursquare_verified"
   | "google_verified"
   | "google_derived";
 
-export type ProviderProvenanceRisk = "low" | "review_before_non_google_map";
+export type ProviderProvenanceRisk = "low" | "google_maps_required" | "manual_review_recommended";
 
 export type ProviderProvenanceVenueRow = {
   id: string;
@@ -15,6 +17,8 @@ export type ProviderProvenanceVenueRow = {
   metadata: Record<string, unknown>;
   google_provider_records: number;
   google_approved_reviews: number;
+  datasf_provider_records: number;
+  foursquare_provider_records: number;
 };
 
 export type VenueProvenanceClassification = {
@@ -57,6 +61,17 @@ function hasGoogleDerivedField(row: ProviderProvenanceVenueRow): boolean {
     row.metadata.type_source === "google_places";
 }
 
+function hasDataSfEvidence(row: ProviderProvenanceVenueRow): boolean {
+  return Boolean(textValue(row.metadata.datasf_poe_record_id)) ||
+    row.source === "provider:datasf_poe" ||
+    row.datasf_provider_records > 0;
+}
+
+function hasFoursquareEvidence(row: ProviderProvenanceVenueRow): boolean {
+  return Boolean(textValue(row.metadata.foursquare_id)) ||
+    row.foursquare_provider_records > 0;
+}
+
 function baseProvenance(row: ProviderProvenanceVenueRow): ProviderProvenance {
   if (row.source?.startsWith("curated:") || row.source === "manual") {
     return "manual_curated";
@@ -68,6 +83,8 @@ export function classifyVenueProvenance(row: ProviderProvenanceVenueRow): VenueP
   const base = baseProvenance(row);
   const googleEvidence = hasGoogleProviderEvidence(row);
   const googleDerived = hasGoogleDerivedField(row);
+  const dataSfEvidence = hasDataSfEvidence(row);
+  const foursquareEvidence = hasFoursquareEvidence(row);
   const providerCreated = row.source === "provider:google_places";
   const fieldSource = (key: string, fallback: ProviderProvenance): ProviderProvenance =>
     row.metadata[key] === "google_places" || providerCreated ? "google_derived" : fallback;
@@ -77,27 +94,47 @@ export function classifyVenueProvenance(row: ProviderProvenanceVenueRow): VenueP
     coordinates: fieldSource("coordinate_source", base),
     address: textValue(row.metadata.google_formatted_address) || providerCreated ? "google_derived" as const : base,
     type: fieldSource("type_source", base),
-    provider_id: googleEvidence ? "google_verified" as const : null
+    provider_id: googleEvidence
+      ? "google_verified" as const
+      : dataSfEvidence
+        ? "datasf_evidence" as const
+        : foursquareEvidence
+          ? "foursquare_verified" as const
+          : null
   };
   const overall: ProviderProvenance = googleDerived
     ? "google_derived"
     : googleEvidence
       ? "google_verified"
-      : base;
+      : dataSfEvidence
+        ? "datasf_evidence"
+        : foursquareEvidence
+          ? "foursquare_verified"
+          : base;
   const evidence = [
     ...(row.source ? [`source:${row.source}`] : []),
     ...(textValue(row.metadata.google_place_id) ? ["metadata.google_place_id"] : []),
     ...(textValue(row.metadata.google_formatted_address) ? ["metadata.google_formatted_address"] : []),
     ...(row.google_provider_records > 0 ? [`google_provider_records:${row.google_provider_records}`] : []),
-    ...(row.google_approved_reviews > 0 ? [`google_approved_reviews:${row.google_approved_reviews}`] : [])
+    ...(row.google_approved_reviews > 0 ? [`google_approved_reviews:${row.google_approved_reviews}`] : []),
+    ...(textValue(row.metadata.datasf_poe_record_id) ? ["metadata.datasf_poe_record_id"] : []),
+    ...(row.datasf_provider_records > 0 ? [`datasf_provider_records:${row.datasf_provider_records}`] : []),
+    ...(row.foursquare_provider_records > 0 ? [`foursquare_provider_records:${row.foursquare_provider_records}`] : [])
   ];
+
+  const risk: ProviderProvenanceRisk =
+    overall === "google_derived"
+      ? "google_maps_required"
+      : overall === "datasf_evidence"
+        ? "manual_review_recommended"
+        : "low";
 
   return {
     id: row.id,
     name: row.name,
     source: row.source,
     overall,
-    risk: overall === "google_derived" ? "review_before_non_google_map" : "low",
+    risk,
     fields,
     evidence
   };
@@ -109,10 +146,13 @@ export function buildProviderProvenanceAudit(rows: ProviderProvenanceVenueRow[])
     total: rows.length,
     nightloop_owned: 0,
     manual_curated: 0,
+    datasf_evidence: 0,
+    foursquare_verified: 0,
     google_verified: 0,
     google_derived: 0,
     low: 0,
-    review_before_non_google_map: 0
+    google_maps_required: 0,
+    manual_review_recommended: 0
   };
 
   for (const item of classifications) {
@@ -124,7 +164,7 @@ export function buildProviderProvenanceAudit(rows: ProviderProvenanceVenueRow[])
     generated_at: new Date().toISOString(),
     summary,
     examples: classifications
-      .filter((item) => item.risk === "review_before_non_google_map" || item.overall === "google_verified")
+      .filter((item) => item.risk !== "low" || item.overall === "google_verified")
       .slice(0, 20)
   };
 }
@@ -141,7 +181,9 @@ export async function loadProviderProvenanceAudit(): Promise<ProviderProvenanceA
         COUNT(vri.id) FILTER (
           WHERE pr.provider = 'google_places'
             AND vri.status = 'approved'
-        )::int AS google_approved_reviews
+        )::int AS google_approved_reviews,
+        COUNT(pr.id) FILTER (WHERE pr.provider = 'datasf_poe')::int AS datasf_provider_records,
+        COUNT(pr.id) FILTER (WHERE pr.provider = 'foursquare')::int AS foursquare_provider_records
       FROM venues v
       LEFT JOIN provider_records pr ON pr.venue_id = v.id
       LEFT JOIN venue_review_items vri ON vri.provider_record_id = pr.id

@@ -22,16 +22,14 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>MBXAccessToken</key>
-	<string>$(MAPBOX_ACCESS_TOKEN)</string>
 	<key>NightloopAPIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
 	<key>NightloopAppleAuthEnabled</key>
 	<string>$(AUTH_APPLE_ENABLED)</string>
-	<key>NightloopMapboxAccessToken</key>
-	<string>$(MAPBOX_ACCESS_TOKEN)</string>
-	<key>NightloopMapboxStyleURI</key>
-	<string>$(MAPBOX_STYLE_URI)</string>
+	<key>NightloopGoogleMapsIOSAPIKey</key>
+	<string>$(GOOGLE_MAPS_IOS_API_KEY)</string>
+	<key>NightloopGoogleMapID</key>
+	<string>$(GOOGLE_MAP_ID)</string>
 	<key>NightloopPhoneAuthEnabled</key>
 	<string>$(AUTH_PHONE_ENABLED)</string>
 	<key>NightloopSupabasePublishableKey</key>

@@ -19,7 +19,7 @@ async function main() {
   console.table(audit.summary);
 
   if (audit.examples.length === 0) {
-    console.log("No Google-verified or Google-derived approved venues found.");
+    console.log("No provider-derived approved venues requiring review found.");
     return;
   }
 

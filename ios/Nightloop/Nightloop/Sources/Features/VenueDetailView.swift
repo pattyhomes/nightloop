@@ -290,6 +290,7 @@ struct VenueDetailView: View {
 
                 DetailLine(label: "Signals", value: "\(venue.signalCount) total · \(venue.recentSignalCount) recent")
                 DetailLine(label: "Wait", value: venue.waitMinutes.map { "\($0) min" } ?? "Unknown")
+                DetailLine(label: "Hours", value: venue.hours?.label ?? "Hours unknown")
                 DetailLine(label: "Confidence", value: venue.confidence.capitalized)
                 DetailLine(label: "Address", value: "\(venue.neighborhood), San Francisco")
             }

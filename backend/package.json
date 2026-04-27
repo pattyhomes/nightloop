@@ -14,6 +14,8 @@
     "enrich:foursquare": "tsx src/scripts/enrichVenuesFoursquare.ts",
     "review:google-qa": "tsx src/scripts/reviewGooglePlacesQa.ts",
     "import:sf-notable": "tsx src/scripts/importSfNotableVenues.ts",
+    "import:datasf-poe": "tsx src/scripts/importDatasfPoeVenues.ts",
+    "import:nyc-sla": "tsx src/scripts/importNycSlaVenues.ts",
     "audit:venue-provenance": "tsx src/scripts/auditVenueProvenance.ts"
   },
   "dependencies": {

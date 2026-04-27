@@ -20,6 +20,7 @@ import {
 } from "../../services/v1/accountService";
 import { getMarketConfig, listMarkets } from "../../services/v1/marketService";
 import { getVenue, listVenues } from "../../services/v1/venueService";
+import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
 import { createAdminRouter } from "./admin";
 
@@ -79,6 +80,12 @@ const VenueQuerySchema = z.object({
   pulse: z.enum(["chill", "active", "packed"]).optional(),
   q: z.string().trim().min(1).max(80).optional(),
   limit: z.coerce.number().int().positive().max(100).optional()
+});
+
+const RecommendationQuerySchema = z.object({
+  market_id: z.string().min(1),
+  pulse: z.enum(["chill", "active", "packed"]).optional(),
+  limit: z.coerce.number().int().positive().max(60).optional()
 });
 
 const SignalSchema = z
@@ -290,6 +297,22 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
   );
 
   router.use("/admin", createAdminRouter(config));
+
+  router.get(
+    "/recommendations",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(RecommendationQuerySchema, req.query);
+      res.json(
+        await listRecommendations({
+          account: accountFromRequest(req),
+          marketId: query.market_id,
+          pulse: query.pulse,
+          limit: query.limit
+        })
+      );
+    })
+  );
 
   router.get(
     "/venues",

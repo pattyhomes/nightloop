@@ -35,7 +35,7 @@ declare global {
   }
 }
 
-const ProviderSchema = z.enum(["foursquare", "google_places", "resident_advisor", "manual"]);
+const ProviderSchema = z.enum(["foursquare", "google_places", "resident_advisor", "manual", "datasf_poe"]);
 const ProviderModeSchema = z.enum(["fixture", "dry_run", "live"]);
 
 const CreateProviderRunSchema = z

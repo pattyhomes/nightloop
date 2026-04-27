@@ -10,7 +10,7 @@ struct HomeView: View {
     @State private var markets: [Market] = []
     @State private var selectedMarketID: String?
     @State private var selectedPulse: PulseFilter?
-    @State private var venueFeed: VenueListResponse?
+    @State private var recommendationFeed: RecommendationListResponse?
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var signalMessage: String?
@@ -25,8 +25,12 @@ struct HomeView: View {
     }
 
     private var personalizedItems: [VenueItem] {
-        guard let venueFeed else { return [] }
-        return VenuePreferenceTuner.boostedItems(venueFeed.items, preferences: preferences)
+        guard let recommendationFeed else { return [] }
+        return recommendationFeed.items.map(\.venue)
+    }
+
+    private var recommendationByVenueID: [String: RecommendationItem] {
+        Dictionary(uniqueKeysWithValues: (recommendationFeed?.items ?? []).map { ($0.venue.id, $0) })
     }
 
     var body: some View {
@@ -37,12 +41,12 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     header
 
-                    if let venueFeed {
-                        livePulseStrip(counts: venueFeed.counts)
-                        filterStrip(counts: venueFeed.counts)
+                    if let recommendationFeed {
+                        livePulseStrip(counts: recommendationFeed.counts, mode: recommendationFeed.mode)
+                        filterStrip(counts: recommendationFeed.counts)
 
                         if let hero = personalizedItems.first {
-                            heroCard(hero)
+                            heroCard(hero, recommendation: recommendationByVenueID[hero.id])
                         }
 
                         VStack(alignment: .leading, spacing: 10) {
@@ -132,7 +136,7 @@ struct HomeView: View {
         return formatter.string(from: Date())
     }
 
-    private func livePulseStrip(counts: VenueCounts) -> some View {
+    private func livePulseStrip(counts: VenueCounts, mode: String) -> some View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
@@ -145,11 +149,13 @@ struct HomeView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("LIVE PULSE")
+                Text(mode == "tonight_preview" ? "TONIGHT PREVIEW" : "LIVE PULSE")
                     .font(.caption2.weight(.black))
                     .tracking(1.5)
                     .foregroundStyle(Color(hex: "#e9d5ff"))
-                Text("\(counts.packed) packed · \(counts.active) active · \(counts.chill) chill")
+                Text(mode == "tonight_preview"
+                     ? "Source-backed picks for tonight · live signals subdued"
+                     : "\(counts.packed) packed · \(counts.active) active · \(counts.chill) chill")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(NightloopTheme.ink)
             }
@@ -199,7 +205,7 @@ struct HomeView: View {
         }
     }
 
-    private func heroCard(_ venue: VenueItem) -> some View {
+    private func heroCard(_ venue: VenueItem, recommendation: RecommendationItem?) -> some View {
         NavigationLink {
             VenueDetailView(
                 apiClient: apiClient,
@@ -240,7 +246,7 @@ struct HomeView: View {
 
                     SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
 
-                    Text(VenuePreferenceTuner.reason(for: venue, preferences: preferences))
+                    Text(recommendation?.reason ?? VenuePreferenceTuner.reason(for: venue, preferences: preferences))
                         .font(.footnote)
                         .foregroundStyle(NightloopTheme.inkMuted)
 
@@ -269,7 +275,7 @@ struct HomeView: View {
 
         isLoading = true
         errorMessage = nil
-        venueFeed = nil
+        recommendationFeed = nil
         do {
             let marketResponse = try await apiClient.markets()
             markets = marketResponse.items
@@ -279,7 +285,11 @@ struct HomeView: View {
             guard let marketID = activeMarketID else {
                 throw NightloopAPIError.transport(statusCode: 0, message: "No active market is configured.")
             }
-            venueFeed = try await apiClient.venues(marketID: marketID, bearerToken: token, pulse: selectedPulse?.rawValue)
+            recommendationFeed = try await apiClient.recommendations(
+                marketID: marketID,
+                bearerToken: token,
+                pulse: selectedPulse?.rawValue
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

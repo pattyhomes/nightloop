@@ -15,6 +15,8 @@ export type ProviderDedupeInput = {
   longitude?: number | null;
   googlePlaceId?: string | null;
   foursquareId?: string | null;
+  dataSfRecordId?: string | null;
+  address?: string | null;
   radiusMeters?: number;
 };
 
@@ -68,6 +70,28 @@ function textValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function normalizeAddress(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\bstreet\b/g, "st")
+    .replace(/\bavenue\b/g, "ave")
+    .replace(/\bboulevard\b/g, "blvd")
+    .replace(/\broad\b/g, "rd")
+    .replace(/\bplace\b/g, "pl")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function addressesLikelyMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeAddress(left);
+  const normalizedRight = normalizeAddress(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return normalizedLeft === normalizedRight ||
+    normalizedLeft.startsWith(`${normalizedRight} `) ||
+    normalizedRight.startsWith(`${normalizedLeft} `);
+}
+
 function hasFreshProviderMetadata(metadata: Record<string, unknown>, key: string, now = new Date()): boolean {
   const checkedAt = textValue(metadata[key]);
   if (!checkedAt) return false;
@@ -86,14 +110,19 @@ export function hasFreshFoursquareMetadata(metadata: Record<string, unknown>, no
 }
 
 export function providerProvenancePatch(input: {
-  provider: "google_places" | "foursquare" | "manual";
+  provider: "google_places" | "foursquare" | "manual" | "datasf_poe";
   runId?: string;
   matchConfidence?: number;
   checkedAt?: string;
   fields?: string[];
 }): Record<string, unknown> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
-  const prefix = input.provider === "google_places" ? "google" : input.provider;
+  const prefix =
+    input.provider === "google_places"
+      ? "google"
+      : input.provider === "datasf_poe"
+        ? "datasf"
+        : input.provider;
   return {
     [`${prefix}_checked_at`]: checkedAt,
     [`${prefix}_last_run_id`]: input.runId ?? null,
@@ -127,6 +156,7 @@ export async function findProviderDuplicateWarnings(
     const metadata = venue.metadata ?? {};
     const existingGooglePlaceId = textValue(metadata.google_place_id);
     const existingFoursquareId = textValue(metadata.foursquare_id);
+    const existingDataSfRecordId = textValue(metadata.datasf_poe_record_id);
 
     if (input.googlePlaceId && existingGooglePlaceId === input.googlePlaceId) {
       warnings.push(`existing_google_place:${venue.id}:${venue.name}`);
@@ -140,10 +170,24 @@ export async function findProviderDuplicateWarnings(
       continue;
     }
 
+    if (input.dataSfRecordId && existingDataSfRecordId === input.dataSfRecordId) {
+      warnings.push(`existing_datasf_poe_record:${venue.id}:${venue.name}`);
+      blockingDuplicate = true;
+      continue;
+    }
+
     const venueName = normalizeProviderName(venue.name);
 
     if (venueName === candidateName && (input.latitude == null || input.longitude == null)) {
       warnings.push(`same_name_existing:${venue.id}:${venue.name}`);
+      blockingDuplicate = true;
+      continue;
+    }
+
+    const inputAddress = input.address ? normalizeAddress(input.address) : null;
+    const existingAddress = textValue(metadata.address) ?? textValue(metadata.google_formatted_address);
+    if (inputAddress && existingAddress && addressesLikelyMatch(inputAddress, existingAddress)) {
+      warnings.push(`same_address_existing:${venue.id}:${venue.name}`);
       blockingDuplicate = true;
       continue;
     }

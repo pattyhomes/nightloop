@@ -155,6 +155,27 @@ struct NightloopAPIClient {
         )
     }
 
+    func recommendations(
+        marketID: String,
+        bearerToken: String,
+        limit: Int = 30,
+        pulse: String? = nil
+    ) async throws -> RecommendationListResponse {
+        var queryItems = [
+            URLQueryItem(name: "market_id", value: marketID),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if let pulse {
+            queryItems.append(URLQueryItem(name: "pulse", value: pulse))
+        }
+
+        return try await send(
+            path: "recommendations",
+            queryItems: queryItems,
+            bearerToken: bearerToken
+        )
+    }
+
     func venue(id: String, bearerToken: String) async throws -> VenueDetailResponse {
         try await send(path: "venues/\(id)", bearerToken: bearerToken)
     }

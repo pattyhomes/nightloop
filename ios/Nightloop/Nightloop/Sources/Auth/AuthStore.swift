@@ -39,8 +39,16 @@ final class AuthStore: ObservableObject {
             return
         }
 
+        if let currentSession = client.auth.currentSession, !currentSession.isExpired {
+            accessToken = currentSession.accessToken
+            phase = .signedIn
+            return
+        }
+
         do {
-            let session = try await client.auth.session
+            let session = try await Self.withTimeout(seconds: 8) {
+                try await client.auth.session
+            }
             accessToken = session.accessToken
             phase = .signedIn
         } catch {
@@ -150,6 +158,33 @@ final class AuthStore: ObservableObject {
             return "Authentication failed. Please check the account details and try again."
         }
         return message
+    }
+
+    private static func withTimeout<T: Sendable>(
+        seconds: UInt64,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                throw AuthRestoreTimeout()
+            }
+
+            guard let result = try await group.next() else {
+                throw AuthRestoreTimeout()
+            }
+            group.cancelAll()
+            return result
+        }
+    }
+}
+
+private struct AuthRestoreTimeout: LocalizedError {
+    var errorDescription: String? {
+        "Session restore timed out."
     }
 }
 

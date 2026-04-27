@@ -6,8 +6,8 @@ struct NightloopConfig: Equatable {
     let supabasePublishableKey: String
     let appleAuthEnabled: Bool
     let phoneAuthEnabled: Bool
-    let mapboxAccessToken: String?
-    let mapboxStyleURI: String?
+    let googleMapsIOSAPIKey: String?
+    let googleMapID: String?
     let debugPhoneTestNumber: String?
     let debugPhoneTestCode: String?
 
@@ -17,8 +17,8 @@ struct NightloopConfig: Equatable {
         return !trimmed.isEmpty && !trimmed.localizedCaseInsensitiveContains("paste_")
     }
 
-    var isMapboxConfigured: Bool {
-        mapboxAccessToken != nil && mapboxStyleURI != nil
+    var isGoogleMapsConfigured: Bool {
+        googleMapsIOSAPIKey != nil
     }
 
     static func current(bundle: Bundle = .main) throws -> NightloopConfig {
@@ -36,8 +36,8 @@ struct NightloopConfig: Equatable {
         let publishableKey = Self.stringValue(info["NightloopSupabasePublishableKey"])
         let appleAuthEnabled = Self.boolValue(info["NightloopAppleAuthEnabled"])
         let phoneAuthEnabled = Self.boolValue(info["NightloopPhoneAuthEnabled"])
-        let mapboxAccessToken = Self.optionalConfigValue(info["NightloopMapboxAccessToken"])
-        let mapboxStyleURI = Self.optionalConfigValue(info["NightloopMapboxStyleURI"])
+        let googleMapsIOSAPIKey = Self.optionalConfigValue(info["NightloopGoogleMapsIOSAPIKey"])
+        let googleMapID = Self.optionalConfigValue(info["NightloopGoogleMapID"])
         let debugPhoneTestNumber = Self.optionalDebugValue(info["NightloopDebugPhoneTestNumber"])
         let debugPhoneTestCode = Self.optionalDebugValue(info["NightloopDebugPhoneTestCode"])
 
@@ -46,8 +46,8 @@ struct NightloopConfig: Equatable {
         self.supabasePublishableKey = publishableKey
         self.appleAuthEnabled = appleAuthEnabled
         self.phoneAuthEnabled = phoneAuthEnabled
-        self.mapboxAccessToken = mapboxAccessToken
-        self.mapboxStyleURI = mapboxStyleURI
+        self.googleMapsIOSAPIKey = googleMapsIOSAPIKey
+        self.googleMapID = googleMapID
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }
@@ -58,8 +58,8 @@ struct NightloopConfig: Equatable {
         supabasePublishableKey: String,
         appleAuthEnabled: Bool = false,
         phoneAuthEnabled: Bool = false,
-        mapboxAccessToken: String? = nil,
-        mapboxStyleURI: String? = nil,
+        googleMapsIOSAPIKey: String? = nil,
+        googleMapID: String? = nil,
         debugPhoneTestNumber: String? = nil,
         debugPhoneTestCode: String? = nil
     ) {
@@ -68,8 +68,8 @@ struct NightloopConfig: Equatable {
         self.supabasePublishableKey = supabasePublishableKey
         self.appleAuthEnabled = appleAuthEnabled
         self.phoneAuthEnabled = phoneAuthEnabled
-        self.mapboxAccessToken = mapboxAccessToken
-        self.mapboxStyleURI = mapboxStyleURI
+        self.googleMapsIOSAPIKey = googleMapsIOSAPIKey
+        self.googleMapID = googleMapID
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }

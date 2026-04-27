@@ -92,6 +92,7 @@ function levelForScore(score: number): 1 | 2 | 3 {
 }
 
 const SIGNAL_PROXIMITY_RADIUS_METERS = 200;
+const SIGNAL_COOLDOWN_MINUTES = 20;
 
 function toRad(value: number): number {
   return (value * Math.PI) / 180;
@@ -315,6 +316,29 @@ export async function submitUserSignal(input: {
         radius_meters: SIGNAL_PROXIMITY_RADIUS_METERS,
         distance_meters: Math.round(distance)
       }
+    );
+  }
+
+  const cooldown = await dbQuery<{ id: string; observed_at: string }>(
+    `
+      SELECT id, observed_at
+      FROM signals
+      WHERE user_id = $1::uuid
+        AND venue_id = $2::uuid
+        AND kind IS NOT NULL
+        AND observed_at > NOW() - ($3::int || ' minutes')::interval
+      ORDER BY observed_at DESC
+      LIMIT 1
+    `,
+    [input.account.user.id, input.venueId, SIGNAL_COOLDOWN_MINUTES]
+  );
+
+  if (cooldown.rows[0]) {
+    throw new ApiError(
+      429,
+      "SIGNAL_COOLDOWN_ACTIVE",
+      "You recently signaled this venue. Try again in a bit.",
+      { cooldown_minutes: SIGNAL_COOLDOWN_MINUTES }
     );
   }
 

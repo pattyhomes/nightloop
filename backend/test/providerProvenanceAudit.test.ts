@@ -12,7 +12,9 @@ function venue(input: Partial<ProviderProvenanceVenueRow>): ProviderProvenanceVe
     source: input.source ?? "seed",
     metadata: input.metadata ?? {},
     google_provider_records: input.google_provider_records ?? 0,
-    google_approved_reviews: input.google_approved_reviews ?? 0
+    google_approved_reviews: input.google_approved_reviews ?? 0,
+    datasf_provider_records: input.datasf_provider_records ?? 0,
+    foursquare_provider_records: input.foursquare_provider_records ?? 0
   };
 }
 
@@ -29,7 +31,7 @@ describe("provider provenance audit", () => {
     );
 
     expect(result.overall).toBe("google_derived");
-    expect(result.risk).toBe("review_before_non_google_map");
+    expect(result.risk).toBe("google_maps_required");
     expect(result.fields).toMatchObject({
       identity: "google_derived",
       coordinates: "google_derived",
@@ -70,7 +72,7 @@ describe("provider provenance audit", () => {
       manual_curated: 0,
       google_verified: 1,
       google_derived: 1,
-      review_before_non_google_map: 1
+      google_maps_required: 1
     });
     expect(JSON.stringify(audit.examples)).not.toContain("raw_payload");
   });

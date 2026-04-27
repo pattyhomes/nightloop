@@ -14,6 +14,45 @@ live-music nightlife. Do not try to index every ordinary bar or restaurant.
 evidence, not the source of truth. New curated venues enter as pending review
 items and become public only after admin approval.
 
+## DataSF POE Evidence
+
+DataSF Active Entertainment Permits are now a free evidence layer for SF
+coverage. They are useful for finding licensed entertainment venues and gaps,
+but they are not direct product truth.
+
+Sources:
+
+- Live API: `https://data.sfgov.org/resource/86e8-rfem.json`
+- Local review CSV: `/Users/chuckclaw/Downloads/poe_operating_status_review_20260424.csv`
+
+Dry-run the reviewed CSV:
+
+```bash
+npm --prefix backend run import:datasf-poe -- --csv="/Users/chuckclaw/Downloads/poe_operating_status_review_20260424.csv" --dry-run
+```
+
+Use `--summary-only` when checking full-batch counts without printing every raw
+candidate:
+
+```bash
+npm --prefix backend run import:datasf-poe -- --csv="/Users/chuckclaw/Downloads/poe_operating_status_review_20260424.csv" --dry-run --summary-only
+```
+
+Apply creates `provider_records` with `provider='datasf_poe'` and pending
+`venue_review_items` for reviewable rows; rows classified as
+`reject_non_nightlife` are skipped. It never creates public approved venues
+directly.
+
+Filtering notes:
+
+- Prefer rows marked `likely_operating_city_registry` or
+  `web_verified_operating`.
+- Hold `needs_name_review_active_address` for manual review.
+- Exclude or hold obvious hotels, museums, offices, gyms, generic restaurants,
+  cultural-only venues, closed rows, and superseded rows.
+- Use the DataSF row as evidence for licensing/operation, then verify public
+  nightlife relevance through review and provider enrichment.
+
 ## Curated Import
 
 Candidate source:

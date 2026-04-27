@@ -74,7 +74,7 @@ struct NightloopTabShell: View {
     let preferences: [String: [String]]
     let onAccountChanged: (MeResponse) -> Void
 
-    @State private var selectedTab: AppTab = .home
+    @State private var selectedTab: AppTab = .debugInitialTab
 
     var body: some View {
         ZStack {

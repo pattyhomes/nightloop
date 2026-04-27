@@ -1,18 +1,20 @@
 # Map Provider Decision Notes
 
-Phase 5 keeps Mapbox as the default map while we audit provider provenance.
-The switch threshold is compliance risk, not logo preference.
+Phase 5.5 switches the production native map path to Google Maps. This is a
+compliance-first decision: Nightloop uses Google Places for venue verification,
+and approved venue content may include Google-backed identity, address,
+coordinates, type, or provider IDs.
 
 ## Current Default
 
-Use Mapbox for the production-shaped Phase 5 map because:
+Use Google Maps SDK for iOS for the production-shaped map because:
 
-- Nightloop already has a custom `Nightloop Midnight Orchid` Studio style.
-- The app owns venue markers, glow, filters, sheets, and signal UI.
-- Mapbox labels can be tuned in Studio without rebuilding iOS.
+- It is the safest path when Google Places data is part of venue QA/enrichment.
+- Google Cloud Map IDs can carry the subdued dark base styling.
+- The app still owns venue markers, glow, filters, sheets, and signal UI.
 
-Mapbox logo and attribution must remain visible. They can be repositioned and
-minimized with SDK ornament options, but must not be hidden or obscured.
+Google logo and attribution/legal UI must remain visible. They must not be
+hidden, cropped, or obscured by Nightloop controls.
 
 ## Provider Provenance Rule
 
@@ -35,25 +37,26 @@ The audit classifies approved venues as:
   depend on Google as the source.
 
 Rows classified as `google_derived` must be reviewed before assuming they are
-safe to render on Mapbox or MapKit.
+safe to render outside Google Maps. In the current production path, those rows
+are expected to render on Google Maps.
 
 ## Decision Matrix
 
 | Provider | Keep When | Risk |
 | --- | --- | --- |
-| Mapbox | Best visual match; Google is verification only. | Required Mapbox attribution; must audit Google-derived venue fields. |
 | Google Maps SDK | Google-derived venue content is materially used in the map. | More Google-looking base map unless Cloud styling is excellent; required Google logo/legal. |
+| Mapbox | Only if Google-derived venue content is removed or independently reverified. | Required Mapbox attribution; compliance risk if Google Maps Content is rendered on a non-Google map. |
 | MapKit | Native simplicity matters and visual style is good enough. | Less control over Midnight Orchid styling and label suppression. |
 | MapLibre | We are ready to pick/host non-Mapbox tiles/styles. | Larger infrastructure and licensing decision; not a quick Phase 5 fix. |
 
 ## Spike Requirements
 
-If we spike Google Maps, test Cloud-based styling, label suppression, legal/logo
-placement, bottom-sheet padding, and Nightloop marker overlays.
+For Google Maps, test Cloud-based styling, label suppression, legal/logo
+placement, bottom-sheet padding, and Nightloop marker overlays before TestFlight.
 
 If we spike MapKit, test whether Apple styling can stay dark, minimal, and
 nightlife-first without noisy default POIs.
 
-Do not render raw Google provider records in iOS for either spike.
+Do not render raw Google provider records in iOS.
 
 References: [Mapbox attribution](https://docs.mapbox.com/help/getting-started/attribution/), [Google Maps Platform Service Terms](https://cloud.google.com/maps-platform/terms/maps-service-terms), [Google Places policies](https://developers.google.com/maps/documentation/places/web-service/policies), [Google Maps iOS Cloud Styling](https://developers.google.com/maps/documentation/ios-sdk/cloud-customization).

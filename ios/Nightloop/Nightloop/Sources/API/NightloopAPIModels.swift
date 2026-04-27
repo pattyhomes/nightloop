@@ -165,6 +165,17 @@ struct FriendSummary: Codable, Equatable {
     let firstFriendName: String?
 }
 
+struct VenueHours: Codable, Equatable {
+    let status: String
+    let source: String
+    let confidence: String
+    let verifiedAt: String?
+    let fetchedAt: String?
+    let label: String
+    let claimsOpenNow: Bool
+    let metadata: JSONValue?
+}
+
 struct VenueItem: Codable, Identifiable, Equatable {
     let id: String
     let slug: String?
@@ -181,6 +192,7 @@ struct VenueItem: Codable, Identifiable, Equatable {
     let recentSignalCount: Int
     let confidence: String
     let event: VenueEvent?
+    let hours: VenueHours?
     let friendSummary: FriendSummary
     let image: VenueAsset?
     let assets: [VenueAsset]
@@ -204,6 +216,35 @@ struct VenueListResponse: Decodable, Equatable {
     let items: [VenueItem]
     let counts: VenueCounts
     let nextCursor: String?
+}
+
+struct RecommendationListResponse: Decodable, Equatable {
+    let generatedAt: String
+    let mode: String
+    let market: VenueListMarket
+    let items: [RecommendationItem]
+    let counts: VenueCounts
+    let nextCursor: String?
+}
+
+struct RecommendationItem: Decodable, Identifiable, Equatable {
+    let rank: Int
+    let score: Double
+    let mode: String
+    let reason: String
+    let venue: VenueItem
+    let factors: RecommendationFactors?
+
+    var id: String { venue.id }
+}
+
+struct RecommendationFactors: Decodable, Equatable {
+    let venueQuality: Int
+    let preferenceMatch: Int
+    let liveSignals: Int
+    let eventRelevance: Int
+    let sourceConfidence: Int
+    let hoursConfidence: Int
 }
 
 struct VenueListMarket: Decodable, Equatable {

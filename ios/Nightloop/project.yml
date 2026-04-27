@@ -22,9 +22,9 @@ packages:
   Supabase:
     url: https://github.com/supabase/supabase-swift.git
     from: "2.0.0"
-  MapboxMaps:
-    url: https://github.com/mapbox/mapbox-maps-ios.git
-    from: "11.0.0"
+  GoogleMaps:
+    url: https://github.com/googlemaps/ios-maps-sdk.git
+    from: "9.2.0"
 
 targets:
   Nightloop:
@@ -54,8 +54,8 @@ targets:
     dependencies:
       - package: Supabase
         product: Supabase
-      - package: MapboxMaps
-        product: MapboxMaps
+      - package: GoogleMaps
+        product: GoogleMaps
 
   NightloopTests:
     type: bundle.unit-test

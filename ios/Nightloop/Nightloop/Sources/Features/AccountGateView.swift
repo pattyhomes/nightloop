@@ -12,6 +12,7 @@ struct AccountGateView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var isDeleting = false
+    @State private var didStartInitialLoad = false
 
     var body: some View {
         ZStack {
@@ -28,7 +29,11 @@ struct AccountGateView: View {
                 route(for: me)
             }
         }
-        .task { await loadAccount() }
+        .onAppear {
+            guard !didStartInitialLoad else { return }
+            didStartInitialLoad = true
+            Task { await loadAccount() }
+        }
     }
 
     @ViewBuilder

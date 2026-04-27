@@ -1,4 +1,4 @@
-import MapboxMaps
+import GoogleMaps
 import SwiftUI
 
 @main
@@ -10,8 +10,8 @@ struct NightloopApp: App {
     init() {
         do {
             let config = try NightloopConfig.current()
-            if let mapboxAccessToken = config.mapboxAccessToken {
-                MapboxOptions.accessToken = mapboxAccessToken
+            if let googleMapsIOSAPIKey = config.googleMapsIOSAPIKey {
+                GMSServices.provideAPIKey(googleMapsIOSAPIKey)
             }
             _authStore = StateObject(wrappedValue: AuthStore(config: config))
             apiClient = NightloopAPIClient(baseURL: config.apiBaseURL)

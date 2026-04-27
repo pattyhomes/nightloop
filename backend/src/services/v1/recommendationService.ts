@@ -1,0 +1,349 @@
+import { ApiError, validationError } from "../../lib/apiError";
+import { dbQuery } from "../../lib/db";
+import type { AccountState } from "./accountService";
+import { requireEligible } from "./accountService";
+import { findMarketByIdOrSlug, type MarketRow } from "./marketService";
+import { formatVenue, type VenueFeedRow } from "./venueService";
+
+type PulseFilter = "chill" | "active" | "packed";
+
+export type RecommendationQuery = {
+  account: AccountState;
+  marketId: string;
+  pulse?: PulseFilter;
+  limit?: number;
+};
+
+type RecommendationRow = VenueFeedRow & {
+  venue_source: string | null;
+  venue_metadata: Record<string, unknown>;
+  venue_quality_score: number | null;
+  source_confidence_score: number | null;
+  event_score: number | null;
+  hours_confidence_score: number | null;
+  baseline_score: number | null;
+};
+
+type ScoredRecommendation = {
+  row: RecommendationRow;
+  score: number;
+  reason: string;
+  mode: "tonight_preview" | "live_now";
+  factors: {
+    venue_quality: number;
+    preference_match: number;
+    live_signals: number;
+    event_relevance: number;
+    source_confidence: number;
+    hours_confidence: number;
+  };
+};
+
+function clamp(value: number, min = 0, max = 1): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pulseFilterToLevel(pulse?: PulseFilter): number | undefined {
+  if (!pulse) return undefined;
+  if (pulse === "packed") return 3;
+  if (pulse === "active") return 2;
+  return 1;
+}
+
+function textSet(values?: string[]): Set<string> {
+  return new Set((values ?? []).map((value) => value.toLowerCase().trim()).filter(Boolean));
+}
+
+function marketHour(market: MarketRow, now = new Date()): number {
+  try {
+    const hour = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      hour12: false,
+      timeZone: market.timezone
+    }).format(now);
+    return Number(hour);
+  } catch {
+    return now.getUTCHours();
+  }
+}
+
+function recommendationMode(market: MarketRow): "tonight_preview" | "live_now" {
+  const hour = marketHour(market);
+  return hour >= 18 || hour < 3 ? "live_now" : "tonight_preview";
+}
+
+function sourceQuality(row: RecommendationRow): number {
+  const source = row.venue_source ?? "";
+  const metadata = row.venue_metadata ?? {};
+  const type = row.category ?? "";
+  let score = Number(row.venue_quality_score ?? row.baseline_score ?? 0);
+
+  if (!Number.isFinite(score) || score <= 0) {
+    if (source.startsWith("curated:")) score = 0.82;
+    else if (source === "provider:google_places") score = 0.64;
+    else score = 0.62;
+  }
+
+  if (metadata.datasf_poe_record_id || source === "provider:datasf_poe") score += 0.08;
+  if (metadata.google_place_id) score += 0.05;
+  if (metadata.foursquare_id) score += 0.03;
+  if (["club", "lounge", "live_music", "karaoke"].includes(type)) score += 0.04;
+
+  return clamp(score);
+}
+
+function sourceConfidence(row: RecommendationRow): number {
+  const metadata = row.venue_metadata ?? {};
+  let score = Number(row.source_confidence_score ?? 0);
+  if (!Number.isFinite(score) || score <= 0) {
+    score = 0.45;
+  }
+  if (metadata.google_place_id) score += 0.16;
+  if (metadata.datasf_poe_record_id) score += 0.14;
+  if (metadata.foursquare_id) score += 0.08;
+  if (row.venue_source?.startsWith("curated:")) score += 0.12;
+  return clamp(score);
+}
+
+function preferenceMatch(row: RecommendationRow, preferences: Record<string, string[]>): number {
+  const neighborhoods = textSet(preferences.neighborhoods);
+  const vibe = textSet(preferences.vibe);
+  const music = textSet(preferences.music);
+  const crowd = textSet(preferences.crowd);
+  const category = (row.category ?? "").toLowerCase();
+  const neighborhood = (row.neighborhood ?? "").toLowerCase();
+
+  let score = 0.2;
+  if (neighborhoods.has(neighborhood.replace(/\s+/g, "-")) || neighborhoods.has(neighborhood)) score += 0.35;
+  if (vibe.has(category) || music.has(category) || crowd.has(category)) score += 0.2;
+  if (category.includes("club") && (vibe.has("dance") || crowd.has("packed"))) score += 0.15;
+  if (category.includes("bar") && (vibe.has("cocktails") || vibe.has("conversation"))) score += 0.12;
+  if (category.includes("live") && music.size > 0) score += 0.12;
+  return clamp(score);
+}
+
+function liveSignalScore(row: RecommendationRow): number {
+  const signalCount = Number(row.recent_signal_count ?? 0);
+  const energy = clamp(Number(row.energy_score ?? 28) / 100);
+  const cap = signalCount >= 10 ? 0.25 : signalCount >= 3 ? 0.15 : signalCount >= 1 ? 0.08 : 0;
+  const deadPenalty = typeof row.source_summary?.dead === "number" ? Number(row.source_summary.dead) * 0.02 : 0;
+  return clamp(Math.min(energy, cap) - deadPenalty);
+}
+
+function eventScore(row: RecommendationRow): number {
+  if (row.current_event) return 1;
+  return clamp(Number(row.event_score ?? 0));
+}
+
+function hoursScore(row: RecommendationRow): number {
+  if (row.schedule_status === "verified_hours") return clamp(Number(row.schedule_confidence ?? 0.75));
+  if (row.schedule_status === "temporarily_closed") return 0.05;
+  if (row.schedule_status === "manual_hold") return 0.15;
+  return 0.35;
+}
+
+function reasonFor(row: RecommendationRow, mode: ScoredRecommendation["mode"], factors: ScoredRecommendation["factors"]): string {
+  const area = row.neighborhood ?? "SF";
+  if (mode === "tonight_preview") {
+    if (factors.preference_match >= 0.55) return `A strong ${area} fit for your tonight picks.`;
+    if (factors.source_confidence >= 0.7) return `Source-backed ${area} nightlife for tonight.`;
+    return `Likely worth keeping on tonight's radar.`;
+  }
+  if (Number(row.recent_signal_count ?? 0) > 0) {
+    return `${row.recent_signal_count} verified signal${Number(row.recent_signal_count) === 1 ? "" : "s"} tonight.`;
+  }
+  return `Reliable ${area} option with ${row.energy_label ?? "steady"} baseline energy.`;
+}
+
+function scoreRecommendation(
+  row: RecommendationRow,
+  account: AccountState,
+  mode: ScoredRecommendation["mode"]
+): ScoredRecommendation {
+  const hasPreferences = Object.values(account.preferences).some((values) => values.length > 0);
+  const factors = {
+    venue_quality: sourceQuality(row),
+    preference_match: preferenceMatch(row, account.preferences),
+    live_signals: liveSignalScore(row),
+    event_relevance: eventScore(row),
+    source_confidence: sourceConfidence(row),
+    hours_confidence: hoursScore(row)
+  };
+
+  const score = hasPreferences
+    ? factors.venue_quality * 0.45 +
+      factors.preference_match * 0.25 +
+      factors.live_signals * 0.15 +
+      factors.event_relevance * 0.10 +
+      factors.source_confidence * 0.05
+    : factors.venue_quality * 0.60 +
+      factors.live_signals * 0.20 +
+      factors.event_relevance * 0.10 +
+      factors.source_confidence * 0.10;
+
+  const adjusted = row.schedule_status === "temporarily_closed" ? score * 0.25 : score;
+  return {
+    row,
+    score: adjusted,
+    mode,
+    factors,
+    reason: reasonFor(row, mode, factors)
+  };
+}
+
+export async function listRecommendations(query: RecommendationQuery) {
+  requireEligible(query.account);
+  if (!query.marketId) {
+    throw validationError("market_id is required.", { market_id: "Required" });
+  }
+
+  const market = await findMarketByIdOrSlug(query.marketId);
+  const limit = Math.max(1, Math.min(60, Math.floor(query.limit ?? 20)));
+  const pulseLevel = pulseFilterToLevel(query.pulse);
+  const mode = recommendationMode(market);
+
+  if (market.launch_status !== "active" && market.launch_status !== "preview") {
+    throw new ApiError(404, "MARKET_NOT_AVAILABLE", "This market is not available yet.");
+  }
+
+  const result = await dbQuery<RecommendationRow>(
+    `
+      SELECT
+        v.id,
+        v.slug,
+        v.name,
+        v.market_id,
+        m.short_label AS market_short_label,
+        COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS neighborhood,
+        COALESCE(v.canonical_type, v.metadata->>'category') AS category,
+        v.latitude,
+        v.longitude,
+        v.source AS venue_source,
+        COALESCE(v.metadata, '{}'::jsonb) AS venue_metadata,
+        COALESCE(vls.pulse_level, 1) AS pulse_level,
+        COALESCE(vls.energy_score, 28) AS energy_score,
+        COALESCE(vls.energy_label, 'Chill') AS energy_label,
+        COALESCE(vls.trend, 'steady') AS trend,
+        vls.wait_minutes,
+        COALESCE(vls.signal_count, 0) AS signal_count,
+        COALESCE(vls.recent_signal_count, 0) AS recent_signal_count,
+        COALESCE(vls.confidence, 0.25) AS confidence,
+        vls.last_signal_at,
+        vls.computed_at,
+        COALESCE(vls.source_summary, '{}'::jsonb) AS source_summary,
+        COALESCE(asset_pack.assets, '[]'::jsonb) AS assets,
+        event_pack.current_event,
+        schedule_pack.status AS schedule_status,
+        schedule_pack.source AS schedule_source,
+        schedule_pack.confidence AS schedule_confidence,
+        schedule_pack.verified_at AS schedule_verified_at,
+        schedule_pack.fetched_at AS schedule_fetched_at,
+        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata,
+        vri.venue_quality_score,
+        vri.source_confidence_score,
+        vri.event_score,
+        vri.hours_confidence_score,
+        vri.baseline_score
+      FROM venues v
+      JOIN markets m ON m.id = v.market_id
+      LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
+      LEFT JOIN venue_recommendation_inputs vri ON vri.venue_id = v.id
+      LEFT JOIN LATERAL (
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'id', va.id,
+            'asset_type', va.asset_type,
+            'url', va.url,
+            'alt_text', va.alt_text,
+            'credit_text', va.credit_text,
+            'credit_url', va.credit_url,
+            'license_name', va.license_name,
+            'license_url', va.license_url,
+            'rights_status', va.rights_status,
+            'source', va.source
+          )
+          ORDER BY va.sort_order ASC, va.created_at ASC
+        ) AS assets
+        FROM venue_assets va
+        WHERE va.venue_id = v.id
+          AND va.is_approved = true
+      ) asset_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT jsonb_build_object(
+          'id', e.id,
+          'title', e.title,
+          'starts_at', e.starts_at,
+          'ends_at', e.ends_at,
+          'source', e.source,
+          'url', e.url
+        ) AS current_event
+        FROM events e
+        WHERE e.venue_id = v.id
+          AND e.is_approved = true
+          AND e.starts_at >= NOW() - INTERVAL '6 hours'
+        ORDER BY e.starts_at ASC
+        LIMIT 1
+      ) event_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          vs.status,
+          vs.source,
+          vs.confidence,
+          vs.verified_at,
+          vs.fetched_at,
+          vs.metadata
+        FROM venue_schedules vs
+        WHERE vs.venue_id = v.id
+        ORDER BY
+          CASE vs.status WHEN 'verified_hours' THEN 0 WHEN 'temporarily_closed' THEN 1 WHEN 'manual_hold' THEN 2 ELSE 3 END,
+          COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
+        LIMIT 1
+      ) schedule_pack ON true
+      WHERE v.market_id = $1::uuid
+        AND v.is_active = true
+        AND v.admin_status = 'approved'
+        AND ($2::int IS NULL OR COALESCE(vls.pulse_level, 1) = $2::int)
+      LIMIT 300
+    `,
+    [market.id, pulseLevel ?? null]
+  );
+
+  const scored = result.rows
+    .map((row) => scoreRecommendation(row, query.account, mode))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit);
+
+  const counts = { all: 0, packed: 0, active: 0, chill: 0, friends: 0 };
+  for (const row of result.rows) {
+    counts.all += 1;
+    if (Number(row.pulse_level ?? 1) >= 3) counts.packed += 1;
+    else if (Number(row.pulse_level ?? 1) >= 2) counts.active += 1;
+    else counts.chill += 1;
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    mode,
+    market: {
+      id: market.id,
+      short_label: market.short_label
+    },
+    items: scored.map((item, index) => ({
+      rank: index + 1,
+      score: Math.round(item.score * 1000) / 10,
+      mode: item.mode,
+      reason: item.reason,
+      venue: formatVenue(item.row),
+      factors: {
+        venue_quality: Math.round(item.factors.venue_quality * 100),
+        preference_match: Math.round(item.factors.preference_match * 100),
+        live_signals: Math.round(item.factors.live_signals * 100),
+        event_relevance: Math.round(item.factors.event_relevance * 100),
+        source_confidence: Math.round(item.factors.source_confidence * 100),
+        hours_confidence: Math.round(item.factors.hours_confidence * 100)
+      }
+    })),
+    counts,
+    next_cursor: null
+  };
+}
