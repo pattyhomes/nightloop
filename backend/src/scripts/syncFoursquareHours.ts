@@ -2,7 +2,7 @@ import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, getDBClient } from "../lib/db";
 import { loadConfig } from "../lib/config";
-import { FOURSQUARE_PLACES_API_BASE_URL, foursquareHeaders } from "../lib/foursquareHttp";
+import { FOURSQUARE_PLACES_API_BASE_URL, FOURSQUARE_PRO_FIELD_MASK, foursquareHeaders } from "../lib/foursquareHttp";
 import {
   normalizeFoursquarePlaceHours,
   type FoursquarePlaceHours,
@@ -31,7 +31,7 @@ type FoursquareSearchResponse = {
 };
 
 const FSQ_BASE = FOURSQUARE_PLACES_API_BASE_URL;
-const FSQ_DETAIL_FIELDS = "fsq_place_id,name,timezone,verified,popularity,price,rating,closed_bucket,hours,hours_popular,location";
+const FSQ_DETAIL_FIELDS = FOURSQUARE_PRO_FIELD_MASK;
 
 function parseArgs(argv: string[]): Args {
   const apply = argv.includes("--apply");
@@ -214,8 +214,10 @@ async function applySchedule(candidate: VenueCandidate, plan: ProviderSchedulePl
       JSON.stringify({
         foursquare_id: plan.metadata.fsq_id,
         foursquare_verified: plan.metadata.foursquare_verified,
-        foursquare_popularity: plan.metadata.popularity,
-        foursquare_price: plan.metadata.price,
+        foursquare_phone: plan.metadata.phone,
+        foursquare_instagram: plan.metadata.instagram,
+        foursquare_twitter: plan.metadata.twitter,
+        foursquare_website: plan.metadata.website,
         foursquare_checked_at: new Date().toISOString()
       })
     ]

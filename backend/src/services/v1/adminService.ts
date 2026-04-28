@@ -3,7 +3,7 @@ import { ApiError, notFoundError, validationError } from "../../lib/apiError";
 import type { AppConfig } from "../../lib/config";
 import type { DBClient } from "../../lib/db";
 import { dbQuery, dbTransaction } from "../../lib/db";
-import { FOURSQUARE_PLACES_API_BASE_URL, foursquareHeaders } from "../../lib/foursquareHttp";
+import { FOURSQUARE_PLACES_API_BASE_URL, FOURSQUARE_PRO_FIELD_MASK, foursquareHeaders } from "../../lib/foursquareHttp";
 import { ensureAccountForAuthUser } from "./accountService";
 import {
   findProviderDuplicateWarnings,
@@ -159,7 +159,7 @@ type ProviderCandidatePayload = {
 
 const FSQ_BASE_URL = FOURSQUARE_PLACES_API_BASE_URL;
 const FSQ_SEARCH_RADIUS_METERS = 300;
-const FSQ_DETAIL_FIELDS = "fsq_place_id,name,location,categories,hours,website,verified,geocodes";
+const FSQ_DETAIL_FIELDS = FOURSQUARE_PRO_FIELD_MASK;
 const FSQ_DELAY_MS = 250;
 const GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 export const GOOGLE_PLACES_TEXT_SEARCH_FIELD_MASK =
@@ -561,8 +561,10 @@ type FoursquarePlace = {
   name: string;
   location?: JsonRecord;
   categories?: Array<{ id: number; name: string }>;
-  hours?: JsonRecord;
+  tel?: string;
   website?: string;
+  social_media?: JsonRecord;
+  related_places?: JsonRecord;
   verified?: boolean;
   geocodes?: JsonRecord;
 };
@@ -900,8 +902,10 @@ async function getFoursquarePayloadForVenue(
     name: detail.name,
     categories: detail.categories ?? [],
     location: detail.location ?? {},
-    hours: detail.hours ?? {},
+    tel: detail.tel ?? null,
     website: detail.website,
+    social_media: detail.social_media ?? {},
+    related_places: detail.related_places ?? {},
     verified: detail.verified ?? false
   };
 
@@ -924,12 +928,15 @@ async function getFoursquarePayloadForVenue(
         foursquare_id: detailFoursquareId,
         foursquare_category: category,
         foursquare_verified: detail.verified ?? false,
+        foursquare_phone: detail.tel ?? null,
+        foursquare_instagram: textValue(detail.social_media?.instagram),
+        foursquare_twitter: textValue(detail.social_media?.twitter),
         website: detail.website,
         ...providerProvenancePatch({
           provider: "foursquare",
           runId: run.id,
           matchConfidence: best.score,
-          fields: ["fsq_place_id", "name", "location", "categories", "hours", "website", "verified", "geocodes"]
+          fields: FOURSQUARE_PRO_FIELD_MASK.split(",")
         })
       }
     },

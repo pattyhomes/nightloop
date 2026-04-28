@@ -1110,6 +1110,18 @@ describe("Nightloop v1 admin/data ops API", () => {
         } as Response;
       }
 
+      const fields = new URL(text).searchParams.get("fields") ?? "";
+      expect(fields).toContain("tel");
+      expect(fields).toContain("website");
+      expect(fields).toContain("social_media");
+      expect(fields).toContain("related_places");
+      expect(fields).not.toContain("hours");
+      expect(fields).not.toContain("hours_popular");
+      expect(fields).not.toContain("rating");
+      expect(fields).not.toContain("popularity");
+      expect(fields).not.toContain("price");
+      expect(fields).not.toContain("closed_bucket");
+      expect(fields).not.toContain("stats");
       return {
         ok: true,
         json: async () => ({
@@ -1117,7 +1129,10 @@ describe("Nightloop v1 admin/data ops API", () => {
           name: "Phase 2 Google Discovery Venue",
           categories: [{ id: 13003, name: "Bar" }],
           location: {},
-          hours: {},
+          tel: "+14155550123",
+          website: "https://example.com",
+          social_media: { instagram: "phase2google" },
+          related_places: {},
           verified: true
         })
       } as Response;
@@ -1205,6 +1220,18 @@ describe("Nightloop v1 admin/data ops API", () => {
         } as Response;
       }
 
+      const fields = new URL(text).searchParams.get("fields") ?? "";
+      expect(fields).toContain("tel");
+      expect(fields).toContain("website");
+      expect(fields).toContain("social_media");
+      expect(fields).toContain("related_places");
+      expect(fields).not.toContain("hours");
+      expect(fields).not.toContain("hours_popular");
+      expect(fields).not.toContain("rating");
+      expect(fields).not.toContain("popularity");
+      expect(fields).not.toContain("price");
+      expect(fields).not.toContain("closed_bucket");
+      expect(fields).not.toContain("stats");
       return {
         ok: true,
         json: async () => ({
@@ -1212,7 +1239,10 @@ describe("Nightloop v1 admin/data ops API", () => {
           name: "Phase 2 Curated Notable Venue",
           categories: [{ id: 13003, name: "Bar" }],
           location: {},
-          hours: {},
+          tel: "+14155550123",
+          website: "https://example.com",
+          social_media: { instagram: "phase2curated" },
+          related_places: {},
           verified: true
         })
       } as Response;

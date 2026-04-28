@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FOURSQUARE_PRO_FIELD_MASK } from "../src/lib/foursquareHttp";
 import {
   GOOGLE_HOURS_FIELD_MASK,
   normalizeFoursquarePlaceHours,
@@ -109,7 +110,21 @@ describe("Phase 5.8 provider hours normalization", () => {
     expect(plan.metadata).not.toHaveProperty("closed_today");
   });
 
-  it("maps Foursquare fallback fields while excluding promo/raw content", () => {
+  it("requests only Foursquare Pro fields while premium fields stay disabled", () => {
+    expect(FOURSQUARE_PRO_FIELD_MASK).toContain("tel");
+    expect(FOURSQUARE_PRO_FIELD_MASK).toContain("website");
+    expect(FOURSQUARE_PRO_FIELD_MASK).toContain("social_media");
+    expect(FOURSQUARE_PRO_FIELD_MASK).toContain("related_places");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("hours");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("hours_popular");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("rating");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("popularity");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("price");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("closed_bucket");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("stats");
+  });
+
+  it("maps Foursquare Pro fallback fields as unknown hours while excluding promo/raw content", () => {
     const plan = normalizeFoursquarePlaceHours({
       id: "venue-1",
       name: "Nightloop Room",
@@ -122,16 +137,14 @@ describe("Phase 5.8 provider hours normalization", () => {
       name: "Nightloop Room",
       timezone: "America/Los_Angeles",
       verified: true,
-      popularity: 0.82,
-      price: 3,
-      rating: 8.9,
-      closed_bucket: "VeryLikelyOpen",
-      hours: {
-        open_now: false,
-        display: "Sat 10:00 PM - 2:00 AM",
-        regular: [{ day: 6, open: "2200", close: "0200" }]
+      tel: "+14155550123",
+      website: "https://example.com",
+      social_media: {
+        instagram: "nightlooproom",
+        twitter: "nightlooproom"
       },
-      hours_popular: [{ day: 6, open: "2300", close: "0100" }],
+      categories: [{ id: 10032, name: "Night Club" }],
+      related_places: { children: [{ fsq_place_id: "child-1", name: "Nightloop Rooftop" }] },
       location: { neighborhood: ["SoMa"] },
       description: "Promo copy must not be stored",
       photos: [{ id: "photo-1" }],
@@ -142,22 +155,29 @@ describe("Phase 5.8 provider hours normalization", () => {
 
     expect(plan).toMatchObject({
       source: "provider:foursquare",
-      status: "verified_hours",
+      status: "unknown",
       metadata: expect.objectContaining({
         fsq_id: "fsq-1",
         source_provider: "foursquare",
         foursquare_verified: true,
-        popularity: 0.82,
-        price: 3,
-        rating: 8.9,
+        phone: "+14155550123",
+        website: "https://example.com",
+        instagram: "nightlooproom",
+        twitter: "nightlooproom",
+        category_names: ["Night Club"],
+        related_places_present: true,
         provider_neighborhood: "SoMa",
-        opens_later: true
+        hours_missing: true
       })
     });
     expect(plan.weekly_hours).toMatchObject({
-      regular_periods: expect.any(Array),
-      popular_periods: expect.any(Array)
+      display: null,
+      regular_periods: [],
+      popular_periods: []
     });
+    expect(plan.metadata).not.toHaveProperty("popularity");
+    expect(plan.metadata).not.toHaveProperty("price");
+    expect(plan.metadata).not.toHaveProperty("rating");
     const serialized = JSON.stringify(plan);
     expect(serialized).not.toContain("Promo copy");
     expect(serialized).not.toContain("photo-1");

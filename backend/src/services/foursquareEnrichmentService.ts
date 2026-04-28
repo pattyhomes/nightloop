@@ -31,7 +31,7 @@
 
 import { MOCK_VENUES } from "../data/mockVenues";
 import { upsertVenueEnrichment, resolveVenueIdBySeedId } from "../dataAccess/venueEnrichmentRepository";
-import { FOURSQUARE_PLACES_API_BASE_URL, foursquareHeaders } from "../lib/foursquareHttp";
+import { FOURSQUARE_PLACES_API_BASE_URL, FOURSQUARE_PRO_FIELD_MASK, foursquareHeaders } from "../lib/foursquareHttp";
 import type { FoursquareEnrichmentData } from "../types/venueEnrichment";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ const FSQ_SOURCE = "foursquare";
 const SEARCH_RADIUS_M = 300;
 
 /** Detail fields requested from the Places API. */
-const DETAIL_FIELDS = "fsq_place_id,name,location,categories,hours,popularity,rating,stats,verified,website";
+const DETAIL_FIELDS = FOURSQUARE_PRO_FIELD_MASK;
 
 /** Minimum score to accept a Foursquare candidate as a match. */
 const MATCH_THRESHOLD = 0.55;
@@ -58,22 +58,16 @@ interface FsqCategory {
   name: string;
 }
 
-interface FsqHours {
-  display?: string;
-  open_now?: boolean;
-}
-
-interface FsqStats {
-  total_photos?: number;
-  total_ratings?: number;
-  total_tips?: number;
-}
-
 interface FsqLocation {
   address?: string;
   neighborhood?: string;
   city?: string;
   formatted_address?: string;
+}
+
+interface FsqSocialMedia {
+  instagram?: string;
+  twitter?: string;
 }
 
 interface FsqPlace {
@@ -82,11 +76,10 @@ interface FsqPlace {
   name: string;
   location?: FsqLocation;
   categories?: FsqCategory[];
-  hours?: FsqHours;
-  popularity?: number;
-  rating?: number;
-  stats?: FsqStats;
+  tel?: string;
   website?: string;
+  social_media?: FsqSocialMedia;
+  related_places?: unknown;
   verified?: boolean;
 }
 
@@ -178,13 +171,11 @@ function mapToEnrichmentData(place: FsqPlace): FoursquareEnrichmentData {
     fsqId: fsqPlaceId(place) ?? "",
     matchedName: place.name,
     categories,
-    hoursDisplay: place.hours?.display,
-    openNow: place.hours?.open_now,
-    popularity: typeof place.popularity === "number" ? place.popularity : undefined,
-    rating: typeof place.rating === "number" ? place.rating : undefined,
-    totalRatings: place.stats?.total_ratings,
-    totalTips: place.stats?.total_tips,
+    phone: place.tel,
     website: place.website,
+    instagram: place.social_media?.instagram,
+    twitter: place.social_media?.twitter,
+    relatedPlaces: place.related_places,
     address: place.location?.address ?? place.location?.formatted_address,
     neighborhood: place.location?.neighborhood,
     verified: place.verified
@@ -199,8 +190,6 @@ export interface FoursquareEnrichmentResult {
   fsqId: string;
   matchType: string;
   score: number;
-  openNow?: boolean;
-  popularity?: number;
   categories: string[];
   stored: boolean;
 }
@@ -301,8 +290,6 @@ export async function enrichAllVenues(apiKey: string): Promise<FoursquareEnrichm
         fsqId: detailFoursquareId,
         matchType: best.matchType,
         score: best.score,
-        openNow: enrichmentData.openNow,
-        popularity: enrichmentData.popularity,
         categories: enrichmentData.categories,
         stored
       });

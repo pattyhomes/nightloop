@@ -72,13 +72,11 @@ async function main(): Promise<void> {
   if (summary.results.length > 0) {
     console.log("\n[fsq-enrich] Matched venues:");
     for (const r of summary.results) {
-      const pop = r.popularity !== undefined ? ` pop=${r.popularity.toFixed(2)}` : "";
-      const open = r.openNow !== undefined ? (r.openNow ? " open=yes" : " open=no") : "";
       const stored = r.stored ? "✓ stored" : "⚠ not stored (no DB UUID found)";
       console.log(
         `  [${r.matchType}] ${r.venueName.padEnd(35)} → ${r.fsqId}` +
         `  [${r.categories.join(", ") || "no categories"}]` +
-        `${pop}${open}  ${stored}`
+        `  ${stored}`
       );
     }
   }

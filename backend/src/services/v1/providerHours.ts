@@ -52,22 +52,27 @@ type FoursquarePeriod = {
   close?: string;
 };
 
+type FoursquareCategory = {
+  id?: number;
+  name?: string;
+};
+
+type FoursquareSocialMedia = {
+  instagram?: string;
+  twitter?: string;
+};
+
 export type FoursquarePlaceHours = {
   fsq_id?: string;
   fsq_place_id?: string;
   name?: string;
   timezone?: string;
   verified?: boolean;
-  popularity?: number;
-  price?: number;
-  rating?: number;
-  closed_bucket?: string;
-  hours?: {
-    open_now?: boolean;
-    display?: string;
-    regular?: FoursquarePeriod[];
-  };
-  hours_popular?: FoursquarePeriod[];
+  tel?: string;
+  website?: string;
+  social_media?: FoursquareSocialMedia;
+  categories?: FoursquareCategory[];
+  related_places?: unknown;
   location?: {
     neighborhood?: string[] | string;
   };
@@ -428,17 +433,11 @@ export function normalizeFoursquarePlaceHours(
   options: NormalizeOptions = {}
 ): ProviderSchedulePlan {
   const now = options.now ?? new Date();
-  const regularPeriods = (place.hours?.regular ?? []).map(normalizeFoursquarePeriod).filter(Boolean) as NormalizedPeriod[];
-  const popularPeriods = (place.hours_popular ?? []).map(normalizeFoursquarePeriod).filter(Boolean) as NormalizedPeriod[];
-  const window = evaluateNightlifeWindow(regularPeriods, place.timezone ?? candidate.timezone, now);
-  const hasHours = regularPeriods.length > 0 || Boolean(place.hours?.display);
-  const closedBucket = place.closed_bucket ?? "";
-  const status = /verylikelyclosed/i.test(closedBucket)
-    ? "temporarily_closed"
-    : hasHours
-      ? "verified_hours"
-      : "unknown";
-  const popularity = typeof place.popularity === "number" ? clamp(place.popularity) : null;
+  const categoryNames = (place.categories ?? [])
+    .map((category) => category.name)
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0);
+  const hasRelatedPlaces = typeof place.related_places === "object" && place.related_places !== null;
+  const status = "unknown";
   const metadata: Record<string, unknown> = {
     fsq_id: place.fsq_place_id ?? place.fsq_id ?? null,
     source_provider: "foursquare",
@@ -447,21 +446,18 @@ export function normalizeFoursquarePlaceHours(
     expires_at: expiresAt(now),
     nightlife_day_window: NIGHTLIFE_DAY_WINDOW,
     foursquare_verified: place.verified ?? false,
-    popularity,
-    price: typeof place.price === "number" ? place.price : null,
-    rating: typeof place.rating === "number" ? place.rating : null,
-    closed_bucket: closedBucket || null,
+    phone: place.tel ?? null,
+    website: place.website ?? null,
+    instagram: place.social_media?.instagram ?? null,
+    twitter: place.social_media?.twitter ?? null,
+    category_names: categoryNames,
+    related_places_present: hasRelatedPlaces,
     provider_neighborhood: fsqNeighborhood(place.location),
-    is_open_now: status === "verified_hours" ? place.hours?.open_now ?? window.is_open_now : null,
-    opens_at: status === "verified_hours" ? window.opens_at ?? null : null,
-    closes_at: status === "verified_hours" ? window.closes_at ?? null : null,
-    hours_popular_present: popularPeriods.length > 0,
-    hours_missing: !hasHours
+    is_open_now: null,
+    opens_at: null,
+    closes_at: null,
+    hours_missing: true
   };
-  if (status === "verified_hours") {
-    metadata.opens_later = window.opens_later === true;
-    metadata.closed_today = window.closed_today === true;
-  }
 
   return {
     venue_id: candidate.id,
@@ -469,12 +465,12 @@ export function normalizeFoursquarePlaceHours(
     status,
     source: "provider:foursquare",
     timezone: place.timezone ?? candidate.timezone,
-    confidence: status === "verified_hours" ? (place.verified ? 0.84 : 0.72) : status === "temporarily_closed" ? 0.7 : 0.22,
+    confidence: 0.22,
     expires_at: expiresAt(now),
     weekly_hours: {
-      display: place.hours?.display ?? null,
-      regular_periods: regularPeriods,
-      popular_periods: popularPeriods
+      display: null,
+      regular_periods: [],
+      popular_periods: []
     },
     metadata
   };
