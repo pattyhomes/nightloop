@@ -194,9 +194,9 @@ struct MapMarkerVisuals: Equatable {
                 haloSize: isSelected ? 48 : 34,
                 middleSize: isSelected ? 30 : 22,
                 dotSize: 0,
-                haloOpacity: 0.12,
+                haloOpacity: isSelected ? 0.24 : 0.18,
                 middleOpacity: 0,
-                glowRadius: isSelected ? 12 : 6,
+                glowRadius: isSelected ? 18 : 11,
                 shape: .hollowRing,
                 colorRole: .purple
             )
@@ -307,10 +307,28 @@ struct MapVenueFilter {
 
     static func rankedVenues(from venues: [VenueItem]) -> [VenueItem] {
         venues.sorted {
+            let leftAvailability = availabilityRank(for: $0)
+            let rightAvailability = availabilityRank(for: $1)
+            if leftAvailability != rightAvailability {
+                return leftAvailability < rightAvailability
+            }
             if $0.pulse.score == $1.pulse.score {
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
             return $0.pulse.score > $1.pulse.score
+        }
+    }
+
+    private static func availabilityRank(for venue: VenueItem) -> Int {
+        switch venue.liveness?.state {
+        case .live:
+            return 0
+        case .opensLater:
+            return 1
+        case .unknown, nil:
+            return 2
+        case .closedToday:
+            return 3
         }
     }
 }

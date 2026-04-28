@@ -24,13 +24,8 @@ struct HomeView: View {
         markets.first { $0.id == activeMarketID } ?? markets.first
     }
 
-    private var personalizedItems: [VenueItem] {
-        guard let recommendationFeed else { return [] }
-        return recommendationFeed.items.map(\.venue)
-    }
-
-    private var recommendationByVenueID: [String: RecommendationItem] {
-        Dictionary(uniqueKeysWithValues: (recommendationFeed?.items ?? []).map { ($0.venue.id, $0) })
+    private var heroRecommendation: RecommendationItem? {
+        recommendationFeed?.items.first { $0.venue.liveness?.state != .closedToday }
     }
 
     var body: some View {
@@ -45,8 +40,8 @@ struct HomeView: View {
                         trustPulseStrip(feed: recommendationFeed)
                         filterStrip(counts: recommendationFeed.counts)
 
-                        if let hero = personalizedItems.first {
-                            heroCard(hero, recommendation: recommendationByVenueID[hero.id])
+                        if let heroRecommendation {
+                            heroCard(heroRecommendation.venue, recommendation: heroRecommendation)
                         }
 
                         recommendationSections(feed: recommendationFeed)
@@ -239,6 +234,12 @@ struct HomeView: View {
                         Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(NightloopTheme.inkMuted)
+                        if venue.pulse.isExpected == true, let copy = venue.pulse.copy {
+                            Text(copy)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(NightloopTheme.inkDim)
+                                .lineLimit(2)
+                        }
                     }
 
                     SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
@@ -270,7 +271,8 @@ struct HomeView: View {
 
     @ViewBuilder
     private func recommendationSections(feed: RecommendationListResponse) -> some View {
-        let remaining = Array(feed.items.dropFirst())
+        let heroID = heroRecommendation?.venue.id
+        let remaining = feed.items.filter { $0.venue.id != heroID }
         let high = remaining.filter { $0.confidence == .high && $0.venue.liveness?.state != .closedToday }
         let medium = remaining.filter { ($0.confidence ?? $0.venue.liveness?.confidence) == .medium && $0.venue.liveness?.state != .closedToday }
         let review = remaining.filter {
@@ -357,7 +359,7 @@ private struct FilterPill: View {
                     .fill(color)
                     .frame(width: 7, height: 7)
                     .shadow(color: color.opacity(0.8), radius: 8)
-                Text("\(title) · \(count)")
+                Text(HomePulseFilterLabel.text(title: title, count: count))
                     .font(.caption2.weight(.bold))
             }
             .foregroundStyle(NightloopTheme.ink)
@@ -370,6 +372,12 @@ private struct FilterPill: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+enum HomePulseFilterLabel {
+    static func text(title: String, count: Int) -> String {
+        title == "All" ? title : "\(title) · \(count)"
     }
 }
 

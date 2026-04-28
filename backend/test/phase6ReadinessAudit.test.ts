@@ -161,4 +161,35 @@ describe("Phase 6 readiness payload audit", () => {
     expect(result.ok).toBe(false);
     expect(result.failures.map((failure) => failure.code)).toContain("RAW_PROVIDER_PAYLOAD_EXPOSED");
   });
+
+  it("rejects closed-today venues promoted as top recommendations", () => {
+    const result = validatePhase6ReadinessPayloads([
+      {
+        surface: "recommendations",
+        payload: {
+          items: [
+            {
+              rank: 1,
+              venue: venue({
+                liveness: {
+                  state: "closed_today",
+                  hours_state: "source_verified",
+                  live_signal_count: 0,
+                  live_unique_user_count: 0,
+                  copy: {
+                    label: "Closed today",
+                    supporting_text: "Source-backed hours say it is not available for tonight.",
+                    provenance: "Hours source: Google Places"
+                  }
+                }
+              })
+            }
+          ]
+        }
+      }
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((failure) => failure.code)).toContain("CLOSED_TOP_RECOMMENDATION");
+  });
 });

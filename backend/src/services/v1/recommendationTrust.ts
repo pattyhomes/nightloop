@@ -28,6 +28,24 @@ export type ExpectedPulse = {
   basis: string[];
 };
 
+export type PublicPulseInput = ExpectedPulseInput & {
+  pulseLevel?: number | string | null;
+  energyScore?: number | string | null;
+  energyLabel?: string | null;
+  liveStateExpiresAt?: string | Date | null;
+  liveStateComputedAt?: string | Date | null;
+};
+
+export type PublicPulse = {
+  level: number;
+  label: string;
+  score: number;
+  source: "verified_signals" | "expected";
+  is_expected: boolean;
+  copy: string;
+  basis: string[];
+};
+
 export type DiversityItem = {
   id: string;
   score: number;
@@ -130,6 +148,56 @@ export function calculateExpectedPulse(input: ExpectedPulseInput): ExpectedPulse
     score: clamped,
     copy: `Expected tonight${eventCopy}, based on venue type and current timing.`,
     basis
+  };
+}
+
+function numberValue(value: number | string | null | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function pulseLabel(level: number, expected: boolean): string {
+  const label = level >= 3 ? "Packed" : level >= 2 ? "Active" : "Chill";
+  return expected ? `Expected ${label.toLowerCase()}` : label;
+}
+
+function dateValue(value: string | Date | null | undefined): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function selectPublicPulse(input: PublicPulseInput): PublicPulse {
+  const now = input.now ?? new Date();
+  const computedAt = dateValue(input.liveStateComputedAt);
+  const expiresAt = dateValue(input.liveStateExpiresAt);
+  const hasFreshVerifiedSignals = Boolean(computedAt) && (!expiresAt || expiresAt > now);
+
+  if (hasFreshVerifiedSignals) {
+    const level = Math.max(1, Math.min(3, Math.floor(numberValue(input.pulseLevel, 1))));
+    const score = Math.max(0, Math.min(100, Math.round(numberValue(input.energyScore, level * 28))));
+    return {
+      level,
+      score,
+      label: input.energyLabel?.trim() || pulseLabel(level, false),
+      source: "verified_signals",
+      is_expected: false,
+      copy: "Fresh verified reports from people at the venue.",
+      basis: ["verified_signals"]
+    };
+  }
+
+  const expected = calculateExpectedPulse(input);
+  const score = Math.max(0, Math.min(100, Math.round(expected.score * 100)));
+  return {
+    level: expected.level,
+    score,
+    label: pulseLabel(expected.level, true),
+    source: "expected",
+    is_expected: true,
+    copy: expected.copy,
+    basis: expected.basis
   };
 }
 

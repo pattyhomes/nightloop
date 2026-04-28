@@ -9,7 +9,9 @@ import {
   calculateExpectedPulse,
   PUBLIC_VENUE_SQL,
   rerankForDiversity,
-  type ExpectedPulse
+  selectPublicPulse,
+  type ExpectedPulse,
+  type PublicPulse
 } from "./recommendationTrust";
 
 type PulseFilter = "chill" | "active" | "packed";
@@ -38,6 +40,7 @@ type ScoredRecommendation = {
   mode: "tonight_preview" | "live_now";
   liveness: VenueLiveness;
   expectedPulse: ExpectedPulse;
+  publicPulse: PublicPulse;
   factors: {
     venue_quality: number;
     preference_match: number;
@@ -205,6 +208,9 @@ function reasonFor(
   if (liveness.state === "live") {
     return `${liveness.live_signal_count} verified reports from ${liveness.live_unique_user_count} people in the last 90 minutes.`;
   }
+  if (liveness.state === "closed_today") {
+    return "Source-backed hours say it is closed today, so it is not a tonight pick.";
+  }
   if (row.current_event) {
     return expectedPulse.copy;
   }
@@ -232,18 +238,6 @@ function scoreRecommendation(
 ): ScoredRecommendation {
   const hasPreferences = Object.values(account.preferences).some((values) => values.length > 0);
   const eventOverride = eventScheduleOverride(row.current_event);
-  const liveness = buildVenueLiveness({
-    scheduleStatus: eventOverride ? "verified_hours" : row.schedule_status,
-    scheduleSource: eventOverride?.source ?? row.schedule_source,
-    scheduleConfidence: row.schedule_confidence,
-    scheduleVerifiedAt: row.schedule_verified_at,
-    scheduleFetchedAt: row.schedule_fetched_at,
-    scheduleMetadata: eventOverride ? { ...(row.schedule_metadata ?? {}), ...eventOverride.metadata } : row.schedule_metadata,
-    pulseLevel: row.pulse_level,
-    recentSignalCount: row.recent_signal_count,
-    liveSignalCount: row.live_signal_count,
-    liveUniqueUserCount: row.live_unique_user_count
-  });
   const factors = {
     venue_quality: sourceQuality(row),
     preference_match: preferenceMatch(row, account.preferences),
@@ -252,6 +246,30 @@ function scoreRecommendation(
     source_confidence: sourceConfidence(row),
     hours_confidence: hoursScore(row)
   };
+  const publicPulse = selectPublicPulse({
+    category: row.category,
+    eventContext: { has_event_tonight: Boolean(row.current_event) },
+    fsqPopularity: Number(row.venue_metadata?.foursquare_popularity ?? row.schedule_metadata?.popularity ?? NaN),
+    fsqPrice: Number(row.venue_metadata?.foursquare_price ?? row.schedule_metadata?.price ?? NaN),
+    sourceQuality: factors.venue_quality,
+    pulseLevel: row.pulse_level,
+    energyScore: row.energy_score,
+    energyLabel: row.energy_label,
+    liveStateComputedAt: row.computed_at,
+    liveStateExpiresAt: row.live_state_expires_at
+  });
+  const liveness = buildVenueLiveness({
+    scheduleStatus: eventOverride ? "verified_hours" : row.schedule_status,
+    scheduleSource: eventOverride?.source ?? row.schedule_source,
+    scheduleConfidence: row.schedule_confidence,
+    scheduleVerifiedAt: row.schedule_verified_at,
+    scheduleFetchedAt: row.schedule_fetched_at,
+    scheduleMetadata: eventOverride ? { ...(row.schedule_metadata ?? {}), ...eventOverride.metadata } : row.schedule_metadata,
+    pulseLevel: publicPulse.level,
+    recentSignalCount: row.recent_signal_count,
+    liveSignalCount: row.live_signal_count,
+    liveUniqueUserCount: row.live_unique_user_count
+  });
   const expectedPulse = calculateExpectedPulse({
     category: row.category,
     eventContext: { has_event_tonight: Boolean(row.current_event) },
@@ -274,7 +292,9 @@ function scoreRecommendation(
       factors.event_relevance * 0.05;
 
   const adjusted =
-    row.schedule_status === "temporarily_closed"
+    liveness.state === "closed_today"
+      ? score * 0.12
+      : row.schedule_status === "temporarily_closed"
       ? score * 0.08
       : row.schedule_status === "manual_hold"
         ? score * 0.35
@@ -287,6 +307,7 @@ function scoreRecommendation(
     mode,
     liveness,
     expectedPulse,
+    publicPulse,
     factors,
     reason: reasonFor(row, mode, factors, liveness, expectedPulse)
   };
@@ -334,6 +355,7 @@ export async function listRecommendations(query: RecommendationQuery) {
         COALESCE(vls.confidence, 0.25) AS confidence,
         vls.last_signal_at,
         vls.computed_at,
+        vls.expires_at AS live_state_expires_at,
         COALESCE(vls.source_summary, '{}'::jsonb) AS source_summary,
         COALESCE(asset_pack.assets, '[]'::jsonb) AS assets,
         event_pack.current_event,
@@ -438,34 +460,37 @@ export async function listRecommendations(query: RecommendationQuery) {
         JOIN user_settings us ON us.user_id = ae.actor_user_id
         JOIN friendships f
           ON f.status = 'accepted'
-         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($3::uuid::text, ae.actor_user_id::text)
-         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($3::uuid::text, ae.actor_user_id::text)
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($2::uuid::text, ae.actor_user_id::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($2::uuid::text, ae.actor_user_id::text)
         WHERE ae.venue_id = v.id
           AND ae.parent_activity_id IS NULL
           AND ae.type IN ('signal', 'coming')
           AND ae.expires_at > NOW()
-          AND ae.actor_user_id <> $3::uuid
+          AND ae.actor_user_id <> $2::uuid
           AND COALESCE(us.ghost_mode, false) = false
           AND NOT EXISTS (
             SELECT 1
             FROM blocked_users b
-            WHERE (b.blocker_user_id = $3::uuid AND b.blocked_user_id = ae.actor_user_id)
-               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $3::uuid)
+            WHERE (b.blocker_user_id = $2::uuid AND b.blocked_user_id = ae.actor_user_id)
+               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $2::uuid)
           )
       ) friend_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
         ${PUBLIC_VENUE_SQL}
-        AND ($2::int IS NULL OR COALESCE(vls.pulse_level, 1) = $2::int)
       LIMIT 300
     `,
-    [market.id, pulseLevel ?? null, viewerUserId]
+    [market.id, viewerUserId]
   );
 
+  const allScored = result.rows
+    .map((row) => scoreRecommendation(row, query.account, mode));
+  const pulseFiltered = pulseLevel
+    ? allScored.filter((item) => item.publicPulse.level === pulseLevel)
+    : allScored;
   const scored = rerankForDiversity(
-    result.rows
-      .map((row) => scoreRecommendation(row, query.account, mode))
+    pulseFiltered
       .sort((left, right) => right.score - left.score)
       .map((item) => ({
         ...item,
@@ -482,11 +507,11 @@ export async function listRecommendations(query: RecommendationQuery) {
     .slice(0, limit);
 
   const counts = { all: 0, packed: 0, active: 0, chill: 0, friends: 0 };
-  for (const row of result.rows) {
+  for (const item of allScored) {
     counts.all += 1;
-    if (Number(row.friends_here_count ?? 0) > 0) counts.friends += 1;
-    if (Number(row.pulse_level ?? 1) >= 3) counts.packed += 1;
-    else if (Number(row.pulse_level ?? 1) >= 2) counts.active += 1;
+    if (Number(item.row.friends_here_count ?? 0) > 0) counts.friends += 1;
+    if (item.publicPulse.level >= 3) counts.packed += 1;
+    else if (item.publicPulse.level >= 2) counts.active += 1;
     else counts.chill += 1;
   }
 

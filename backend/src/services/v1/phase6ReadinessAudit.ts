@@ -11,7 +11,8 @@ export type Phase6ReadinessFailure = {
     | "INVALID_OPEN_NOW_CLAIM"
     | "INVALID_CLOSED_COPY"
     | "UNKNOWN_HOURS_CLAIM"
-    | "RAW_PROVIDER_PAYLOAD_EXPOSED";
+    | "RAW_PROVIDER_PAYLOAD_EXPOSED"
+    | "CLOSED_TOP_RECOMMENDATION";
   message: string;
 };
 
@@ -130,6 +131,22 @@ function walk(
   if (liveness) {
     counters.liveness += 1;
     validateLiveness(surface, `${path}.liveness`, liveness, failures);
+  }
+
+  if (
+    surface === "recommendations" &&
+    typeof value.rank === "number" &&
+    value.rank <= 5 &&
+    isRecord(value.venue) &&
+    isRecord(value.venue.liveness) &&
+    value.venue.liveness.state === "closed_today"
+  ) {
+    addFailure(failures, {
+      surface,
+      path,
+      code: "CLOSED_TOP_RECOMMENDATION",
+      message: "Closed-today venues cannot be promoted as top tonight recommendations."
+    });
   }
 
   if (isRecord(value.hours) && "claims_open_now" in value.hours) {

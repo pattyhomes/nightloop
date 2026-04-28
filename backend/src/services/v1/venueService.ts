@@ -3,9 +3,7 @@ import { notFoundError, validationError } from "../../lib/apiError";
 import type { AccountState } from "./accountService";
 import { findMarketByIdOrSlug } from "./marketService";
 import { buildVenueLiveness } from "./livenessService";
-import { PUBLIC_VENUE_SQL } from "./recommendationTrust";
-
-type PulseLabel = "Chill" | "Active" | "Packed";
+import { PUBLIC_VENUE_SQL, selectPublicPulse } from "./recommendationTrust";
 
 export type VenueFeedRow = {
   id: string;
@@ -13,6 +11,8 @@ export type VenueFeedRow = {
   name: string;
   market_id: string;
   market_short_label: string;
+  venue_source?: string | null;
+  venue_metadata?: Record<string, unknown> | null;
   neighborhood: string | null;
   category: string | null;
   latitude: number;
@@ -29,6 +29,7 @@ export type VenueFeedRow = {
   confidence: number | null;
   last_signal_at: string | null;
   computed_at: string | null;
+  live_state_expires_at?: string | null;
   source_summary: Record<string, unknown> | null;
   assets: Array<Record<string, unknown>> | null;
   current_event: Record<string, unknown> | null;
@@ -41,6 +42,7 @@ export type VenueFeedRow = {
   schedule_metadata: Record<string, unknown> | null;
   friends_here_count?: number | null;
   first_friend_name?: string | null;
+  venue_quality_score?: number | string | null;
 };
 
 export type VenueQuery = {
@@ -53,12 +55,6 @@ export type VenueQuery = {
   q?: string;
   limit?: number;
 };
-
-function toPulseLabel(level: number): PulseLabel {
-  if (level >= 3) return "Packed";
-  if (level >= 2) return "Active";
-  return "Chill";
-}
 
 function confidenceLabel(value: number | null): "low" | "medium" | "high" {
   const normalized = value ?? 0.25;
@@ -127,10 +123,19 @@ function haversineMiles(
 }
 
 export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: number }) {
-  const level = Math.max(1, Math.min(3, Number(row.pulse_level ?? 1)));
-  const energyScore = Math.max(0, Math.min(100, Math.round(Number(row.energy_score ?? 28))));
-  const label = row.energy_label ?? toPulseLabel(level);
   const eventOverride = eventScheduleOverride(row.current_event);
+  const publicPulse = selectPublicPulse({
+    category: row.category,
+    eventContext: { has_event_tonight: Boolean(row.current_event) },
+    fsqPopularity: Number(row.venue_metadata?.foursquare_popularity ?? row.schedule_metadata?.popularity ?? NaN),
+    fsqPrice: Number(row.venue_metadata?.foursquare_price ?? row.schedule_metadata?.price ?? NaN),
+    sourceQuality: Number(row.venue_quality_score ?? 0.55),
+    pulseLevel: row.pulse_level,
+    energyScore: row.energy_score,
+    energyLabel: row.energy_label,
+    liveStateComputedAt: row.computed_at,
+    liveStateExpiresAt: row.live_state_expires_at
+  });
   const effectiveScheduleStatus = eventOverride ? "verified_hours" : row.schedule_status;
   const effectiveScheduleSource = eventOverride?.source ?? row.schedule_source;
   const effectiveScheduleMetadata = eventOverride
@@ -143,7 +148,7 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
     scheduleVerifiedAt: row.schedule_verified_at,
     scheduleFetchedAt: row.schedule_fetched_at,
     scheduleMetadata: effectiveScheduleMetadata,
-    pulseLevel: row.pulse_level,
+    pulseLevel: publicPulse.level,
     recentSignalCount: row.recent_signal_count,
     liveSignalCount: row.live_signal_count,
     liveUniqueUserCount: row.live_unique_user_count
@@ -168,9 +173,13 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
     },
     distance_miles: distanceMiles,
     pulse: {
-      level,
-      label,
-      score: energyScore
+      level: publicPulse.level,
+      label: publicPulse.label,
+      score: publicPulse.score,
+      source: publicPulse.source,
+      is_expected: publicPulse.is_expected,
+      copy: publicPulse.copy,
+      basis: publicPulse.basis
     },
     trend: row.trend ?? "steady",
     wait_minutes: row.wait_minutes == null ? null : Number(row.wait_minutes),
@@ -206,7 +215,7 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
     },
     image,
     assets,
-    why_short: `${label} energy in ${row.neighborhood ?? "this area"}.`,
+    why_short: `${publicPulse.label} energy in ${row.neighborhood ?? "this area"}.`,
     last_signal_at: row.last_signal_at,
     computed_at: row.computed_at,
     source_summary: row.source_summary ?? {}
@@ -240,6 +249,8 @@ export async function listVenues(query: VenueQuery) {
         v.name,
         v.market_id,
         m.short_label AS market_short_label,
+        v.source AS venue_source,
+        COALESCE(v.metadata, '{}'::jsonb) AS venue_metadata,
         COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS neighborhood,
         COALESCE(v.canonical_type, v.metadata->>'category') AS category,
         v.latitude,
@@ -256,6 +267,7 @@ export async function listVenues(query: VenueQuery) {
         COALESCE(vls.confidence, 0.25) AS confidence,
         vls.last_signal_at,
         vls.computed_at,
+        vls.expires_at AS live_state_expires_at,
         COALESCE(vls.source_summary, '{}'::jsonb) AS source_summary,
         COALESCE(asset_pack.assets, '[]'::jsonb) AS assets,
         event_pack.current_event,
@@ -267,10 +279,12 @@ export async function listVenues(query: VenueQuery) {
         schedule_pack.fetched_at AS schedule_fetched_at,
         COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata,
         COALESCE(friend_pack.friends_here_count, 0) AS friends_here_count,
-        friend_pack.first_friend_name
+        friend_pack.first_friend_name,
+        vri.venue_quality_score
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
+      LEFT JOIN venue_recommendation_inputs vri ON vri.venue_id = v.id
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::int AS live_signal_count,
@@ -354,59 +368,51 @@ export async function listVenues(query: VenueQuery) {
         JOIN user_settings us ON us.user_id = ae.actor_user_id
         JOIN friendships f
           ON f.status = 'accepted'
-         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($5::uuid::text, ae.actor_user_id::text)
-         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($5::uuid::text, ae.actor_user_id::text)
-        WHERE $5::uuid IS NOT NULL
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($3::uuid::text, ae.actor_user_id::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($3::uuid::text, ae.actor_user_id::text)
+        WHERE $3::uuid IS NOT NULL
           AND ae.venue_id = v.id
           AND ae.parent_activity_id IS NULL
           AND ae.type IN ('signal', 'coming')
           AND ae.expires_at > NOW()
-          AND ae.actor_user_id <> $5::uuid
+          AND ae.actor_user_id <> $3::uuid
           AND COALESCE(us.ghost_mode, false) = false
           AND NOT EXISTS (
             SELECT 1
             FROM blocked_users b
-            WHERE (b.blocker_user_id = $5::uuid AND b.blocked_user_id = ae.actor_user_id)
-               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $5::uuid)
+            WHERE (b.blocker_user_id = $3::uuid AND b.blocked_user_id = ae.actor_user_id)
+               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $3::uuid)
           )
       ) friend_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
         ${PUBLIC_VENUE_SQL}
-        AND ($2::int IS NULL OR COALESCE(vls.pulse_level, 1) = $2::int)
         AND (
-          $3::text IS NULL
-          OR v.name ILIKE '%' || $3 || '%'
-          OR COALESCE(v.metadata->>'neighborhood', '') ILIKE '%' || $3 || '%'
+          $2::text IS NULL
+          OR v.name ILIKE '%' || $2 || '%'
+          OR COALESCE(v.metadata->>'neighborhood', '') ILIKE '%' || $2 || '%'
         )
       ORDER BY COALESCE(vls.energy_score, 28) DESC, v.name ASC
-      LIMIT $4
+      LIMIT 300
     `,
-    [market.id, pulseLevel ?? null, query.q ?? null, limit, viewerUserId]
+    [market.id, query.q ?? null, viewerUserId]
   );
 
-  const countRows = await dbQuery<{ pulse_level: number; count: string }>(
-    `
-      SELECT COALESCE(vls.pulse_level, 1) AS pulse_level, COUNT(*)::text AS count
-      FROM venues v
-      LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
-      WHERE v.market_id = $1::uuid
-        AND v.is_active = true
-        AND v.admin_status = 'approved'
-        ${PUBLIC_VENUE_SQL}
-      GROUP BY COALESCE(vls.pulse_level, 1)
-    `,
-    [market.id]
-  );
-
+  const allItems = rows.rows
+    .map((row) => formatVenue(row, origin))
+    .sort((left, right) => {
+      if (left.pulse.score === right.pulse.score) {
+        return left.name.localeCompare(right.name);
+      }
+      return right.pulse.score - left.pulse.score;
+    });
   const counts = { all: 0, packed: 0, active: 0, chill: 0, friends: 0 };
-  for (const row of countRows.rows) {
-    const count = Number(row.count);
-    counts.all += count;
-    if (Number(row.pulse_level) >= 3) counts.packed += count;
-    else if (Number(row.pulse_level) >= 2) counts.active += count;
-    else counts.chill += count;
+  for (const item of allItems) {
+    counts.all += 1;
+    if (item.pulse.level >= 3) counts.packed += 1;
+    else if (item.pulse.level >= 2) counts.active += 1;
+    else counts.chill += 1;
   }
   if (viewerUserId) {
     const friendCount = await dbQuery<{ count: string }>(
@@ -440,13 +446,15 @@ export async function listVenues(query: VenueQuery) {
     counts.friends = Number(friendCount.rows[0]?.count ?? 0);
   }
 
+  const filteredItems = pulseLevel ? allItems.filter((item) => item.pulse.level === pulseLevel) : allItems;
+
   return {
     generated_at: new Date().toISOString(),
     market: {
       id: market.id,
       short_label: market.short_label
     },
-    items: rows.rows.map((row) => formatVenue(row, origin)),
+    items: filteredItems.slice(0, limit),
     counts,
     next_cursor: null
   };
@@ -462,6 +470,8 @@ export async function getVenue(idOrSlug: string, account?: AccountState) {
         v.name,
         v.market_id,
         m.short_label AS market_short_label,
+        v.source AS venue_source,
+        COALESCE(v.metadata, '{}'::jsonb) AS venue_metadata,
         COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS neighborhood,
         COALESCE(v.canonical_type, v.metadata->>'category') AS category,
         v.latitude,
@@ -478,6 +488,7 @@ export async function getVenue(idOrSlug: string, account?: AccountState) {
         COALESCE(vls.confidence, 0.25) AS confidence,
         vls.last_signal_at,
         vls.computed_at,
+        vls.expires_at AS live_state_expires_at,
         COALESCE(vls.source_summary, '{}'::jsonb) AS source_summary,
         COALESCE(asset_pack.assets, '[]'::jsonb) AS assets,
         event_pack.current_event,
@@ -489,10 +500,12 @@ export async function getVenue(idOrSlug: string, account?: AccountState) {
         schedule_pack.fetched_at AS schedule_fetched_at,
         COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata,
         COALESCE(friend_pack.friends_here_count, 0) AS friends_here_count,
-        friend_pack.first_friend_name
+        friend_pack.first_friend_name,
+        vri.venue_quality_score
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
+      LEFT JOIN venue_recommendation_inputs vri ON vri.venue_id = v.id
       LEFT JOIN LATERAL (
         SELECT
           COUNT(*)::int AS live_signal_count,

@@ -869,6 +869,15 @@ describe("Nightloop v1 API", () => {
     );
     expect(JSON.stringify(response.body.items[0])).not.toContain("raw_payload");
     expect(JSON.stringify(response.body.items[0])).not.toContain("provider_records");
+    expect(response.body.items.slice(0, 5).map((item: any) => item.liveness.state)).not.toContain("closed_today");
+    expect(response.body.items.slice(0, 5).map((item: any) => item.venue.liveness.state)).not.toContain("closed_today");
+    expect(response.body.items[0].venue.pulse).toEqual(
+      expect.objectContaining({
+        source: expect.stringMatching(/^(expected|verified_signals)$/),
+        is_expected: expect.any(Boolean),
+        copy: expect.any(String)
+      })
+    );
   });
 
   it("returns only the current user's recent signals with a capped limit", async () => {

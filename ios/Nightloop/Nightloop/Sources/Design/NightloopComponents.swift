@@ -579,12 +579,17 @@ struct SignalButton: View {
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.bold))
+                .font(.caption.weight(.black))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .frame(height: 40)
+                .foregroundStyle(.white)
+                .background(NightloopTheme.fab)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .buttonStyle(.borderedProminent)
-        .tint(NightloopTheme.fab)
+        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
     }
 }
 

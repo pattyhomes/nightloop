@@ -23,6 +23,7 @@ struct MapShellView: View {
     @State private var isSubmittingSignal = false
     @State private var isSignalMenuOpen = false
     @State private var isShowingDetailedReport = false
+    @State private var isShowingSignalLocationPrompt = false
     @State private var sheetDetent: MapSheetDetent = .half
     @State private var sheetDragTranslation: CGFloat = 0
     @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
@@ -105,6 +106,25 @@ struct MapShellView: View {
                         },
                         dismiss: {
                             locationPromptSeen = true
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, overlayLayout.promptBottomPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                if isShowingSignalLocationPrompt, let selectedVenue {
+                    SignalLocationPromptCard(
+                        venueName: selectedVenue.name,
+                        isDenied: locationManager.isDenied,
+                        errorMessage: locationManager.locationError,
+                        share: {
+                            isShowingSignalLocationPrompt = false
+                            locationPromptSeen = true
+                            locationManager.requestLocationAccess()
+                        },
+                        dismiss: {
+                            isShowingSignalLocationPrompt = false
                         }
                     )
                     .padding(.horizontal, 16)
@@ -599,9 +619,9 @@ struct MapShellView: View {
         guard let selectedVenue else { return }
         switch SignalProximity.status(userCoordinate: locationManager.userCoordinate, venueCoordinate: selectedVenue.coordinate) {
         case .needsLocation:
-            signalMessage = "Share location to verify you're at \(selectedVenue.name)."
+            signalMessage = nil
+            isShowingSignalLocationPrompt = true
             locationPromptSeen = true
-            locationManager.requestLocationAccess()
         case .tooFar:
             signalMessage = "Signals unlock when you're at the venue."
             isSignalMenuOpen = false
@@ -784,6 +804,7 @@ private final class PulseMarkerView: UIView {
             dot.layer.borderWidth = isSelected ? 2 : 1.2
             dot.layer.borderColor = UIColor.white.withAlphaComponent(0.86).cgColor
         case .hollowRing:
+            addCircle(size: visuals.haloSize, color: color.withAlphaComponent(visuals.haloOpacity), blur: visuals.glowRadius)
             addRing(size: visuals.middleSize, color: color, lineWidth: isSelected ? 3 : 2, dashed: false)
             addCircle(size: 5, color: color.withAlphaComponent(0.85), blur: visuals.glowRadius / 2)
         case .dashedRing:
@@ -829,6 +850,12 @@ private final class PulseMarkerView: UIView {
         if dashed {
             shape.lineDashPattern = [3, 3]
         }
+        if lineWidth > 1.8 {
+            shape.shadowColor = color.cgColor
+            shape.shadowOpacity = 0.45
+            shape.shadowRadius = 6
+            shape.shadowOffset = .zero
+        }
         layer.addSublayer(shape)
     }
 
@@ -861,9 +888,7 @@ private struct MapFilterPill: View {
                         .fill(color)
                         .frame(width: 7, height: 7)
                 }
-                Text(title)
-                Text("\(count)")
-                    .opacity(0.55)
+                Text(MapPulseFilterLabel.text(title: title, count: count))
             }
             .font(.caption.weight(.bold))
             .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
@@ -1100,6 +1125,74 @@ private struct LocationPromptCard: View {
                 .stroke(NightloopTheme.hairline)
         }
         .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 8)
+    }
+}
+
+enum MapPulseFilterLabel {
+    static func text(title: String, count: Int) -> String {
+        title == "All" ? title : "\(title) \(count)"
+    }
+}
+
+private struct SignalLocationPromptCard: View {
+    let venueName: String
+    let isDenied: Bool
+    let errorMessage: String?
+    let share: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.amber)
+                    .frame(width: 22, height: 22)
+                    .background(NightloopTheme.amber.opacity(0.14))
+                    .clipShape(Circle())
+                Text("Verify at \(venueName)")
+                    .font(.caption.weight(.black))
+                    .tracking(0.4)
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+                Spacer()
+            }
+
+            Text(errorMessage ?? "Share location while the app is open. Nightloop checks proximity for this signal and does not store your precise coordinates.")
+                .font(.caption2.weight(.semibold))
+                .lineSpacing(2)
+                .foregroundStyle(NightloopTheme.inkMuted)
+
+            HStack(spacing: 8) {
+                Button("Not now", action: dismiss)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                Button(isDenied ? "Unavailable" : "Share") {
+                    share()
+                }
+                .font(.caption.weight(.black))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(isDenied ? Color.white.opacity(0.08) : NightloopTheme.fab)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .disabled(isDenied)
+            }
+        }
+        .padding(12)
+        .background(NightloopTheme.surface.opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 18, x: 0, y: 8)
     }
 }
 

@@ -379,7 +379,10 @@ final class NightloopTests: XCTestCase {
 
         let response = try decoder.decode(VenueListResponse.self, from: data)
         XCTAssertEqual(response.items.first?.pulse.score, 82)
-        XCTAssertEqual(response.items.first?.pulse.label, "Packed")
+        XCTAssertEqual(response.items.first?.pulse.label, "Expected packed")
+        XCTAssertEqual(response.items.first?.pulse.source, "expected")
+        XCTAssertEqual(response.items.first?.pulse.isExpected, true)
+        XCTAssertEqual(response.items.first?.pulse.copy, "Expected tonight with a source-backed event, based on venue type and current timing.")
         XCTAssertEqual(response.items.first?.liveness?.state, .opensLater)
         XCTAssertEqual(response.items.first?.liveness?.hoursState, .sourceVerified)
         XCTAssertEqual(response.items.first?.liveness?.confidence, .medium)
@@ -461,6 +464,99 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(MapVenueFilter.selectedVenueID(current: "venue-2", venues: venues), "venue-2")
         XCTAssertEqual(MapVenueFilter.selectedVenueID(current: "missing", venues: venues), "venue-1")
         XCTAssertEqual(MapVenueFilter.rankedVenues(from: venues).map(\.id), ["venue-2", "venue-1"])
+    }
+
+    func testMapRankingDemotesClosedTodayVenuesBelowEligibleTonightVenues() {
+        let closed = Self.venueFixture(
+            id: "venue-closed",
+            name: "Closed Club",
+            latitude: 37.1,
+            longitude: -122.1,
+            score: 95,
+            level: 3,
+            livenessState: .closedToday
+        )
+        let opensLater = Self.venueFixture(
+            id: "venue-open",
+            name: "Opens Later",
+            latitude: 37.2,
+            longitude: -122.2,
+            score: 55,
+            level: 2,
+            livenessState: .opensLater
+        )
+
+        XCTAssertEqual(MapVenueFilter.rankedVenues(from: [closed, opensLater]).map(\.id), ["venue-open", "venue-closed"])
+    }
+
+    func testMapMarkerVisualsUseStateAwareNeon() {
+        let live = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .live, hoursState: .sourceVerified, confidence: .high),
+            score: 82,
+            isSelected: false
+        )
+        let opensLater = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .opensLater, hoursState: .sourceVerified, confidence: .medium),
+            score: 55,
+            isSelected: false
+        )
+        let unknown = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .unknown, hoursState: .unknown, confidence: .low),
+            score: 55,
+            isSelected: false
+        )
+        let closed = MapMarkerVisuals.style(
+            liveness: Self.livenessFixture(state: .closedToday, hoursState: .sourceVerified, confidence: .high),
+            score: 95,
+            isSelected: false
+        )
+
+        XCTAssertEqual(live.shape, .filledBloom)
+        XCTAssertGreaterThan(live.glowRadius, 12)
+        XCTAssertEqual(opensLater.shape, .hollowRing)
+        XCTAssertGreaterThan(opensLater.haloOpacity, 0)
+        XCTAssertGreaterThan(opensLater.glowRadius, 8)
+        XCTAssertEqual(unknown.shape, .dashedRing)
+        XCTAssertEqual(closed.shape, .outline)
+        XCTAssertEqual(closed.glowRadius, 0)
+    }
+
+    func testHomeAllFilterLabelOmitsCount() {
+        XCTAssertEqual(HomePulseFilterLabel.text(title: "All", count: 136), "All")
+        XCTAssertEqual(HomePulseFilterLabel.text(title: "Packed", count: 2), "Packed · 2")
+    }
+
+    func testMapAllFilterLabelOmitsCount() {
+        XCTAssertEqual(MapPulseFilterLabel.text(title: "All", count: 136), "All")
+        XCTAssertEqual(MapPulseFilterLabel.text(title: "Active", count: 2), "Active 2")
+    }
+
+    func testSignalVerificationTrayWaitsForCoordinateWhenAlreadyAuthorized() {
+        XCTAssertFalse(SignalVerificationTrayVisibility.shouldShow(
+            status: .needsLocation,
+            isAuthorized: true,
+            isDenied: false
+        ))
+        XCTAssertTrue(SignalVerificationTrayVisibility.shouldShow(
+            status: .needsLocation,
+            isAuthorized: false,
+            isDenied: false
+        ))
+        XCTAssertTrue(SignalVerificationTrayVisibility.shouldShow(
+            status: .tooFar,
+            isAuthorized: true,
+            isDenied: false
+        ))
+        XCTAssertTrue(SignalVerificationTrayVisibility.shouldShow(
+            status: .verified,
+            isAuthorized: true,
+            isDenied: false
+        ))
+    }
+
+    func testVenueDetailSignalCardIsInlineNotFloatingOverlay() {
+        XCTAssertFalse(VenueDetailSignalPlacement.usesFloatingOverlay)
+        XCTAssertLessThan(VenueDetailSignalPlacement.scrollBottomPadding, 150)
     }
 
     func testMapSheetDetentsSnapToNearestHeight() {
@@ -929,7 +1025,7 @@ final class NightloopTests: XCTestCase {
             category: "club",
             coordinate: Coordinate(latitude: 37.775, longitude: -122.41),
             distanceMiles: nil,
-            pulse: VenuePulse(level: 2, label: "Active", score: 55),
+            pulse: VenuePulse(level: 2, label: "Active", score: 55, source: "verified_signals", isExpected: false, copy: nil, basis: nil),
             trend: "steady",
             waitMinutes: nil,
             signalCount: 0,
@@ -1204,7 +1300,14 @@ final class NightloopTests: XCTestCase {
               "category": "club",
               "coordinate": { "latitude": 37.7751, "longitude": -122.4105 },
               "distance_miles": null,
-              "pulse": { "level": 3, "label": "Packed", "score": 82 },
+              "pulse": {
+                "level": 3,
+                "label": "Expected packed",
+                "score": 82,
+                "source": "expected",
+                "is_expected": true,
+                "copy": "Expected tonight with a source-backed event, based on venue type and current timing."
+              },
               "trend": "rising",
               "wait_minutes": 15,
               "signal_count": 12,
@@ -1262,9 +1365,11 @@ final class NightloopTests: XCTestCase {
         latitude: Double,
         longitude: Double,
         score: Int,
-        level: Int
+        level: Int,
+        livenessState: VenueLivenessState? = nil
     ) -> VenueItem {
-        VenueItem(
+        let state = livenessState ?? (level >= 3 ? .live : .opensLater)
+        return VenueItem(
             id: id,
             slug: name.lowercased(),
             name: name,
@@ -1273,16 +1378,24 @@ final class NightloopTests: XCTestCase {
             category: "club",
             coordinate: Coordinate(latitude: latitude, longitude: longitude),
             distanceMiles: nil,
-            pulse: VenuePulse(level: level, label: level >= 3 ? "Packed" : "Chill", score: score),
+            pulse: VenuePulse(
+                level: level,
+                label: level >= 3 ? "Packed" : "Chill",
+                score: score,
+                source: level >= 3 ? "verified_signals" : "expected",
+                isExpected: level < 3,
+                copy: nil,
+                basis: nil
+            ),
             trend: "steady",
             waitMinutes: nil,
             signalCount: 0,
             recentSignalCount: 0,
             confidence: "high",
             liveness: Self.livenessFixture(
-                state: level >= 3 ? .live : .opensLater,
+                state: state,
                 hoursState: .sourceVerified,
-                confidence: level >= 3 ? .high : .medium
+                confidence: state == .live || state == .closedToday ? .high : .medium
             ),
             event: nil,
             hours: VenueHours(

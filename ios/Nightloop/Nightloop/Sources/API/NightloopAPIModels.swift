@@ -136,6 +136,10 @@ struct VenuePulse: Codable, Equatable {
     let level: Int
     let label: String
     let score: Int
+    let source: String?
+    let isExpected: Bool?
+    let copy: String?
+    let basis: [String]?
 }
 
 struct VenueEvent: Codable, Equatable {

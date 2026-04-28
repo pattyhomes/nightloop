@@ -31,7 +31,7 @@ struct VenueDetailView: View {
                         detailHero(venue)
                         detailContent(venue)
                     }
-                    .padding(.bottom, 190)
+                    .padding(.bottom, VenueDetailSignalPlacement.scrollBottomPadding)
                 }
                 .ignoresSafeArea(edges: .top)
                 .overlay(alignment: .top) {
@@ -55,29 +55,15 @@ struct VenueDetailView: View {
                     .padding(.bottom, 162)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-
-            if let venue {
-                SignalVerificationTray(
-                    venue: venue,
-                    status: signalStatus(for: venue),
-                    isDenied: locationManager.isDenied,
-                    locationError: locationManager.locationError,
-                    submittingSignal: submittingSignal,
-                    verify: { locationManager.requestLocationAccess() },
-                    submit: { kind in
-                        Task { await submitSignal(venueID: venue.id, kind: kind) }
-                    },
-                    moreDetails: {
-                        isShowingDetailedReport = true
-                    }
-                )
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
+        .onAppear {
+            requestLocationIfAlreadyAuthorized()
+        }
+        .onChange(of: locationManager.authorizationStatus) { _, _ in
+            requestLocationIfAlreadyAuthorized()
+        }
         .sheet(isPresented: $isShowingDetailedReport) {
             if let venue {
                 DetailedSignalSheet(venue: venue) { kind, details in
@@ -138,6 +124,7 @@ struct VenueDetailView: View {
             energyBar(venue)
             HoursStatusBlock(venue: venue)
             statsRow(venue)
+            signalVerificationSection(venue)
             whyNightloopCard(venue)
             liveTrendCard(venue)
             tagsSection(venue)
@@ -148,6 +135,31 @@ struct VenueDetailView: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
+    }
+
+    @ViewBuilder
+    private func signalVerificationSection(_ venue: VenueItem) -> some View {
+        let status = signalStatus(for: venue)
+        if SignalVerificationTrayVisibility.shouldShow(
+            status: status,
+            isAuthorized: locationManager.isAuthorized,
+            isDenied: locationManager.isDenied
+        ) {
+            SignalVerificationTray(
+                venue: venue,
+                status: status,
+                isDenied: locationManager.isDenied,
+                locationError: locationManager.locationError,
+                submittingSignal: submittingSignal,
+                verify: { locationManager.requestLocationAccess() },
+                submit: { kind in
+                    Task { await submitSignal(venueID: venue.id, kind: kind) }
+                },
+                moreDetails: {
+                    isShowingDetailedReport = true
+                }
+            )
+        }
     }
 
     private func titleBlock(_ venue: VenueItem) -> some View {
@@ -439,6 +451,27 @@ struct VenueDetailView: View {
     private func signalStatus(for venue: VenueItem) -> SignalProximityStatus {
         SignalProximity.status(userCoordinate: locationManager.userCoordinate, venueCoordinate: venue.coordinate)
     }
+
+    private func requestLocationIfAlreadyAuthorized() {
+        guard locationManager.isAuthorized, locationManager.userCoordinate == nil else { return }
+        locationManager.requestLocationAccess()
+    }
+}
+
+enum SignalVerificationTrayVisibility {
+    static func shouldShow(status: SignalProximityStatus, isAuthorized: Bool, isDenied: Bool) -> Bool {
+        switch status {
+        case .needsLocation:
+            return isDenied || !isAuthorized
+        case .tooFar, .verified:
+            return true
+        }
+    }
+}
+
+enum VenueDetailSignalPlacement {
+    static let usesFloatingOverlay = false
+    static let scrollBottomPadding: CGFloat = 112
 }
 
 private struct SignalVerificationTray: View {
@@ -490,12 +523,12 @@ private struct SignalVerificationTray: View {
 
                 Button(action: verify) {
                     Label(isDenied ? "Location unavailable" : "Verify you're here", systemImage: "location.fill")
-                        .font(.subheadline.weight(.black))
+                        .font(.caption.weight(.black))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
+                        .frame(height: 40)
                         .background(isDenied ? Color.white.opacity(0.10) : NightloopTheme.fab)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(isDenied)
