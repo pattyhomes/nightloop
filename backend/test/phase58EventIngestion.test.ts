@@ -4,6 +4,7 @@ import {
   parseJsonFeedEvents,
   parseJsonLdEvents,
   parseRssEvents,
+  parseVenueOwnedEventDetailLinks,
   parseVenueOwnedHtmlEvents,
   robotsAllowsPath,
   sanitizeFetchedEvent
@@ -148,6 +149,153 @@ Allow: /events
     }
   });
 
+  it("parses Audio SF same-host event detail pages with date-only precision", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-28T12:00:00Z"));
+    try {
+      const events = parseVenueOwnedHtmlEvents(`
+<title>SPECIAL GUEST - Friday, May 01 | Audio SF</title>
+<div id="event-container-date"><a href="#">Fri. May 01</a></div>
+<div id="event-container-title">SPECIAL GUEST</div>
+<form target="_blank" action="https://eventim.us/event/special-guest/688309?afflky=AudioSF" method="get"></form>
+<img src="https://audiosf.com/images/uploaded_files/poster.jpg">
+`, "https://www.audiosf.com/event/special-guest-05-01/");
+
+      expect(sanitizeFetchedEvent(events[0])).toMatchObject({
+        source_event_id: "https://www.audiosf.com/event/special-guest-05-01/",
+        title: "SPECIAL GUEST",
+        starts_at: "2026-05-02T05:00:00.000Z",
+        url: "https://eventim.us/event/special-guest/688309?afflky=AudioSF",
+        metadata: {
+          source_url: "https://www.audiosf.com/event/special-guest-05-01/",
+          time_precision: "date_only_default_22"
+        }
+      });
+      expect(JSON.stringify(sanitizeFetchedEvent(events[0]))).not.toContain("poster.jpg");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("parses 1015 official event blocks without fetching Eventim", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-28T12:00:00Z"));
+    try {
+      const events = parseVenueOwnedHtmlEvents(`
+<a href="https://wl.eventim.us/event/angrybaby/677895?afflky=1015Folsom">
+  <img data-nectar-img-src="https://1015.com/wp-content/uploads/poster.jpg" />
+</a>
+<div class="wpb_text_column"><div class="wpb_wrapper">
+  <h4>Friday, May 1st</h4>
+  <h3><strong>Angrybaby</strong></h3>
+</div></div>
+`, "https://1015.com/");
+
+      expect(sanitizeFetchedEvent(events[0])).toMatchObject({
+        title: "Angrybaby",
+        starts_at: "2026-05-02T05:00:00.000Z",
+        url: "https://wl.eventim.us/event/angrybaby/677895?afflky=1015Folsom",
+        metadata: {
+          source_url: "https://1015.com/",
+          time_precision: "date_only_default_22"
+        }
+      });
+      expect(JSON.stringify(sanitizeFetchedEvent(events[0]))).not.toContain("poster.jpg");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("parses Boom Boom Room RHP event cards without storing ticket provider payloads", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-28T12:00:00Z"));
+    try {
+      const events = parseVenueOwnedHtmlEvents(`
+<div class="col-12 p-0 rhp-events-list-widget-events">
+  <div class="mb-2 eventDate eventMonth text-uppercase font0by875">fri, Jun 12</div>
+  <h4 class="entry-title summary mb-0">
+    <a href="https://boomboomroom.com/event/tracorum/client-club-demo/san-francisco-california/" rel="bookmark">
+      TRACORUM and BON BON VIVANT
+    </a>
+  </h4>
+  <a class="btn" href="https://www.etix.com/ticket/p/70236779/example">Tickets</a>
+</div>
+`, "https://boomboomroom.com/");
+
+      expect(sanitizeFetchedEvent(events[0])).toMatchObject({
+        source_event_id: "https://boomboomroom.com/event/tracorum/client-club-demo/san-francisco-california/",
+        title: "TRACORUM and BON BON VIVANT",
+        starts_at: "2026-06-13T05:00:00.000Z",
+        url: "https://boomboomroom.com/event/tracorum/client-club-demo/san-francisco-california/",
+        metadata: {
+          source_url: "https://boomboomroom.com/",
+          time_precision: "date_only_default_22"
+        }
+      });
+      expect(JSON.stringify(sanitizeFetchedEvent(events[0]))).not.toContain("etix.com");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("parses Bottom of the Hill RSS event dates and door times", () => {
+    const events = parseRssEvents(`
+<rss><channel>
+  <item>
+    <guid>bottom-20260512</guid>
+    <title>2026 05/12 : Electric Six ~ Tragedy</title>
+    <description><![CDATA[<b>Electric Six<br />Tragedy</b><br />8PM doors -- music 9PM<br />$22]]></description>
+    <link>http://www.bottomofthehill.com/20260512.html</link>
+    <pubDate>Tue, 06 Jan 2026 00:00:00 -0800</pubDate>
+  </item>
+</channel></rss>
+`, "https://bottomofthehill.com/RSS.xml");
+
+    expect(sanitizeFetchedEvent(events[0])).toMatchObject({
+      source_event_id: "bottom-20260512",
+      title: "Electric Six ~ Tragedy",
+      starts_at: "2026-05-13T03:00:00.000Z",
+      url: "http://www.bottomofthehill.com/20260512.html",
+      metadata: {
+        source_url: "https://bottomofthehill.com/RSS.xml"
+      }
+    });
+  });
+
+  it("marks Bottom of the Hill RSS dates without door times as date-only defaults", () => {
+    const events = parseRssEvents(`
+<rss><channel>
+  <item>
+    <guid>bottom-20260513</guid>
+    <title>2026 05/13 : Mystery Show</title>
+    <description><![CDATA[<b>Mystery Show</b><br />$18]]></description>
+    <link>http://www.bottomofthehill.com/20260513.html</link>
+  </item>
+</channel></rss>
+`, "https://bottomofthehill.com/RSS.xml");
+
+    expect(sanitizeFetchedEvent(events[0])).toMatchObject({
+      starts_at: "2026-05-14T05:00:00.000Z",
+      metadata: {
+        time_precision: "date_only_default_22"
+      }
+    });
+  });
+
+  it("extracts only same-host venue detail links for one-hop enrichment", () => {
+    const links = parseVenueOwnedEventDetailLinks(`
+<a href="/event/special-guest-05-01/">Special Guest</a>
+<a href="/tm-event/otis-kane/">Otis Kane</a>
+<a href="https://wl.eventim.us/event/angrybaby/677895">Tickets</a>
+<a href="https://facebook.com/events/123">Facebook</a>
+`, "https://www.audiosf.com/events/");
+
+    expect(links).toEqual([
+      "https://www.audiosf.com/event/special-guest-05-01/",
+      "https://www.audiosf.com/tm-event/otis-kane/"
+    ]);
+  });
+
   it("discovers venue-owned event pages and feeds without storing promo content", () => {
     const sources = discoverEventSourcesFromHtml(`
 <html><body>
@@ -176,6 +324,36 @@ Allow: /events
     expect(JSON.stringify(sources)).not.toContain("comments/feed");
     expect(JSON.stringify(sources)).not.toContain("venue-rental");
     expect(JSON.stringify(sources)).not.toContain("\"https://venue.example/\"");
+  });
+
+  it("discovers venue-owned RSS/XML feeds even when the link label is generic", () => {
+    const sources = discoverEventSourcesFromHtml(`
+<html><body>
+  <a href="/RSS.xml"><img src="/rsslogo.png"></a>
+  <a href="/comments/feed/">Comments Feed</a>
+</body></html>
+`, "https://venue.example/calendar.html");
+
+    expect(sources).toEqual([
+      expect.objectContaining({ source_type: "venue_rss", source_url: "https://venue.example/RSS.xml" })
+    ]);
+    expect(JSON.stringify(sources)).not.toContain("comments/feed");
+  });
+
+  it("does not discover generic non-event RSS feeds as venue event sources", () => {
+    const sources = discoverEventSourcesFromHtml(`
+<html><body>
+  <a href="/feed/">Blog Feed</a>
+  <a href="/wp-json/wp/v2/posts">Posts JSON</a>
+  <a href="/events/feed/">Events Feed</a>
+</body></html>
+`, "https://venue.example/");
+
+    expect(sources).toEqual([
+      expect.objectContaining({ source_type: "venue_rss", source_url: "https://venue.example/events/feed/" })
+    ]);
+    expect(JSON.stringify(sources)).not.toContain("https://venue.example/feed/");
+    expect(JSON.stringify(sources)).not.toContain("wp-json");
   });
 
   it("does not persist one-off event detail pages as reusable event sources", () => {

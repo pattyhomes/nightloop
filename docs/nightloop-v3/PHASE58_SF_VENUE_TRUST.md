@@ -94,6 +94,34 @@ As of the Phase 5.8 local pass on April 27, 2026:
   structured cover/price, and source metadata. Descriptions, artist bios, promo copy,
   and images stay out of Nightloop storage.
 
+## Phase 5.8E Core Event Coverage Checkpoint
+
+As of the Phase 5.8E local pass on April 28, 2026:
+
+- Core trusted venue event sources: Cafe Du Nord, 1015 Folsom, Boom Boom Room,
+  and Bottom of the Hill.
+- Approved future venue-owned events: 143.
+- Review-only future events: 5 Audio Nightclub events. Audio remains review-only
+  because sampled official pages expose date-only event context and at least one
+  off-venue/day-party item.
+- Black Cat remains inspect/report-only in this pass because its visible event
+  links point to Turntable, which is out of scope until a provider/terms decision.
+- Event source rows configured: 36. Trusted sources: 4.
+- Recommendation input coverage remains 136 of 136 public approved SF venues.
+- Fixture/test approved rows detected by `audit:sf-trust`: 0.
+- Unknown-neighborhood cleanup queue: 0.
+- Hours remain source-backed: 124 Google verified rows, 8 Google explicit unknowns,
+  4 explicit unknown rows, 2 OSM evidence rows, and 2 venue-website verified rows.
+
+Phase 6 can start after the final verification sweep if these gates remain true:
+
+- Cafe Du Nord plus at least 3 more core SF venues have trusted event-backed
+  future context.
+- Recommendation input coverage remains complete.
+- No fixture/test venues appear in public APIs.
+- Unknown hours do not produce live/open/closed claims.
+- Backend, root, and iOS verification pass.
+
 ## Verification
 
 ```bash

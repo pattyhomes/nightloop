@@ -7,6 +7,7 @@ import {
   parseJsonFeedEvents,
   parseJsonLdEvents,
   parseRssEvents,
+  parseVenueOwnedEventDetailLinks,
   parseVenueOwnedHtmlEvents,
   robotsAllowsPath,
   sanitizeFetchedEvent,
@@ -48,6 +49,7 @@ type SourceFetchReport = {
 };
 
 const EVENTBRITE_BASE = "https://www.eventbriteapi.com/v3";
+const DETAIL_FETCH_LIMIT = 25;
 
 function parseArgs(argv: string[]): Args {
   const apply = argv.includes("--apply");
@@ -115,7 +117,12 @@ function eventSourceName(source: EventSourceRow): "eventbrite" | "venue_website"
 }
 
 async function fetchText(url: string, headers: Record<string, string> = {}): Promise<string> {
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "NightloopBot/0.1 (+https://nightloop.local)",
+      ...headers
+    }
+  });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     throw new Error(`Event source fetch failed: ${response.status} ${body.slice(0, 180)}`);
@@ -199,7 +206,19 @@ async function fetchEventsForSource(source: EventSourceRow): Promise<{
   if (source.source_type === "venue_ical") fetched = parseIcsEvents(body, source.source_url);
   else if (source.source_type === "venue_json") fetched = parseJsonFeedEvents(JSON.parse(body), source.source_url);
   else if (source.source_type === "venue_rss") fetched = parseRssEvents(body, source.source_url);
-  else fetched = [...parseJsonLdEvents(body, source.source_url), ...parseVenueOwnedHtmlEvents(body, source.source_url)];
+  else {
+    fetched = [...parseJsonLdEvents(body, source.source_url), ...parseVenueOwnedHtmlEvents(body, source.source_url)];
+    for (const detailUrl of parseVenueOwnedEventDetailLinks(body, source.source_url, DETAIL_FETCH_LIMIT)) {
+      try {
+        const detailRobots = await robotsAllowed(detailUrl);
+        if (!detailRobots.allowed) continue;
+        const detailBody = await fetchText(detailUrl);
+        fetched.push(...parseVenueOwnedHtmlEvents(detailBody, detailUrl));
+      } catch {
+        continue;
+      }
+    }
+  }
   return {
     events: sanitizeFetchedEvents(fetched),
     robotsStatus: robots.status

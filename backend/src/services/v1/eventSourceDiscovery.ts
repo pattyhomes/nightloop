@@ -149,10 +149,19 @@ function venueSourceType(candidateUrl: URL, label: string): DiscoveredEventSourc
   const isRootPath = candidateUrl.pathname === "/" || candidateUrl.pathname === "";
   if (/\.ics(?:$|\?)|^webcal:/i.test(`${candidateUrl.pathname}${candidateUrl.search}`)) return "venue_ical";
   if (/\.json(?:$|\?)|format=json|output=json/i.test(haystack) && eventIntentPattern.test(haystack)) return "venue_json";
-  if (/rss|feed|\.xml(?:$|\?)/i.test(haystack) && eventIntentPattern.test(haystack)) return "venue_rss";
+  if (isVenueRssSource(candidateUrl, label)) return "venue_rss";
   if (isRootPath) return null;
   if (eventIntentPattern.test(haystack)) return "venue_json_ld";
   return null;
+}
+
+function isVenueRssSource(candidateUrl: URL, label: string): boolean {
+  const pathAndSearch = `${candidateUrl.pathname}${candidateUrl.search}`;
+  const haystack = `${pathAndSearch} ${label}`;
+  if (/comments?\/feed/i.test(pathAndSearch)) return false;
+  if (/\/rss\.xml(?:$|\?)/i.test(pathAndSearch)) return true;
+  if (!/rss|feed|\.xml(?:$|\?)/i.test(haystack)) return false;
+  return eventIntentPattern.test(haystack) || /calendar|shows?|schedule/i.test(haystack);
 }
 
 function scoreVenueSource(sourceType: DiscoveredEventSourceType, candidateUrl: URL, label: string): number {

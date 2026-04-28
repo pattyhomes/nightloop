@@ -6,6 +6,7 @@ export type FetchedEvent = {
   url?: string | null;
   source_url: string;
   cover_amount_dollars?: number | null;
+  time_precision?: "exact" | "date_only_default_22";
 };
 
 export type SanitizedFetchedEvent = {
@@ -17,6 +18,7 @@ export type SanitizedFetchedEvent = {
   metadata: {
     source_url: string;
     cover_amount_dollars?: number;
+    time_precision?: "exact" | "date_only_default_22";
   };
 };
 
@@ -44,6 +46,14 @@ function stripCdata(value: string): string {
 function textBetween(input: string, tag: string): string | null {
   const match = input.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
   return match ? decodeEntities(stripCdata(match[1]?.trim() ?? "")) : null;
+}
+
+function stripHtml(value: string): string {
+  return decodeEntities(stripCdata(value)
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim());
 }
 
 function parseDate(value: unknown): string | null {
@@ -201,6 +211,57 @@ function dateTimeIsoPacific(month: number, day: number, hour: number, minute: nu
   return new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-07:00`).toISOString();
 }
 
+function dateTimeIsoPacificForYear(year: number, month: number, day: number, hour: number, minute: number): string {
+  return new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-07:00`).toISOString();
+}
+
+const monthNames: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12
+};
+
+function parseNamedMonthDay(value: string): { month: number; day: number } | null {
+  const match = value.match(/\b(?:mon|tue|wed|thu|fri|sat|sun)?\.?,?\s*(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  if (!match) return null;
+  const month = monthNames[match[1]?.toLowerCase() ?? ""];
+  const day = Number(match[2]);
+  if (!month || day < 1 || day > 31) return null;
+  return { month, day };
+}
+
+function eventDateOnly(month: number, day: number): { starts_at: string; time_precision: "date_only_default_22" } {
+  return {
+    starts_at: dateTimeIsoPacific(month, day, 22, 0),
+    time_precision: "date_only_default_22"
+  };
+}
+
+function hrefs(input: string): string[] {
+  return [...input.matchAll(/href=["']([^"']+)["']/gi)].map((match) => decodeEntities(match[1] ?? ""));
+}
+
 export function parseTicketwebPluginEvents(html: string, sourceUrl: string): FetchedEvent[] {
   const blocks = html.match(/<div class=["'][^"']*date-img-wrapper[^"']*["'][\s\S]*?(?=<div class=["'][^"']*date-img-wrapper|<\/body>|$)/gi) ?? [];
   const events: FetchedEvent[] = [];
@@ -228,20 +289,131 @@ export function parseTicketwebPluginEvents(html: string, sourceUrl: string): Fet
   return events;
 }
 
+function parseAudioSfEventDetail(html: string, sourceUrl: string): FetchedEvent[] {
+  if (!/audiosf\.com\/event\//i.test(sourceUrl) && !/id=["']event-container/i.test(html)) return [];
+  const dateText = stripHtml(html.match(/<div[^>]+id=["']event-container-date["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "")
+    || stripHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "");
+  const date = parseNamedMonthDay(dateText);
+  const title = stripHtml(html.match(/<div[^>]+id=["']event-container-title["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "")
+    || stripHtml((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").split(" - ")[0] ?? "");
+  if (!date || !title) return [];
+  const ticketUrl = html.match(/<form[^>]+action=["'](https:\/\/(?:wl\.)?eventim\.us\/event\/[^"']+)["']/i)?.[1] ?? null;
+  const startsAt = eventDateOnly(date.month, date.day);
+  return [{
+    source_event_id: sourceUrl,
+    title,
+    starts_at: startsAt.starts_at,
+    ends_at: null,
+    url: ticketUrl ? decodeEntities(ticketUrl) : sourceUrl,
+    source_url: sourceUrl,
+    time_precision: startsAt.time_precision
+  }];
+}
+
+function parse1015Events(html: string, sourceUrl: string): FetchedEvent[] {
+  if (!/1015\.com/i.test(sourceUrl) && !/1015Folsom/i.test(html)) return [];
+  const blocks = html.match(/<a[^>]+href=["']https:\/\/wl\.eventim\.us\/event\/[^"']+["'][\s\S]*?(?=<a[^>]+href=["']https:\/\/wl\.eventim\.us\/event\/|<\/body>|$)/gi) ?? [];
+  const events: FetchedEvent[] = [];
+  for (const block of blocks) {
+    const ticketUrl = block.match(/href=["'](https:\/\/wl\.eventim\.us\/event\/[^"']+)["']/i)?.[1] ?? null;
+    const dateText = stripHtml(block.match(/<h4[^>]*>([\s\S]*?)<\/h4>/i)?.[1] ?? "");
+    const title = stripHtml(block.match(/<h3[^>]*>\s*<strong[^>]*>([\s\S]*?)<\/strong>\s*<\/h3>/i)?.[1] ?? "");
+    const date = parseNamedMonthDay(dateText);
+    if (!ticketUrl || !date || !title) continue;
+    const startsAt = eventDateOnly(date.month, date.day);
+    events.push({
+      source_event_id: ticketUrl,
+      title,
+      starts_at: startsAt.starts_at,
+      ends_at: null,
+      url: decodeEntities(ticketUrl),
+      source_url: sourceUrl,
+      time_precision: startsAt.time_precision
+    });
+  }
+  return events;
+}
+
+function parseBoomBoomRoomEvents(html: string, sourceUrl: string): FetchedEvent[] {
+  if (!/boomboomroom\.com/i.test(sourceUrl) && !/rhp-events-list-widget-events/i.test(html)) return [];
+  const blocks = html.match(/<div[^>]+class=["'][^"']*rhp-events-list-widget-events[^"']*["'][\s\S]*?(?=<div[^>]+class=["'][^"']*rhp-events-list-widget-events|<\/body>|$)/gi) ?? [];
+  const events: FetchedEvent[] = [];
+  for (const block of blocks) {
+    const dateText = stripHtml(block.match(/<div[^>]+class=["'][^"']*eventDate[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "");
+    const titleAnchor = block.match(/<h4[^>]+class=["'][^"']*entry-title[^"']*["'][\s\S]*?<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    const eventUrl = titleAnchor?.[1] ? new URL(decodeEntities(titleAnchor[1]), sourceUrl).toString() : null;
+    const title = titleAnchor?.[2] ? stripHtml(titleAnchor[2]) : null;
+    const date = parseNamedMonthDay(dateText);
+    if (!eventUrl || !title || !date) continue;
+    const startsAt = eventDateOnly(date.month, date.day);
+    events.push({
+      source_event_id: eventUrl,
+      title,
+      starts_at: startsAt.starts_at,
+      ends_at: null,
+      url: eventUrl,
+      source_url: sourceUrl,
+      time_precision: startsAt.time_precision
+    });
+  }
+  return events;
+}
+
 export function parseVenueOwnedHtmlEvents(html: string, sourceUrl: string): FetchedEvent[] {
-  return parseTicketwebPluginEvents(html, sourceUrl);
+  return [
+    ...parseTicketwebPluginEvents(html, sourceUrl),
+    ...parseAudioSfEventDetail(html, sourceUrl),
+    ...parse1015Events(html, sourceUrl),
+    ...parseBoomBoomRoomEvents(html, sourceUrl)
+  ];
+}
+
+function parseBottomOfTheHillRssItem(block: string, sourceUrl: string): FetchedEvent | null {
+  if (!/bottomofthehill/i.test(sourceUrl)) return null;
+  const rawTitle = textBetween(block, "title");
+  const match = rawTitle?.match(/^(\d{4})\s+(\d{1,2})\/(\d{1,2})\s*:\s*(.+)$/);
+  if (!match) return null;
+  const description = textBetween(block, "description") ?? "";
+  const parsedTime = parseVenueTime(stripHtml(description));
+  const time = parsedTime ?? { hour: 22, minute: 0 };
+  return {
+    source_event_id: textBetween(block, "guid") ?? textBetween(block, "id"),
+    title: match[4]?.trim() ?? rawTitle,
+    starts_at: dateTimeIsoPacificForYear(Number(match[1]), Number(match[2]), Number(match[3]), time.hour, time.minute),
+    ends_at: null,
+    url: textBetween(block, "link"),
+    source_url: sourceUrl,
+    time_precision: parsedTime ? "exact" : "date_only_default_22"
+  };
 }
 
 export function parseRssEvents(input: string, sourceUrl: string): FetchedEvent[] {
   const blocks = input.match(/<item[\s\S]*?<\/item>/gi) ?? [];
-  return blocks.map((block) => ({
+  return blocks.map((block) => parseBottomOfTheHillRssItem(block, sourceUrl) ?? {
     source_event_id: textBetween(block, "guid") ?? textBetween(block, "id"),
     title: textBetween(block, "title"),
     starts_at: parseDate(textBetween(block, "startDate") ?? textBetween(block, "starts_at") ?? textBetween(block, "pubDate")),
     ends_at: parseDate(textBetween(block, "endDate") ?? textBetween(block, "ends_at")),
     url: textBetween(block, "link"),
     source_url: sourceUrl
-  }));
+  });
+}
+
+export function parseVenueOwnedEventDetailLinks(html: string, sourceUrl: string, limit = 25): string[] {
+  const base = new URL(sourceUrl);
+  const seen = new Set<string>();
+  for (const href of hrefs(html)) {
+    try {
+      const url = new URL(href, sourceUrl);
+      if (url.hostname.replace(/^www\./, "") !== base.hostname.replace(/^www\./, "")) continue;
+      if (!/^\/(?:event|tm-event)\//i.test(url.pathname)) continue;
+      url.hash = "";
+      seen.add(url.toString());
+    } catch {
+      continue;
+    }
+  }
+  return [...seen].slice(0, Math.max(1, limit));
 }
 
 export function sanitizeFetchedEvent(event: FetchedEvent | undefined): SanitizedFetchedEvent {
@@ -253,6 +425,9 @@ export function sanitizeFetchedEvent(event: FetchedEvent | undefined): Sanitized
   };
   if (typeof event.cover_amount_dollars === "number" && Number.isFinite(event.cover_amount_dollars)) {
     metadata.cover_amount_dollars = event.cover_amount_dollars;
+  }
+  if (event.time_precision) {
+    metadata.time_precision = event.time_precision;
   }
   return {
     source_event_id: event.source_event_id ?? null,
