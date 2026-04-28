@@ -1,6 +1,6 @@
 # Nightloop v3 API Contracts
 
-Last updated: 2026-04-24
+Last updated: 2026-04-28
 
 Base path: `/api`
 
@@ -293,21 +293,206 @@ Server behavior:
 
 ## Friends And Presence
 
+Phase 6A implements friend graph and tonight-only activity. It does not include
+contacts matching, APNs push, universal links, realtime presence, or
+friend-influenced recommendations.
+
+Privacy rules:
+
+- Profiles are searchable by display name and username by default.
+- Blocks create strict mutual invisibility and cancel friendship/request state.
+- Ghost mode hides social activity/presence only, not profile search.
+- Signal auto-share is sanitized to venue, signal kind, actor, and time.
+- Friend activity expires at the market nightlife-day end.
+- "I'm Coming" is not a live signal and does not affect venue liveness.
+
+### GET /friends
+
+Returns accepted friends, incoming requests, and outgoing requests.
+
+```json
+{
+  "friends": [
+    {
+      "user": {
+        "id": "user-maya",
+        "display_name": "Maya",
+        "username": "maya",
+        "avatar_kind": "initials",
+        "bio": null
+      },
+      "friendship": {
+        "id": "friendship-1",
+        "status": "accepted",
+        "direction": "outgoing",
+        "requester_user_id": "user-alex",
+        "addressee_user_id": "user-maya",
+        "responded_at": "2026-04-28T00:00:00Z",
+        "created_at": "2026-04-28T00:00:00Z",
+        "updated_at": "2026-04-28T00:00:00Z"
+      }
+    }
+  ],
+  "incoming_requests": [],
+  "outgoing_requests": []
+}
+```
+
+### GET /friends/search
+
+Query:
+
+- `q` required, at least 2 characters
+- `limit` optional, max 30
+
+Returns safe profile fields plus current friendship state. Excludes self,
+deleted users, and blocked relationships.
+
+### Friend Requests
+
+`POST /friends/requests`
+
+```json
+{
+  "user_id": "user-maya"
+}
+```
+
+`POST /friends/requests/:id/accept`
+
+`POST /friends/requests/:id/decline`
+
+`DELETE /friends/requests/:id`
+
+`DELETE /friends/:userId`
+
+### Blocks
+
+`GET /friends/blocks`
+
+`POST /friends/blocks`
+
+```json
+{
+  "user_id": "user-maya"
+}
+```
+
+`DELETE /friends/blocks/:userId`
+
+### Invites
+
+`POST /friends/invites`
+
+Creates a 7-day reusable invite code. The database stores a hash and code hint;
+the plaintext code is returned only at creation.
+
+```json
+{
+  "invite": {
+    "id": "invite-1",
+    "code": "NL-ABCD-2345",
+    "code_hint": "2345",
+    "expires_at": "2026-05-05T00:00:00Z",
+    "revoked_at": null,
+    "created_at": "2026-04-28T00:00:00Z"
+  }
+}
+```
+
+`DELETE /friends/invites/:id`
+
+`POST /friends/invites/accept`
+
+```json
+{
+  "code": "NL-ABCD-2345"
+}
+```
+
 ### GET /friends/activity
 
 Returns friend activity visible to the current user, excluding users in ghost mode or blocked relationships.
 
-### POST /friends/invite-link
+```json
+{
+  "items": [
+    {
+      "id": "activity-1",
+      "type": "signal",
+      "signal_kind": "packed",
+      "text": null,
+      "actor": {
+        "id": "user-maya",
+        "display_name": "Maya",
+        "username": "maya",
+        "avatar_kind": "initials",
+        "bio": null
+      },
+      "venue": {
+        "id": "venue-halcyon",
+        "name": "Halcyon",
+        "neighborhood": "SoMa",
+        "category": "club"
+      },
+      "viewer_has_coming": false,
+      "coming_count": 1,
+      "replies": [],
+      "expires_at": "2026-04-29T11:00:00Z",
+      "created_at": "2026-04-28T00:00:00Z"
+    }
+  ]
+}
+```
 
-Creates an invite link for adding friends.
+### POST /friends/venues/:venueId/coming
 
-### POST /friends/contacts-match
+Request:
 
-Request contains normalized phone hashes only.
+```json
+{
+  "is_coming": true
+}
+```
 
-### POST /friend-groups/:id/attendance
+When `is_coming` is false, the active attendance intent is cancelled.
 
-Toggles "I'm Coming" for a friend group and emits social activity plus push notification where enabled.
+### POST /friends/activity/:id/replies
+
+Request for a text reply:
+
+```json
+{
+  "kind": "comment",
+  "text": "got a booth"
+}
+```
+
+Request for an emoji signal reply:
+
+```json
+{
+  "kind": "emoji_signal",
+  "signal_kind": "short_line"
+}
+```
+
+Text replies are max 140 characters and require friendship with the activity
+actor.
+
+### Reports
+
+`POST /friends/activity/:id/report`
+
+`POST /friends/profiles/:userId/report`
+
+Request:
+
+```json
+{
+  "reason": "inappropriate"
+}
+```
 
 ## Decision Sessions
 

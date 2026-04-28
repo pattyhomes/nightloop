@@ -5,7 +5,7 @@ Last updated: 2026-04-28
 ## Status
 
 Phase 5 map/UI foundation is done. Phase 5 trust/data is complete enough to
-start Phase 6A while venue/event coverage continues as Phase 5.x ops.
+start Phase 6 work while venue/event coverage continues as Phase 5.x ops.
 
 Current gates:
 
@@ -32,22 +32,26 @@ Known caveats:
 
 ## Phase 6A Recommendation
 
-Start Phase 6A with friends graph and privacy foundation:
+Phase 6A has started and the first broad beta foundation is implemented:
 
-- friend requests;
-- accepted friendships;
-- blocks;
-- privacy defaults;
-- backend APIs and tests;
-- iOS models and decode/request tests.
+- backend friends graph, requests, blocks, invites, activity, attendance
+  intents, replies, reports, signal auto-share, and venue friend summaries;
+- iOS social models/client methods, decode/request tests, and a real Friends
+  tab beta surface;
+- docs/API contract checkpoint in `PHASE6A_SOCIAL_BETA.md`.
 
 Do not add live social presence, friend-influenced recommendations, contacts
-matching, or push notification behavior until the graph/privacy foundation is
-stable and reviewed.
+matching, universal links, or push notification behavior until the Phase 6A
+foundation has been exercised with seeded/dev users and reviewed.
 
 Recommended mode for Phase 6A: Codex Plan Mode, xhigh reasoning while privacy
 and abuse-prevention decisions are being made; high reasoning is fine for
 implementation after the plan is approved.
+
+Next recommended slice: a short Phase 6A hardening pass with simulator/dev-user
+exercise, account-deletion verification against real social rows, and the full
+verification set below. After that, Phase 6B can begin with group planning and
+decision sessions.
 
 ## Verification
 

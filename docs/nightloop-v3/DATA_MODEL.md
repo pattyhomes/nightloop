@@ -1,6 +1,6 @@
 # Nightloop v3 Data Model
 
-Last updated: 2026-04-24
+Last updated: 2026-04-28
 
 This is the target data model for Phase 1 and Phase 2. It is intentionally not a migration yet; SQL migrations should be written in Phase 1 after the Supabase project is confirmed.
 
@@ -137,25 +137,77 @@ Nightlife event data linked to venues and markets.
 
 ### friendships
 
-Friend graph with accepted/pending/blocked status.
+Friend graph request/accept state.
+
+Important columns:
+
+- `id uuid primary key`
+- `requester_user_id uuid references users(id)`
+- `addressee_user_id uuid references users(id)`
+- `status text`: `pending`, `accepted`, or `declined`
+- `responded_at timestamptz`
+- unique unordered requester/addressee pair
 
 ### friend_invites
 
-Invite links and QR token targets.
+Expiring in-app invite code backing for QR/manual code entry.
+
+Important columns:
+
+- `id uuid primary key`
+- `user_id uuid references users(id)`
+- `token_hash text unique not null`
+- `code_hint text not null`
+- `expires_at timestamptz not null`
+- `revoked_at timestamptz`
+- `accepted_count integer`
+- `metadata jsonb`
+
+Plaintext invite codes are not stored.
 
 ### contact_match_jobs
 
-Ephemeral hashed contact matching jobs. Do not store raw contacts.
+Deferred. Do not add contacts matching until a separate privacy review. If
+implemented later, jobs must be ephemeral and hash-only; never store raw
+contacts.
 
 ### activity_events
 
 Friend-visible feed/ticker events.
 
-Important: event visibility must respect ghost mode, friendship status, and block lists.
+Important columns:
+
+- `actor_user_id uuid references users(id)`
+- `target_user_id uuid references users(id)`
+- `venue_id uuid references venues(id)`
+- `market_id uuid references markets(id)`
+- `parent_activity_id uuid references activity_events(id)`
+- `source_signal_id uuid references signals(id)`
+- `type text`: `signal`, `coming`, `comment`, or `emoji_signal`
+- `visibility text`: `friends`
+- `signal_kind text`
+- `text text` with 140 character max
+- `expires_at timestamptz`
+- `metadata jsonb`
+
+Friend activity must respect ghost mode, accepted friendship, expiry, and block
+lists. Signal-derived activity is sanitized and must not expose raw coordinates
+or structured signal details.
 
 ### attendance_intents
 
 "I'm Coming" state for friend groups.
+
+Important columns:
+
+- `user_id uuid references users(id)`
+- `venue_id uuid references venues(id)`
+- `market_id uuid references markets(id)`
+- `status text`: `active` or `cancelled`
+- `activity_id uuid references activity_events(id)`
+- `expires_at timestamptz`
+
+Attendance intents do not count as live signals or liveness evidence.
 
 ### decision_sessions
 
@@ -191,6 +243,9 @@ Reports against users, activity events, profiles, or venue content.
 ### blocked_users
 
 User-level blocks.
+
+Strict mutual invisibility source. Creating a block removes friendship/request
+state between the two users.
 
 ### audit_logs
 
