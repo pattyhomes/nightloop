@@ -18,9 +18,16 @@ struct DecisionShellView: View {
     @State private var pulseFilter: String?
     @State private var isLoading = true
     @State private var isMutating = false
+    @State private var isSearchingSuggestions = false
     @State private var errorMessage: String?
     @State private var toastMessage: String?
     @State private var toastIsError = false
+    @State private var suggestionQuery = ""
+    @State private var suggestionResults: [VenueItem] = []
+    @State private var messageText = ""
+    @State private var finalizingCandidate: DecisionCandidate?
+    @State private var finalMeetupAt = ""
+    @State private var finalNote = ""
 
     private var activeMarketID: String {
         me.profile?.selectedMarketId ?? "san-francisco"
@@ -42,12 +49,12 @@ struct DecisionShellView: View {
                             Task { await loadDecision() }
                         }
                     } else {
-                        createSection
-                        joinSection
                         sessionsSection
                         if let activeSession {
                             sessionDetail(activeSession)
                         }
+                        createSection
+                        joinSection
                     }
                 }
                 .padding(.horizontal, 20)
@@ -64,6 +71,19 @@ struct DecisionShellView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await loadDecision() }
+        .sheet(item: $finalizingCandidate) { candidate in
+            DecisionFinalizationSheet(
+                candidate: candidate,
+                meetupAt: $finalMeetupAt,
+                note: $finalNote,
+                isPending: isMutating,
+                finalize: {
+                    finalize(candidate)
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     private var header: some View {
@@ -127,6 +147,9 @@ struct DecisionShellView: View {
     }
 
     private var statusCopy: String {
+        if let finalPlan = activeSession?.session.finalPlan {
+            return "Locked: \(finalPlan.venue?.name ?? "tonight's pick"). Chat stays open until expiry."
+        }
         if let leader = activeSession?.leader {
             return "\(leader.venue.name) is leading with \(leader.inCount) in."
         }
@@ -266,25 +289,36 @@ struct DecisionShellView: View {
 
     private func sessionDetail(_ response: DecisionSessionResponse) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            NightloopSectionHeader(title: "Current slate", trailing: "\(response.candidates.count)")
+            NightloopSectionHeader(title: response.session.finalPlan == nil ? "Current slate" : "Locked plan", trailing: "\(response.candidates.count)")
 
-            leaderCard(response)
+            if let finalPlan = response.session.finalPlan {
+                finalPlanCard(finalPlan, session: response.session)
+            } else {
+                leaderCard(response)
+            }
             codeCard(response.session)
+            suggestionSection(response)
 
             VStack(spacing: 12) {
                 ForEach(response.candidates) { candidate in
                     DecisionCandidateCard(
                         candidate: candidate,
                         isPending: isMutating,
+                        canVote: response.session.capabilities?.canVote ?? (response.session.finalPlan == nil),
+                        canFinalize: response.session.capabilities?.canFinalize == true,
                         apiClient: apiClient,
                         authStore: authStore,
                         onAccountChanged: onAccountChanged,
                         voteIn: { vote(candidate, .voteIn) },
                         skip: { vote(candidate, .skip) },
-                        coming: { setComing(candidate.venue) }
+                        coming: { setComing(candidate.venue) },
+                        remove: { removeSuggestion(candidate) },
+                        finalize: { prepareFinalize(candidate) }
                     )
                 }
             }
+
+            roomChatSection(response)
 
             if response.session.viewerRole == "creator" && response.session.status == "active" {
                 HStack(spacing: 8) {
@@ -309,6 +343,57 @@ struct DecisionShellView: View {
                     .tint(NightloopTheme.rose)
                 }
                 .disabled(isMutating)
+            }
+        }
+    }
+
+    private func finalPlanCard(_ finalPlan: DecisionFinalPlan, session: DecisionSession) -> some View {
+        NightloopCard(fill: NightloopTheme.purpleSoft) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(NightloopTheme.good)
+                        .frame(width: 34, height: 34)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(finalPlan.venue?.name ?? "Final pick locked")
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(1)
+                        Text("Locked by \(finalPlan.lockedBy.displayName)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                    }
+
+                    Spacer()
+                }
+
+                if let meetupAt = finalPlan.meetupAt {
+                    Label("Meet \(relativeTime(meetupAt))", systemImage: "clock.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+                }
+
+                if let note = finalPlan.note, !note.isEmpty {
+                    Text(note)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let venue = finalPlan.venue {
+                    Button {
+                        setComing(venue)
+                    } label: {
+                        Label("I'm Coming", systemImage: "figure.walk")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NightloopTheme.good)
+                    .disabled(isMutating || session.status != "active")
+                }
             }
         }
     }
@@ -384,6 +469,140 @@ struct DecisionShellView: View {
                         ClipboardMiniButton(systemName: "number", label: "Copy room ID") {
                             UIPasteboard.general.string = session.id
                             showToast("Room ID copied")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionSection(_ response: DecisionSessionResponse) -> some View {
+        if response.session.capabilities?.canSuggestCandidates == true {
+            NightloopCard(fill: Color.white.opacity(0.035)) {
+                VStack(alignment: .leading, spacing: 12) {
+                    NightloopSectionHeader(title: "Suggest venue", trailing: "\(response.candidates.filter { $0.source == "suggested" }.count)/6")
+
+                    HStack(spacing: 8) {
+                        TextField("Search Nightloop venues", text: $suggestionQuery)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .padding(.horizontal, 12)
+                            .frame(height: 40)
+                            .background(Color.white.opacity(0.055))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(NightloopTheme.hairline)
+                            }
+
+                        Button {
+                            searchSuggestions()
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                                .font(.caption.weight(.black))
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NightloopTheme.purple)
+                        .disabled(isSearchingSuggestions || suggestionQuery.trimmingCharacters(in: .whitespacesAndNewlines).count < 2)
+                        .accessibilityLabel("Search venues to suggest")
+                    }
+
+                    if isSearchingSuggestions {
+                        ProgressView()
+                            .tint(NightloopTheme.purple)
+                    } else if !suggestionResults.isEmpty {
+                        VStack(spacing: 8) {
+                            ForEach(suggestionResults.prefix(5)) { venue in
+                                DecisionSuggestionRow(venue: venue) {
+                                    suggest(venue)
+                                }
+                                .disabled(isMutating)
+                            }
+                        }
+                    }
+
+                    Text("Suggestions stay inside this room and count as your in vote.")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                }
+            }
+        } else if response.session.finalPlan != nil {
+            Text("Votes and suggestions are frozen after the creator locks a pick. Chat stays open until the room expires.")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NightloopTheme.inkMuted)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    private func roomChatSection(_ response: DecisionSessionResponse) -> some View {
+        NightloopCard(fill: Color.white.opacity(0.035)) {
+            VStack(alignment: .leading, spacing: 12) {
+                NightloopSectionHeader(title: "Room chat", trailing: "\(response.messages.count)")
+
+                if response.messages.isEmpty {
+                    Text("Tiny room-only chat for quick planning. Messages expire tonight.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(response.messages.prefix(6)) { message in
+                            DecisionMessageRow(message: message) {
+                                reportMessage(message)
+                            }
+                        }
+                    }
+                }
+
+                if response.session.capabilities?.canMessage == true {
+                    HStack(spacing: 8) {
+                        TextField("Message", text: $messageText)
+                            .textInputAutocapitalization(.sentences)
+                            .autocorrectionDisabled()
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .padding(.horizontal, 12)
+                            .frame(height: 40)
+                            .background(Color.white.opacity(0.055))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(NightloopTheme.hairline)
+                            }
+                            .onChange(of: messageText) { _, newValue in
+                                if newValue.count > 140 {
+                                    messageText = String(newValue.prefix(140))
+                                }
+                            }
+
+                        Button {
+                            sendTextMessage()
+                        } label: {
+                            Image(systemName: "paperplane.fill")
+                                .font(.caption.weight(.black))
+                                .frame(width: 40, height: 40)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NightloopTheme.fab)
+                        .disabled(isMutating || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+
+                    HStack(spacing: 8) {
+                        ForEach([DecisionEmoji.fire, .eyes, .thumbsUp, .thinking, .down], id: \.rawValue) { emoji in
+                            Button {
+                                sendEmoji(emoji)
+                            } label: {
+                                Image(systemName: emoji.symbol)
+                                    .font(.caption.weight(.black))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 32)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(NightloopTheme.inkMuted)
+                            .disabled(isMutating)
                         }
                     }
                 }
@@ -509,6 +728,145 @@ struct DecisionShellView: View {
                 showToast(error.localizedDescription, isError: true)
             }
             isMutating = false
+        }
+    }
+
+    private func searchSuggestions() {
+        let query = suggestionQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 2, let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            isSearchingSuggestions = true
+            do {
+                let response = try await apiClient.searchDecisionVenues(
+                    sessionID: session.id,
+                    query: query,
+                    bearerToken: token
+                )
+                suggestionResults = response.items
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isSearchingSuggestions = false
+        }
+    }
+
+    private func suggest(_ venue: VenueItem) {
+        guard let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            isMutating = true
+            do {
+                activeSession = try await apiClient.suggestDecisionCandidate(
+                    sessionID: session.id,
+                    venueID: venue.id,
+                    bearerToken: token
+                )
+                suggestionQuery = ""
+                suggestionResults = []
+                showToast("Suggested \(venue.name)")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
+        }
+    }
+
+    private func removeSuggestion(_ candidate: DecisionCandidate) {
+        guard let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            isMutating = true
+            do {
+                activeSession = try await apiClient.removeDecisionCandidate(
+                    sessionID: session.id,
+                    candidateID: candidate.id,
+                    bearerToken: token
+                )
+                showToast("Suggestion removed")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
+        }
+    }
+
+    private func prepareFinalize(_ candidate: DecisionCandidate) {
+        finalMeetupAt = ""
+        finalNote = ""
+        finalizingCandidate = candidate
+    }
+
+    private func finalize(_ candidate: DecisionCandidate) {
+        guard let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            isMutating = true
+            do {
+                activeSession = try await apiClient.finalizeDecisionSession(
+                    id: session.id,
+                    candidateID: candidate.id,
+                    meetupAt: emptyToNil(finalMeetupAt),
+                    note: emptyToNil(finalNote),
+                    bearerToken: token
+                )
+                finalizingCandidate = nil
+                showToast("Pick locked")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
+        }
+    }
+
+    private func sendTextMessage() {
+        let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            isMutating = true
+            do {
+                activeSession = try await apiClient.addDecisionMessage(
+                    sessionID: session.id,
+                    type: .text,
+                    text: text,
+                    bearerToken: token
+                )
+                messageText = ""
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
+        }
+    }
+
+    private func sendEmoji(_ emoji: DecisionEmoji) {
+        guard let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            isMutating = true
+            do {
+                activeSession = try await apiClient.addDecisionMessage(
+                    sessionID: session.id,
+                    type: .emoji,
+                    emoji: emoji,
+                    bearerToken: token
+                )
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
+        }
+    }
+
+    private func reportMessage(_ message: DecisionMessage) {
+        guard let token = authStore.accessToken, let session = activeSession?.session else { return }
+        Task {
+            do {
+                _ = try await apiClient.reportDecisionMessage(
+                    sessionID: session.id,
+                    messageID: message.id,
+                    reason: "inappropriate",
+                    bearerToken: token
+                )
+                showToast("Reported")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
         }
     }
 
@@ -681,12 +1039,16 @@ private struct DecisionSessionRow: View {
 private struct DecisionCandidateCard: View {
     let candidate: DecisionCandidate
     let isPending: Bool
+    let canVote: Bool
+    let canFinalize: Bool
     let apiClient: NightloopAPIClient
     @ObservedObject var authStore: AuthStore
     let onAccountChanged: (MeResponse) -> Void
     let voteIn: () -> Void
     let skip: () -> Void
     let coming: () -> Void
+    let remove: () -> Void
+    let finalize: () -> Void
 
     var body: some View {
         NightloopCard(fill: Color.white.opacity(0.04)) {
@@ -734,6 +1096,18 @@ private struct DecisionCandidateCard: View {
                     .foregroundStyle(NightloopTheme.inkMuted)
                     .lineLimit(2)
 
+                if candidate.source == "suggested" {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.caption2.weight(.black))
+                            .foregroundStyle(NightloopTheme.purple)
+                        Text(candidate.suggestedBy.map { "Suggested by \($0.displayName)" } ?? "Suggested venue")
+                            .font(.caption2.weight(.black))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                        Spacer()
+                    }
+                }
+
                 HStack(spacing: 8) {
                     DecisionCountPill(title: "In", value: candidate.inCount, isSelected: candidate.viewerVote == .voteIn)
                     DecisionCountPill(title: "Skip", value: candidate.skipCount, isSelected: candidate.viewerVote == .skip)
@@ -746,13 +1120,22 @@ private struct DecisionCandidateCard: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button(action: skip) {
-                        Image(systemName: "xmark")
+                    if canVote {
+                        Button(action: skip) {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.black))
+                                .frame(width: 40, height: 34)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(NightloopTheme.inkMuted)
+                    } else {
+                        Text("Locked")
                             .font(.caption.weight(.black))
-                            .frame(width: 40, height: 34)
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .frame(width: 58, height: 34)
+                            .background(Color.white.opacity(0.045))
+                            .clipShape(Capsule())
                     }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.inkMuted)
 
                     Button(action: coming) {
                         Label("I'm Coming", systemImage: "figure.walk")
@@ -762,17 +1145,205 @@ private struct DecisionCandidateCard: View {
                     .buttonStyle(.bordered)
                     .tint(NightloopTheme.good)
 
-                    Button(action: voteIn) {
-                        Label("Vote In", systemImage: "checkmark")
+                    Button(action: canVote ? voteIn : finalize) {
+                        Label(canVote ? "Vote In" : "Details", systemImage: canVote ? "checkmark" : "info.circle")
                             .font(.caption.weight(.black))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(NightloopTheme.fab)
+                    .disabled(!canVote && !canFinalize)
                 }
                 .disabled(isPending)
+
+                if canFinalize || candidate.canRemove == true {
+                    HStack(spacing: 8) {
+                        if candidate.canRemove == true {
+                            Button(action: remove) {
+                                Label("Remove", systemImage: "trash")
+                                    .font(.caption2.weight(.black))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(NightloopTheme.rose)
+                        }
+
+                        if canFinalize {
+                            Button(action: finalize) {
+                                Label("Lock pick", systemImage: "lock.fill")
+                                    .font(.caption2.weight(.black))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(NightloopTheme.purple)
+                        }
+                    }
+                    .disabled(isPending)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct DecisionSuggestionRow: View {
+    let venue: VenueItem
+    let suggest: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            DecisionVenuePulseTile(venue: venue)
+                .frame(width: 44, height: 44)
+                .scaleEffect(0.76)
+                .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(venue.name)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                Text("\(venue.neighborhood) · \(venue.category)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button(action: suggest) {
+                Label("Add", systemImage: "plus")
+                    .font(.caption2.weight(.black))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(NightloopTheme.purple)
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct DecisionMessageRow: View {
+    let message: DecisionMessage
+    let report: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 30, height: 30)
+                Text(String(message.actor.displayName.prefix(1)).uppercased())
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.ink)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(message.actor.displayName)
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                    Text(relativeTime(message.createdAt))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted.opacity(0.75))
+                    Spacer()
+                    Button(action: report) {
+                        Image(systemName: "flag")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .accessibilityLabel("Report message")
+                }
+
+                if message.type == .emoji, let emoji = message.emoji {
+                    Label(emoji.rawValue.replacingOccurrences(of: "_", with: " "), systemImage: emoji.symbol)
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+                } else {
+                    Text(message.text ?? "")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct DecisionFinalizationSheet: View {
+    let candidate: DecisionCandidate
+    @Binding var meetupAt: String
+    @Binding var note: String
+    let isPending: Bool
+    let finalize: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            OrchidBackground(animated: false, gridOpacity: 0.035)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("LOCK PICK")
+                    .font(.caption2.weight(.black))
+                    .tracking(1.6)
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                Text(candidate.venue.name)
+                    .font(.title2.weight(.black))
+                    .foregroundStyle(NightloopTheme.ink)
+
+                Text("Finalizing freezes votes, suggestions, and removals. Chat and I'm Coming stay open until the room expires.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextField("Meetup ISO time (optional)", text: $meetupAt)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .padding(.horizontal, 12)
+                    .frame(height: 42)
+                    .background(Color.white.opacity(0.055))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                TextField("Note, max 140 chars", text: $note)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .padding(.horizontal, 12)
+                    .frame(height: 42)
+                    .background(Color.white.opacity(0.055))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .onChange(of: note) { _, newValue in
+                        if newValue.count > 140 {
+                            note = String(newValue.prefix(140))
+                        }
+                    }
+
+                HStack(spacing: 10) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .font(.caption.weight(.black))
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.inkMuted)
+
+                    Button {
+                        finalize()
+                    } label: {
+                        Label("Lock", systemImage: "lock.fill")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NightloopTheme.purple)
+                    .disabled(isPending)
+                }
+            }
+            .padding(20)
         }
     }
 }

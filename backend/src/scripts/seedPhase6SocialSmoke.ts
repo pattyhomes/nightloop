@@ -1,6 +1,15 @@
 import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, dbTransaction, getDBClient, type DBClient } from "../lib/db";
+import type { AccountState } from "../services/v1/accountService";
+import {
+  addDecisionSessionMessage,
+  createDecisionSession,
+  finalizeDecisionSession,
+  joinDecisionSession,
+  suggestDecisionCandidate,
+  voteDecisionSession
+} from "../services/v1/decisionService";
 import {
   PHASE6_SOCIAL_SMOKE_SEED_TAG,
   PHASE6_SOCIAL_SMOKE_USERS,
@@ -22,6 +31,14 @@ type SeededUser = SeedUser & {
 type Args = {
   market: string;
   reset: boolean;
+};
+
+type SeedSummary = {
+  market: string;
+  market_id: string;
+  venue: string;
+  users: Array<{ id: string; username: string; auth_user_id: string }>;
+  audit: ReturnType<typeof validatePhase6SocialSmokeSnapshot>;
 };
 
 const USERS: readonly SeedUser[] = PHASE6_SOCIAL_SMOKE_USERS;
@@ -292,17 +309,151 @@ async function seedSocialRows(
   );
 }
 
+function accountForSeededUser(user: SeededUser, marketId: string): AccountState {
+  const now = new Date().toISOString();
+  return {
+    user: {
+      id: user.id,
+      auth_user_id: user.authUserId,
+      eligibility_status: "eligible",
+      age_attested_at: now,
+      signal_scout_points: 0,
+      deleted_at: null,
+      created_at: now,
+      updated_at: now
+    },
+    profile: {
+      user_id: user.id,
+      display_name: user.displayName,
+      username: user.username,
+      selected_market_id: marketId,
+      avatar_kind: "initials",
+      bio: "Phase 6 dev smoke profile.",
+      created_at: now,
+      updated_at: now
+    },
+    settings: {
+      user_id: user.id,
+      ghost_mode: false,
+      map_show_neighborhood_labels: true,
+      map_show_street_grid: true,
+      push_social_enabled: true,
+      push_decision_enabled: true,
+      push_favorite_venue_alerts_enabled: false,
+      created_at: now,
+      updated_at: now
+    },
+    preferences: Object.fromEntries(
+      Object.entries(user.preferences).map(([category, values]) => [category, [...values]])
+    )
+  };
+}
+
+async function markSeededDecisionRoom(sessionId: string, label: string): Promise<void> {
+  await dbQuery(
+    `
+      UPDATE decision_sessions
+      SET metadata = metadata || $2::jsonb
+      WHERE id = $1::uuid
+    `,
+    [
+      sessionId,
+      JSON.stringify({
+        seed: PHASE6_SOCIAL_SMOKE_SEED_TAG,
+        smoke_label: label
+      })
+    ]
+  );
+}
+
+async function venueOutsideCandidates(marketId: string, candidateVenueIds: string[]): Promise<string> {
+  const result = await dbQuery<{ id: string }>(
+    `
+      SELECT id
+      FROM venues
+      WHERE market_id = $1::uuid
+        AND is_active = true
+        AND admin_status = 'approved'
+        AND NOT (id = ANY($2::uuid[]))
+      ORDER BY name ASC
+      LIMIT 1
+    `,
+    [marketId, candidateVenueIds]
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error("Expected a suggestion venue outside the initial decision slate.");
+  return row.id;
+}
+
+async function seedDecisionRooms(users: SeededUser[], marketId: string): Promise<void> {
+  const [alex, maya, jules] = users;
+  const alexAccount = accountForSeededUser(alex, marketId);
+  const mayaAccount = accountForSeededUser(maya, marketId);
+  const julesAccount = accountForSeededUser(jules, marketId);
+
+  const openRoom = await createDecisionSession({
+    account: alexAccount,
+    marketId,
+    invitedUserIds: [maya.id, jules.id]
+  });
+  await markSeededDecisionRoom(openRoom.session.id, "open_group_pick");
+  await joinDecisionSession({ account: mayaAccount, sessionId: openRoom.session.id });
+  await joinDecisionSession({ account: julesAccount, sessionId: openRoom.session.id });
+  const suggestedVenueId = await venueOutsideCandidates(
+    marketId,
+    openRoom.candidates.map((candidate) => candidate.venue_id)
+  );
+  const suggested = await suggestDecisionCandidate({
+    account: mayaAccount,
+    sessionId: openRoom.session.id,
+    venueId: suggestedVenueId
+  });
+  const suggestedCandidate = suggested.candidates.find((candidate) => candidate.venue_id === suggestedVenueId);
+  if (!suggestedCandidate) {
+    throw new Error("Expected suggested smoke candidate to exist.");
+  }
+  await voteDecisionSession({
+    account: julesAccount,
+    sessionId: openRoom.session.id,
+    candidateId: suggestedCandidate.id,
+    vote: "in"
+  });
+  await addDecisionSessionMessage({
+    account: mayaAccount,
+    sessionId: openRoom.session.id,
+    type: "text",
+    text: "This one feels right for tonight."
+  });
+  await addDecisionSessionMessage({
+    account: alexAccount,
+    sessionId: openRoom.session.id,
+    type: "emoji",
+    emoji: "fire"
+  });
+
+  const finalizedRoom = await createDecisionSession({
+    account: alexAccount,
+    marketId,
+    invitedUserIds: [maya.id]
+  });
+  await markSeededDecisionRoom(finalizedRoom.session.id, "finalized_group_pick");
+  await joinDecisionSession({ account: mayaAccount, sessionId: finalizedRoom.session.id });
+  const meetupAt = new Date(Date.parse(finalizedRoom.session.expires_at) - 2 * 60 * 60 * 1000).toISOString();
+  await finalizeDecisionSession({
+    account: alexAccount,
+    sessionId: finalizedRoom.session.id,
+    candidateId: finalizedRoom.candidates[0].id,
+    finalMeetupAt: meetupAt,
+    finalNote: "Meet near the entrance."
+  });
+}
+
 async function main(): Promise<void> {
   loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
   loadDotenv({ path: path.resolve(process.cwd(), "../backend/.env"), quiet: true });
 
   const args = parseArgs(process.argv.slice(2));
-  let summary: {
-    market: string;
-    venue: string;
-    users: Array<{ id: string; username: string; auth_user_id: string }>;
-    audit: ReturnType<typeof validatePhase6SocialSmokeSnapshot>;
-  } | null = null;
+  let summary: SeedSummary | undefined;
 
   await dbTransaction(async (client) => {
     if (args.reset) {
@@ -316,23 +467,40 @@ async function main(): Promise<void> {
       users.push(await upsertUser(client, user, market.id));
     }
     await seedSocialRows(client, users, market.id, venue.id, expiresAt);
-    const audit = validatePhase6SocialSmokeSnapshot(
-      await collectPhase6SocialSmokeSnapshot(client, market.slug)
-    );
-    if (!audit.ok) {
-      throw new Error(`Phase 6 social smoke audit failed: ${audit.failures.map((failure) => failure.code).join(", ")}`);
-    }
     summary = {
       market: market.slug,
+      market_id: market.id,
       venue: venue.name,
       users: users.map((user) => ({
         id: user.id,
         username: user.username,
         auth_user_id: user.authUserId
       })),
-      audit
+      audit: {
+        ok: false,
+        failures: [],
+        snapshot: await collectPhase6SocialSmokeSnapshot(client, market.slug)
+      }
     };
   });
+
+  const seededSummary = summary;
+  if (!seededSummary) {
+    throw new Error("Phase 6 social smoke seed failed before summary.");
+  }
+  const seededUsers = seededSummary.users.map((row) => {
+    const template = USERS.find((user) => user.username === row.username);
+    if (!template) throw new Error(`Missing smoke template for ${row.username}`);
+    return { ...template, id: row.id };
+  });
+  await seedDecisionRooms(seededUsers, seededSummary.market_id);
+  const audit = validatePhase6SocialSmokeSnapshot(
+    await collectPhase6SocialSmokeSnapshot({ query: dbQuery }, seededSummary.market)
+  );
+  if (!audit.ok) {
+    throw new Error(`Phase 6 social smoke audit failed: ${audit.failures.map((failure) => failure.code).join(", ")}`);
+  }
+  seededSummary.audit = audit;
 
   console.log("Phase 6 social smoke seed ready.");
   console.log("Phase 6 social smoke audit passed.");

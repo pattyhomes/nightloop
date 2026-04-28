@@ -493,11 +493,36 @@ struct DecisionMemberCounts: Decodable, Equatable {
     let invited: Int
 }
 
+struct DecisionUserSummary: Decodable, Equatable {
+    let id: String?
+    let displayName: String
+    let username: String
+    let avatarKind: String
+}
+
+struct DecisionCapabilities: Decodable, Equatable {
+    let canVote: Bool
+    let canSuggestCandidates: Bool
+    let canMessage: Bool
+    let canFinalize: Bool
+}
+
+struct DecisionFinalPlan: Decodable, Equatable {
+    let candidateId: String?
+    let venueId: String?
+    let finalizedAt: String
+    let meetupAt: String?
+    let note: String?
+    let lockedBy: DecisionUserSummary
+    let venue: VenueItem?
+}
+
 struct DecisionSession: Decodable, Identifiable, Equatable {
     let id: String
     let status: String
     let market: DecisionSessionMarket
     let filters: DecisionFilters?
+    let finalPlan: DecisionFinalPlan?
     let expiresAt: String
     let endedAt: String?
     let codeHint: String?
@@ -506,6 +531,7 @@ struct DecisionSession: Decodable, Identifiable, Equatable {
     let memberCounts: DecisionMemberCounts
     let viewerRole: String
     let viewerStatus: String
+    let capabilities: DecisionCapabilities?
     let createdAt: String?
     let updatedAt: String?
 }
@@ -530,6 +556,10 @@ struct DecisionCandidate: Decodable, Identifiable, Equatable {
     let venueId: String
     let originalRank: Int
     let baseScore: Double
+    let source: String?
+    let suggestedBy: DecisionUserSummary?
+    let suggestedAt: String?
+    let canRemove: Bool?
     let venue: VenueItem
     let recommendation: DecisionCandidateRecommendation
     let inCount: Int
@@ -540,10 +570,46 @@ struct DecisionCandidate: Decodable, Identifiable, Equatable {
     let groupFitReason: String
 }
 
+enum DecisionMessageType: String, Codable, Equatable {
+    case text
+    case emoji
+}
+
+enum DecisionEmoji: String, Codable, Equatable {
+    case fire
+    case eyes
+    case thumbsUp = "thumbs_up"
+    case thinking
+    case down
+
+    var symbol: String {
+        switch self {
+        case .fire: return "flame.fill"
+        case .eyes: return "eyes"
+        case .thumbsUp: return "hand.thumbsup.fill"
+        case .thinking: return "questionmark.bubble.fill"
+        case .down: return "hand.thumbsdown.fill"
+        }
+    }
+}
+
+struct DecisionMessage: Decodable, Identifiable, Equatable {
+    let id: String
+    let sessionId: String
+    let type: DecisionMessageType
+    let text: String?
+    let emoji: DecisionEmoji?
+    let actor: DecisionUserSummary
+    let expiresAt: String
+    let createdAt: String
+    let updatedAt: String
+}
+
 struct DecisionSessionResponse: Decodable, Equatable {
     let session: DecisionSession
     let candidates: [DecisionCandidate]
     let leader: DecisionCandidate?
+    let messages: [DecisionMessage]
 }
 
 struct DecisionSessionSummaryLeader: Decodable, Equatable {
@@ -569,6 +635,10 @@ struct DecisionSessionSummary: Decodable, Identifiable, Equatable {
 
 struct DecisionSessionListResponse: Decodable, Equatable {
     let items: [DecisionSessionSummary]
+}
+
+struct DecisionVenueSearchResponse: Decodable, Equatable {
+    let items: [VenueItem]
 }
 
 #if DEBUG

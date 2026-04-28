@@ -175,6 +175,27 @@ describe("Nightloop v1 decision sessions API", () => {
       });
   }
 
+  async function findVenueOutsideSession(marketId: string, candidateVenueIds: string[]): Promise<string> {
+    const result = await pool.query<{ id: string }>(
+      `
+        select id
+        from venues
+        where market_id = $1::uuid
+          and is_active = true
+          and admin_status = 'approved'
+          and not (id = any($2::uuid[]))
+        order by name asc
+        limit 1
+      `,
+      [marketId, candidateVenueIds]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("Expected approved venue outside decision slate.");
+    }
+    return row.id;
+  }
+
   beforeAll(async () => {
     jwks = new TestJwksServer();
     await jwks.start();
@@ -372,6 +393,201 @@ describe("Nightloop v1 decision sessions API", () => {
       .expect(409);
   }, 120000);
 
+  it("supports suggested venues, room messages, final plans, and finalization write locks", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Plan Host", "plan_host");
+    const friend = await createEligibleProfile("Plan Friend", "plan_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    const initialCandidateId = created.body.candidates[0].id;
+    const suggestedVenueId = await findVenueOutsideSession(
+      marketId,
+      created.body.candidates.map((candidate: { venue_id: string }) => candidate.venue_id)
+    );
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({})
+      .expect(200);
+
+    const search = await request(app)
+      .get(`/api/v1/decision-sessions/${sessionId}/venue-search`)
+      .query({ q: "a", limit: 10 })
+      .set("Authorization", `Bearer ${friend.token}`)
+      .expect(200);
+    expect(search.body.items.length).toBeGreaterThan(0);
+    expect(JSON.stringify(search.body)).not.toContain("raw_payload");
+    expect(JSON.stringify(search.body)).not.toContain("provider_records");
+
+    const suggested = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/candidates`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ venue_id: suggestedVenueId })
+      .expect(201);
+    const suggestedCandidate = suggested.body.candidates.find(
+      (candidate: { venue_id: string }) => candidate.venue_id === suggestedVenueId
+    );
+    expect(suggestedCandidate).toEqual(
+      expect.objectContaining({
+        source: "suggested",
+        viewer_vote: "in",
+        can_remove: true,
+        suggested_by: expect.objectContaining({
+          id: friend.userId,
+          display_name: "Plan Friend"
+        })
+      })
+    );
+    expect(suggested.body.session.capabilities.can_suggest_candidates).toBe(true);
+
+    const message = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/messages`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ type: "text", text: "Meet near the side door?" })
+      .expect(201);
+    expect(message.body.messages[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: "Meet near the side door?",
+        actor: expect.objectContaining({ id: friend.userId })
+      })
+    );
+    expect(JSON.stringify(message.body)).not.toContain("coordinates");
+
+    const emoji = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/messages`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ type: "emoji", emoji: "fire" })
+      .expect(201);
+    expect(emoji.body.messages.map((item: { type: string }) => item.type)).toContain("emoji");
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/messages/${message.body.messages[0].id}/report`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ reason: "spam" })
+      .expect(201);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/messages`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ type: "text", text: "x".repeat(141) })
+      .expect(400);
+
+    const finalized = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/finalize`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({
+        candidate_id: initialCandidateId,
+        final_meetup_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        final_note: "Meet by the entrance."
+      })
+      .expect(200);
+    expect(finalized.body.session.final_plan).toEqual(
+      expect.objectContaining({
+        candidate_id: initialCandidateId,
+        locked_by: expect.objectContaining({ id: host.userId }),
+        note: "Meet by the entrance."
+      })
+    );
+    expect(finalized.body.session.capabilities.can_vote).toBe(false);
+    expect(finalized.body.session.capabilities.can_suggest_candidates).toBe(false);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ candidate_id: initialCandidateId, vote: "in" })
+      .expect(409);
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/candidates`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ venue_id: suggestedVenueId })
+      .expect(409);
+    await request(app)
+      .delete(`/api/v1/decision-sessions/${sessionId}/candidates/${suggestedCandidate.id}`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .expect(409);
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/messages`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ type: "emoji", emoji: "eyes" })
+      .expect(201);
+  }, 120000);
+
+  it("enforces candidate suggestion cap, removal permissions, and initial candidate protection", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Suggest Host", "suggest_host");
+    const friend = await createEligibleProfile("Suggest Friend", "suggest_friend");
+    const other = await createEligibleProfile("Suggest Other", "suggest_other");
+    await requestAndAccept(host, friend);
+    await requestAndAccept(host, other);
+
+    const created = await createSession(host, marketId, [friend.userId, other.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    const candidateVenueIds = new Set<string>(
+      created.body.candidates.map((candidate: { venue_id: string }) => candidate.venue_id)
+    );
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({})
+      .expect(200);
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .set("Authorization", `Bearer ${other.token}`)
+      .send({})
+      .expect(200);
+
+    const venues = await pool.query<{ id: string }>(
+      `
+        select id
+        from venues
+        where market_id = $1::uuid
+          and is_active = true
+          and admin_status = 'approved'
+          and not (id = any($2::uuid[]))
+        order by name asc
+        limit 7
+      `,
+      [marketId, Array.from(candidateVenueIds)]
+    );
+    expect(venues.rows).toHaveLength(7);
+
+    let removableCandidateId = "";
+    for (const [index, venue] of venues.rows.entries()) {
+      const response = await request(app)
+        .post(`/api/v1/decision-sessions/${sessionId}/candidates`)
+        .set("Authorization", `Bearer ${friend.token}`)
+        .send({ venue_id: venue.id });
+      if (index < 6) {
+        expect(response.status).toBe(201);
+        const added = response.body.candidates.find(
+          (candidate: { venue_id: string }) => candidate.venue_id === venue.id
+        );
+        if (index === 0) removableCandidateId = added.id;
+      } else {
+        expect(response.status).toBe(409);
+      }
+    }
+
+    await request(app)
+      .delete(`/api/v1/decision-sessions/${sessionId}/candidates/${created.body.candidates[0].id}`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .expect(409);
+    await request(app)
+      .delete(`/api/v1/decision-sessions/${sessionId}/candidates/${removableCandidateId}`)
+      .set("Authorization", `Bearer ${other.token}`)
+      .expect(403);
+    const removed = await request(app)
+      .delete(`/api/v1/decision-sessions/${sessionId}/candidates/${removableCandidateId}`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .expect(200);
+    expect(removed.body.candidates.some((candidate: { id: string }) => candidate.id === removableCandidateId)).toBe(false);
+  }, 120000);
+
   it("cleans decision session memberships and votes during account deletion", async () => {
     const marketId = await getSfMarketId();
     const host = await createEligibleProfile("Delete Host", "delete_host");
@@ -391,6 +607,23 @@ describe("Nightloop v1 decision sessions API", () => {
       .set("Authorization", `Bearer ${friend.token}`)
       .send({ candidate_id: candidateId, vote: "in" })
       .expect(200);
+    const suggestedVenueId = await findVenueOutsideSession(
+      marketId,
+      created.body.candidates.map((candidate: { venue_id: string }) => candidate.venue_id)
+    );
+    const suggested = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/candidates`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ venue_id: suggestedVenueId })
+      .expect(201);
+    const suggestedCandidate = suggested.body.candidates.find(
+      (candidate: { venue_id: string }) => candidate.venue_id === suggestedVenueId
+    );
+    const message = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/messages`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ type: "text", text: "Delete-safe room note." })
+      .expect(201);
 
     await request(app)
       .delete("/api/v1/me/account")
@@ -406,11 +639,30 @@ describe("Nightloop v1 decision sessions API", () => {
         select
           (select count(*)::text from decision_session_members where user_id = $1::uuid) as memberships,
           (select count(*)::text from decision_votes where user_id = $1::uuid) as votes,
-          (select count(*)::text from decision_sessions where creator_user_id = $1::uuid) as sessions
+          (select count(*)::text from decision_sessions where creator_user_id = $1::uuid) as sessions,
+          (select count(*)::text from decision_session_candidates where suggested_by_user_id = $1::uuid) as suggestions,
+          (select count(*)::text from decision_session_messages where actor_user_id = $1::uuid) as messages
       `,
       [friend.userId]
     );
-    expect(counts.rows[0]).toEqual({ memberships: "0", votes: "0", sessions: "0" });
+    expect(counts.rows[0]).toEqual({ memberships: "0", votes: "0", sessions: "0", suggestions: "0", messages: "0" });
+
+    const hostView = await request(app)
+      .get(`/api/v1/decision-sessions/${sessionId}`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .expect(200);
+    const anonymizedCandidate = hostView.body.candidates.find(
+      (candidate: { id: string }) => candidate.id === suggestedCandidate.id
+    );
+    expect(anonymizedCandidate.suggested_by).toEqual(
+      expect.objectContaining({ id: null, display_name: "Deleted user" })
+    );
+    const anonymizedMessage = hostView.body.messages.find(
+      (item: { id: string }) => item.id === message.body.messages[0].id
+    );
+    expect(anonymizedMessage.actor).toEqual(
+      expect.objectContaining({ id: null, display_name: "Deleted user" })
+    );
     expect(deletedAuthUserIds).toContain(friend.authUserId);
   }, 120000);
 });

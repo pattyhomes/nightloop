@@ -49,6 +49,15 @@ Phase 6A.1 and the Phase 6B decision MVP are also implemented:
 - iOS Decision tab create/join/list/vote/detail/"I'm Coming" flows;
 - docs/API checkpoint in `PHASE6B_DECISION_MVP.md`.
 
+Phase 6C group pick rooms are implemented:
+
+- member venue suggestions from approved public venues in the room market;
+- tiny room-only text/emoji chat with reports and tonight expiry;
+- creator-locked final plans with optional meetup time/note;
+- iOS Decision tab room detail for final plans, suggestions, remove/finalize,
+  and chat;
+- docs/API checkpoint in `PHASE6C_GROUP_PICK_ROOMS.md`.
+
 Do not add live social presence, friend-influenced recommendations, contacts
 matching, universal links, public rooms, realtime, or push notification behavior
 without a fresh privacy/product plan.
@@ -58,8 +67,8 @@ reasoning while privacy and abuse-prevention decisions are being made; high
 reasoning is fine for implementation after the plan is approved.
 
 Next recommended slice: simulator walkthrough with the seeded social users and
-one real dev account, then patch any UI friction. After that, choose between
-Phase 6C realtime/push or richer group planning tools.
+one real dev account, then patch any UI friction in group rooms. After that,
+choose between Phase 6D realtime/push or richer planning polish.
 
 ## Verification
 

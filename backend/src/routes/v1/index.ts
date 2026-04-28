@@ -23,12 +23,18 @@ import { getVenue, listVenues } from "../../services/v1/venueService";
 import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
 import {
+  addDecisionSessionMessage,
   createDecisionSession,
   endDecisionSession,
+  finalizeDecisionSession,
   getDecisionSession,
   joinDecisionSession,
   listDecisionSessions,
+  removeDecisionCandidate,
+  reportDecisionSessionMessage,
   revokeDecisionSessionCode,
+  searchDecisionSessionVenues,
+  suggestDecisionCandidate,
   voteDecisionSession
 } from "../../services/v1/decisionService";
 import {
@@ -250,6 +256,49 @@ const DecisionVoteSchema = z
         code: "custom",
         path: ["candidate_id"],
         message: "candidate_id or venue_id is required."
+      });
+    }
+  });
+
+const DecisionVenueSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(80),
+  limit: z.coerce.number().int().positive().max(20).optional()
+});
+
+const DecisionCandidateSchema = z
+  .object({
+    venue_id: z.string().uuid()
+  })
+  .strict();
+
+const DecisionFinalizeSchema = z
+  .object({
+    candidate_id: z.string().uuid(),
+    final_meetup_at: z.string().datetime().nullable().optional(),
+    final_note: z.string().trim().max(140).nullable().optional()
+  })
+  .strict();
+
+const DecisionMessageSchema = z
+  .object({
+    type: z.enum(["text", "emoji"]),
+    text: z.string().trim().min(1).max(140).optional(),
+    emoji: z.enum(["fire", "eyes", "thumbs_up", "thinking", "down"]).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.type === "text" && !value.text) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "Text is required for room text messages."
+      });
+    }
+    if (value.type === "emoji" && !value.emoji) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["emoji"],
+        message: "emoji is required for room emoji messages."
       });
     }
   });
@@ -666,6 +715,22 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     })
   );
 
+  router.get(
+    "/decision-sessions/:id/venue-search",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(DecisionVenueSearchQuerySchema, req.query);
+      res.json(
+        await searchDecisionSessionVenues({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          q: query.q,
+          limit: query.limit
+        })
+      );
+    })
+  );
+
   router.post(
     "/decision-sessions/:id/join",
     requireEligibleMiddleware,
@@ -695,6 +760,91 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
           candidateId: body.candidate_id,
           venueId: body.venue_id,
           vote: body.vote
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/candidates",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionCandidateSchema, req.body);
+      res.status(201).json(
+        await suggestDecisionCandidate({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          venueId: body.venue_id
+        })
+      );
+    })
+  );
+
+  router.delete(
+    "/decision-sessions/:id/candidates/:candidateId",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(
+        await removeDecisionCandidate({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: req.params.candidateId
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/finalize",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionFinalizeSchema, req.body);
+      res.json(
+        await finalizeDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: body.candidate_id,
+          finalMeetupAt: body.final_meetup_at,
+          finalNote: body.final_note
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/messages",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionMessageSchema, req.body);
+      res.status(201).json(
+        await addDecisionSessionMessage({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          type: body.type,
+          text: body.text,
+          emoji: body.emoji
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/messages/:messageId/report",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SocialReportSchema, req.body);
+      res.status(201).json(
+        await reportDecisionSessionMessage({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          messageId: req.params.messageId,
+          reason: body.reason,
+          details: body.details
         })
       );
     })

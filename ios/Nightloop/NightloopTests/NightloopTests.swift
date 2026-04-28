@@ -774,9 +774,16 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.session.status, "active")
         XCTAssertEqual(response.session.code, "ND-ABCD-2345")
         XCTAssertEqual(response.session.memberCounts.joined, 2)
+        XCTAssertEqual(response.session.capabilities?.canVote, true)
+        XCTAssertEqual(response.session.finalPlan?.note, "Meet by the entrance.")
         XCTAssertEqual(response.candidates.first?.venue.name, "Halcyon")
+        XCTAssertEqual(response.candidates.first?.source, "suggested")
+        XCTAssertEqual(response.candidates.first?.suggestedBy?.displayName, "Maya")
+        XCTAssertEqual(response.candidates.first?.canRemove, true)
         XCTAssertEqual(response.candidates.first?.viewerVote, .voteIn)
         XCTAssertEqual(response.candidates.first?.recommendation.expectedPulseBasis?.first, "source-backed hours")
+        XCTAssertEqual(response.messages.first?.text, "Meet by the side door?")
+        XCTAssertEqual(response.messages.last?.emoji, .fire)
         XCTAssertEqual(response.leader?.id, "candidate-1")
     }
 
@@ -896,6 +903,9 @@ final class NightloopTests: XCTestCase {
                 return (response, Self.decisionSessionFixtureData())
             case ("GET", "/api/v1/decision-sessions/session-1"):
                 return (response, Self.decisionSessionFixtureData())
+            case ("GET", "/api/v1/decision-sessions/session-1/venue-search"):
+                XCTAssertEqual(request.url?.query?.contains("q=audio"), true)
+                return (response, Data(#"{"items":[\#(String(data: Self.venueFixtureJSON(), encoding: .utf8)!)]}"#.utf8))
             case ("POST", "/api/v1/decision-sessions/session-1/join"):
                 let body = try XCTUnwrap(Self.bodyData(from: request))
                 let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -907,6 +917,30 @@ final class NightloopTests: XCTestCase {
                 XCTAssertEqual(object["candidate_id"] as? String, "candidate-1")
                 XCTAssertEqual(object["vote"] as? String, "in")
                 return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/candidates"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["venue_id"] as? String, "venue-2")
+                return (response, Self.decisionSessionFixtureData())
+            case ("DELETE", "/api/v1/decision-sessions/session-1/candidates/candidate-2"):
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/finalize"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["candidate_id"] as? String, "candidate-1")
+                XCTAssertEqual(object["final_note"] as? String, "Meet by the entrance.")
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/messages"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["type"] as? String, "text")
+                XCTAssertEqual(object["text"] as? String, "Meet by the side door?")
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/messages/message-1/report"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["reason"] as? String, "spam")
+                return (response, Data(#"{"report_id":"report-1"}"#.utf8))
             case ("POST", "/api/v1/decision-sessions/session-1/revoke-code"),
                  ("POST", "/api/v1/decision-sessions/session-1/end"):
                 return (response, Self.decisionSessionFixtureData())
@@ -930,12 +964,29 @@ final class NightloopTests: XCTestCase {
             bearerToken: "test-token"
         )
         _ = try await client.decisionSession(id: "session-1", bearerToken: "test-token")
+        _ = try await client.searchDecisionVenues(sessionID: "session-1", query: "audio", bearerToken: "test-token")
         _ = try await client.joinDecisionSession(id: "session-1", code: "ND-ABCD-2345", bearerToken: "test-token")
         _ = try await client.voteDecisionSession(id: "session-1", candidateID: "candidate-1", vote: .voteIn, bearerToken: "test-token")
+        _ = try await client.suggestDecisionCandidate(sessionID: "session-1", venueID: "venue-2", bearerToken: "test-token")
+        _ = try await client.removeDecisionCandidate(sessionID: "session-1", candidateID: "candidate-2", bearerToken: "test-token")
+        _ = try await client.finalizeDecisionSession(
+            id: "session-1",
+            candidateID: "candidate-1",
+            meetupAt: "2026-04-29T06:00:00Z",
+            note: "Meet by the entrance.",
+            bearerToken: "test-token"
+        )
+        _ = try await client.addDecisionMessage(
+            sessionID: "session-1",
+            type: .text,
+            text: "Meet by the side door?",
+            bearerToken: "test-token"
+        )
+        _ = try await client.reportDecisionMessage(sessionID: "session-1", messageID: "message-1", reason: "spam", bearerToken: "test-token")
         _ = try await client.revokeDecisionSessionCode(id: "session-1", bearerToken: "test-token")
         _ = try await client.endDecisionSession(id: "session-1", bearerToken: "test-token")
 
-        XCTAssertEqual(seen.count, 7)
+        XCTAssertEqual(seen.count, 13)
     }
 
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {
@@ -1216,22 +1267,76 @@ final class NightloopTests: XCTestCase {
             "id": "session-1",
             "status": "active",
             "market": { "id": "market-1", "slug": "san-francisco", "short_label": "SF" },
-            "filters": { "pulse": "active" },
-            "expires_at": "2026-04-29T11:00:00Z",
-            "ended_at": null,
-            "code_hint": "2345",
-            "code_revoked_at": null,
-            "code": "ND-ABCD-2345",
-            "member_counts": { "joined": 2, "invited": 1 },
-            "viewer_role": "creator",
-            "viewer_status": "joined",
-            "created_at": "2026-04-28T00:00:00Z",
-            "updated_at": "2026-04-28T00:05:00Z"
-          },
+              "filters": { "pulse": "active" },
+              "final_plan": {
+                "candidate_id": "candidate-1",
+                "venue_id": "venue-1",
+                "finalized_at": "2026-04-28T02:00:00Z",
+                "meetup_at": "2026-04-29T06:00:00Z",
+                "note": "Meet by the entrance.",
+                "locked_by": {
+                  "id": "user-1",
+                  "display_name": "Alex",
+                  "username": "alex",
+                  "avatar_kind": "initials"
+                },
+                "venue": \(String(data: venueFixtureJSON(), encoding: .utf8)!)
+              },
+              "expires_at": "2026-04-29T11:00:00Z",
+              "ended_at": null,
+              "code_hint": "2345",
+              "code_revoked_at": null,
+              "code": "ND-ABCD-2345",
+              "member_counts": { "joined": 2, "invited": 1 },
+              "viewer_role": "creator",
+              "viewer_status": "joined",
+              "capabilities": {
+                "can_vote": true,
+                "can_suggest_candidates": true,
+                "can_message": true,
+                "can_finalize": true
+              },
+              "created_at": "2026-04-28T00:00:00Z",
+              "updated_at": "2026-04-28T00:05:00Z"
+            },
           "candidates": [
             \(candidate)
           ],
-          "leader": \(candidate)
+          "leader": \(candidate),
+          "messages": [
+            {
+              "id": "message-1",
+              "session_id": "session-1",
+              "type": "text",
+              "text": "Meet by the side door?",
+              "emoji": null,
+              "actor": {
+                "id": "user-2",
+                "display_name": "Maya",
+                "username": "maya",
+                "avatar_kind": "initials"
+              },
+              "expires_at": "2026-04-29T11:00:00Z",
+              "created_at": "2026-04-28T01:00:00Z",
+              "updated_at": "2026-04-28T01:00:00Z"
+            },
+            {
+              "id": "message-2",
+              "session_id": "session-1",
+              "type": "emoji",
+              "text": null,
+              "emoji": "fire",
+              "actor": {
+                "id": "user-1",
+                "display_name": "Alex",
+                "username": "alex",
+                "avatar_kind": "initials"
+              },
+              "expires_at": "2026-04-29T11:00:00Z",
+              "created_at": "2026-04-28T01:01:00Z",
+              "updated_at": "2026-04-28T01:01:00Z"
+            }
+          ]
         }
         """.utf8)
     }
@@ -1243,6 +1348,15 @@ final class NightloopTests: XCTestCase {
           "venue_id": "venue-1",
           "original_rank": 1,
           "base_score": 88.4,
+          "source": "suggested",
+          "suggested_by": {
+            "id": "user-2",
+            "display_name": "Maya",
+            "username": "maya",
+            "avatar_kind": "initials"
+          },
+          "suggested_at": "2026-04-28T00:30:00Z",
+          "can_remove": true,
           "venue": \(String(data: venueFixtureJSON(), encoding: .utf8)!),
           "recommendation": {
             "rank": 1,

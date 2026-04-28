@@ -87,6 +87,11 @@ export type Phase6SocialSmokeSnapshot = {
   decision: {
     alex_visible_accepted_friend_count: number;
     approved_candidate_count: number;
+    active_open_room_count: number;
+    finalized_room_count: number;
+    suggested_candidate_count: number;
+    room_message_count: number;
+    finalized_room_frozen_count: number;
   };
 };
 
@@ -107,7 +112,12 @@ export type Phase6SocialSmokeFailure = {
     | "MISSING_ATTENDANCE_INTENT"
     | "RAW_COORDINATES_EXPOSED"
     | "INSUFFICIENT_DECISION_FRIENDS"
-    | "INSUFFICIENT_DECISION_CANDIDATES";
+    | "INSUFFICIENT_DECISION_CANDIDATES"
+    | "MISSING_OPEN_DECISION_ROOM"
+    | "MISSING_FINALIZED_DECISION_ROOM"
+    | "MISSING_SUGGESTED_CANDIDATE"
+    | "MISSING_ROOM_MESSAGE"
+    | "FINALIZED_ROOM_NOT_FROZEN";
   message: string;
 };
 
@@ -264,6 +274,36 @@ export function validatePhase6SocialSmokeSnapshot(
     addFailure(failures, {
       code: "INSUFFICIENT_DECISION_CANDIDATES",
       message: "Decision rooms need at least 12 approved candidate venues."
+    });
+  }
+  if (snapshot.decision.active_open_room_count < 1) {
+    addFailure(failures, {
+      code: "MISSING_OPEN_DECISION_ROOM",
+      message: "Expected one active unfinalized smoke decision room."
+    });
+  }
+  if (snapshot.decision.finalized_room_count < 1) {
+    addFailure(failures, {
+      code: "MISSING_FINALIZED_DECISION_ROOM",
+      message: "Expected one finalized smoke decision room."
+    });
+  }
+  if (snapshot.decision.suggested_candidate_count < 1) {
+    addFailure(failures, {
+      code: "MISSING_SUGGESTED_CANDIDATE",
+      message: "Expected one suggested candidate in smoke decision rooms."
+    });
+  }
+  if (snapshot.decision.room_message_count < 2) {
+    addFailure(failures, {
+      code: "MISSING_ROOM_MESSAGE",
+      message: "Expected room messages in smoke decision rooms."
+    });
+  }
+  if (snapshot.decision.finalized_room_frozen_count < 1) {
+    addFailure(failures, {
+      code: "FINALIZED_ROOM_NOT_FROZEN",
+      message: "Expected finalized smoke room to expose frozen decision mechanics."
     });
   }
 
@@ -474,6 +514,58 @@ export async function collectPhase6SocialSmokeSnapshot(
     [market.id]
   );
 
+  const roomResult = seedIds.length
+    ? await client.query<{
+        active_open_room_count: string | number;
+        finalized_room_count: string | number;
+        suggested_candidate_count: string | number;
+        room_message_count: string | number;
+        finalized_room_frozen_count: string | number;
+      }>(
+        `
+          SELECT
+            COUNT(DISTINCT ds.id) FILTER (
+              WHERE ds.status = 'active'
+                AND ds.finalized_at IS NULL
+                AND ds.metadata->>'seed' = $1
+            ) AS active_open_room_count,
+            COUNT(DISTINCT ds.id) FILTER (
+              WHERE ds.status = 'active'
+                AND ds.finalized_at IS NOT NULL
+                AND ds.metadata->>'seed' = $1
+            ) AS finalized_room_count,
+            COUNT(DISTINCT dsc.id) FILTER (
+              WHERE dsc.source = 'suggested'
+            ) AS suggested_candidate_count,
+            COUNT(DISTINCT dsm.id) AS room_message_count,
+            COUNT(DISTINCT ds.id) FILTER (
+              WHERE ds.finalized_at IS NOT NULL
+                AND ds.final_candidate_id IS NOT NULL
+                AND ds.final_venue_id IS NOT NULL
+            ) AS finalized_room_frozen_count
+          FROM decision_sessions ds
+          LEFT JOIN decision_session_candidates dsc ON dsc.session_id = ds.id
+          LEFT JOIN decision_session_messages dsm ON dsm.session_id = ds.id AND dsm.expires_at > NOW()
+          WHERE ds.metadata->>'seed' = $1
+            AND ds.creator_user_id = ANY($2::uuid[])
+            AND ds.expires_at > NOW()
+        `,
+        [PHASE6_SOCIAL_SMOKE_SEED_TAG, seedIds]
+      )
+    : {
+        rows: [
+          {
+            active_open_room_count: 0,
+            finalized_room_count: 0,
+            suggested_candidate_count: 0,
+            room_message_count: 0,
+            finalized_room_frozen_count: 0
+          }
+        ],
+        rowCount: 1
+      };
+  const roomCounts = roomResult.rows[0];
+
   return {
     generated_at: new Date().toISOString(),
     market,
@@ -491,7 +583,12 @@ export async function collectPhase6SocialSmokeSnapshot(
     },
     decision: {
       alex_visible_accepted_friend_count: countValue(visibleFriendResult.rows[0]?.count),
-      approved_candidate_count: countValue(candidateResult.rows[0]?.count)
+      approved_candidate_count: countValue(candidateResult.rows[0]?.count),
+      active_open_room_count: countValue(roomCounts?.active_open_room_count),
+      finalized_room_count: countValue(roomCounts?.finalized_room_count),
+      suggested_candidate_count: countValue(roomCounts?.suggested_candidate_count),
+      room_message_count: countValue(roomCounts?.room_message_count),
+      finalized_room_frozen_count: countValue(roomCounts?.finalized_room_frozen_count)
     }
   };
 }

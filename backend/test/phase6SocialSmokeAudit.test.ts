@@ -35,7 +35,12 @@ function completeSnapshot(overrides: Partial<Phase6SocialSmokeSnapshot> = {}): P
     },
     decision: {
       alex_visible_accepted_friend_count: 2,
-      approved_candidate_count: 12
+      approved_candidate_count: 12,
+      active_open_room_count: 1,
+      finalized_room_count: 1,
+      suggested_candidate_count: 1,
+      room_message_count: 2,
+      finalized_room_frozen_count: 1
     },
     ...overrides
   };
@@ -98,14 +103,27 @@ describe("Phase 6 social smoke audit", () => {
       completeSnapshot({
         decision: {
           alex_visible_accepted_friend_count: 1,
-          approved_candidate_count: 8
+          approved_candidate_count: 8,
+          active_open_room_count: 0,
+          finalized_room_count: 0,
+          suggested_candidate_count: 0,
+          room_message_count: 0,
+          finalized_room_frozen_count: 0
         }
       })
     );
 
     expect(result.ok).toBe(false);
     expect(result.failures.map((failure) => failure.code)).toEqual(
-      expect.arrayContaining(["INSUFFICIENT_DECISION_FRIENDS", "INSUFFICIENT_DECISION_CANDIDATES"])
+      expect.arrayContaining([
+        "INSUFFICIENT_DECISION_FRIENDS",
+        "INSUFFICIENT_DECISION_CANDIDATES",
+        "MISSING_OPEN_DECISION_ROOM",
+        "MISSING_FINALIZED_DECISION_ROOM",
+        "MISSING_SUGGESTED_CANDIDATE",
+        "MISSING_ROOM_MESSAGE",
+        "FINALIZED_ROOM_NOT_FROZEN"
+      ])
     );
   });
 });

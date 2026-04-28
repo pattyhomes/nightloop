@@ -249,6 +249,22 @@ struct NightloopAPIClient {
         try await send(path: "decision-sessions/\(id)", bearerToken: bearerToken)
     }
 
+    func searchDecisionVenues(
+        sessionID: String,
+        query: String,
+        bearerToken: String,
+        limit: Int = 12
+    ) async throws -> DecisionVenueSearchResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/venue-search",
+            queryItems: [
+                URLQueryItem(name: "q", value: query),
+                URLQueryItem(name: "limit", value: "\(limit)")
+            ],
+            bearerToken: bearerToken
+        )
+    }
+
     func joinDecisionSession(id: String, code: String?, bearerToken: String) async throws -> DecisionSessionResponse {
         try await send(
             path: "decision-sessions/\(id)/join",
@@ -269,6 +285,67 @@ struct NightloopAPIClient {
             method: "POST",
             bearerToken: bearerToken,
             body: DecisionVoteBody(candidateID: candidateID, venueID: nil, vote: vote)
+        )
+    }
+
+    func suggestDecisionCandidate(sessionID: String, venueID: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/candidates",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionCandidateBody(venueID: venueID)
+        )
+    }
+
+    func removeDecisionCandidate(sessionID: String, candidateID: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/candidates/\(candidateID)",
+            method: "DELETE",
+            bearerToken: bearerToken
+        )
+    }
+
+    func finalizeDecisionSession(
+        id: String,
+        candidateID: String,
+        meetupAt: String?,
+        note: String?,
+        bearerToken: String
+    ) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(id)/finalize",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionFinalizeBody(candidateID: candidateID, finalMeetupAt: meetupAt, finalNote: note)
+        )
+    }
+
+    func addDecisionMessage(
+        sessionID: String,
+        type: DecisionMessageType,
+        text: String? = nil,
+        emoji: DecisionEmoji? = nil,
+        bearerToken: String
+    ) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/messages",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionMessageBody(type: type, text: text, emoji: emoji)
+        )
+    }
+
+    func reportDecisionMessage(
+        sessionID: String,
+        messageID: String,
+        reason: String,
+        bearerToken: String
+    ) async throws -> SocialReportResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/messages/\(messageID)/report",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: SocialReportBody(reason: reason)
         )
     }
 
@@ -540,6 +617,32 @@ private struct DecisionVoteBody: Encodable {
         case venueID = "venue_id"
         case vote
     }
+}
+
+private struct DecisionCandidateBody: Encodable {
+    let venueID: String
+
+    enum CodingKeys: String, CodingKey {
+        case venueID = "venue_id"
+    }
+}
+
+private struct DecisionFinalizeBody: Encodable {
+    let candidateID: String
+    let finalMeetupAt: String?
+    let finalNote: String?
+
+    enum CodingKeys: String, CodingKey {
+        case candidateID = "candidate_id"
+        case finalMeetupAt = "final_meetup_at"
+        case finalNote = "final_note"
+    }
+}
+
+private struct DecisionMessageBody: Encodable {
+    let type: DecisionMessageType
+    let text: String?
+    let emoji: DecisionEmoji?
 }
 
 #if DEBUG

@@ -469,6 +469,32 @@ export async function deleteAccount(
     );
     await client.query(
       `
+        UPDATE decision_session_messages
+        SET actor_user_id = NULL,
+            updated_at = NOW()
+        WHERE actor_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        UPDATE decision_session_candidates
+        SET suggested_by_user_id = NULL
+        WHERE suggested_by_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        UPDATE decision_sessions
+        SET final_locked_by_user_id = NULL,
+            updated_at = NOW()
+        WHERE final_locked_by_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
         DELETE FROM decision_sessions
         WHERE creator_user_id = $1::uuid
       `,

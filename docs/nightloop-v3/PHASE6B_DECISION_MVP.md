@@ -12,6 +12,7 @@ Committed checkpoints:
 - `315e668 feat: add phase 6b decision backend`
 - `207a8a2 feat: build phase 6b decision ios mvp`
 - Phase 6B.1 hardening checkpoint: see `PHASE6B1_SOCIAL_DECISION_HARDENING.md`.
+- Phase 6C group pick room checkpoint: see `PHASE6C_GROUP_PICK_ROOMS.md`.
 
 Implemented:
 
@@ -100,11 +101,9 @@ The latest iOS run passed 41 tests with 0 failures.
 
 ## Next Recommended Slice
 
-Do a simulator walkthrough with seeded social users and one real dev account,
-then patch any UI friction. After that, Phase 6C can be planned around either:
-
-- realtime/push for social and decision updates, or
-- richer group planning tools such as notes, time windows, and shortlists.
+Phase 6C has since moved forward with richer private group planning tools.
+Next, do a simulator walkthrough with seeded social users and one real dev
+account, then patch any UI friction before choosing realtime/push.
 
 Use Plan Mode, xhigh reasoning, before adding realtime, push, contacts, public
 rooms, or recommendation influence.
