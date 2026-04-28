@@ -1,12 +1,18 @@
 import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, dbTransaction, getDBClient, type DBClient } from "../lib/db";
+import {
+  PHASE6_SOCIAL_SMOKE_SEED_TAG,
+  PHASE6_SOCIAL_SMOKE_USERS,
+  collectPhase6SocialSmokeSnapshot,
+  validatePhase6SocialSmokeSnapshot
+} from "../services/v1/socialSmokeAudit";
 
 type SeedUser = {
   authUserId: string;
   displayName: string;
   username: string;
-  preferences: Record<string, string[]>;
+  preferences: Record<string, readonly string[]>;
 };
 
 type SeededUser = SeedUser & {
@@ -18,53 +24,7 @@ type Args = {
   reset: boolean;
 };
 
-const SEED_TAG = "phase6a1_social_smoke";
-const USERS: SeedUser[] = [
-  {
-    authUserId: "00000000-0000-4000-8000-000000006a01",
-    displayName: "Dev Social Alex",
-    username: "dev_social_alex",
-    preferences: {
-      vibe: ["dance", "cocktails", "live"],
-      music: ["house", "hiphop", "jazz"],
-      crowd: ["locals", "twenties", "packed"],
-      neighborhoods: ["soma", "mission", "north-beach"]
-    }
-  },
-  {
-    authUserId: "00000000-0000-4000-8000-000000006a02",
-    displayName: "Dev Social Maya",
-    username: "dev_social_maya",
-    preferences: {
-      vibe: ["dance", "queer", "wild"],
-      music: ["house", "techno", "disco"],
-      crowd: ["friends", "packed", "late-night"],
-      neighborhoods: ["soma", "castro", "mission"]
-    }
-  },
-  {
-    authUserId: "00000000-0000-4000-8000-000000006a03",
-    displayName: "Dev Social Jules",
-    username: "dev_social_jules",
-    preferences: {
-      vibe: ["live", "conversation", "cocktails"],
-      music: ["jazz", "indie", "soul"],
-      crowd: ["locals", "date-night", "chill"],
-      neighborhoods: ["north-beach", "mission", "hayes-valley"]
-    }
-  },
-  {
-    authUserId: "00000000-0000-4000-8000-000000006a04",
-    displayName: "Dev Social Blocked",
-    username: "dev_social_blocked",
-    preferences: {
-      vibe: ["dance", "dive", "karaoke"],
-      music: ["hiphop", "latin", "pop"],
-      crowd: ["twenties", "packed", "tourists"],
-      neighborhoods: ["soma", "mission", "marina"]
-    }
-  }
-];
+const USERS: readonly SeedUser[] = PHASE6_SOCIAL_SMOKE_USERS;
 
 function parseArgs(argv: string[]): Args {
   return {
@@ -142,7 +102,7 @@ async function resetSeed(client: DBClient): Promise<void> {
       WHERE payload->>'seed' = $1
          OR user_id IN (SELECT id FROM users WHERE auth_user_id = any($2::uuid[]))
     `,
-    [SEED_TAG, authIds]
+    [PHASE6_SOCIAL_SMOKE_SEED_TAG, authIds]
   );
   await client.query("DELETE FROM users WHERE auth_user_id = any($1::uuid[])", [authIds]);
 }
@@ -267,7 +227,7 @@ async function seedSocialRows(
       VALUES ($1::uuid, 'crowd_level', 0.82, 0.92, NOW(), 'user_signal', $2::jsonb, $3::uuid, 'packed', 3, 1, $4::timestamptz)
       RETURNING id
     `,
-    [venueId, JSON.stringify({ seed: SEED_TAG, sanitized: true }), maya.id, expiresAt]
+    [venueId, JSON.stringify({ seed: PHASE6_SOCIAL_SMOKE_SEED_TAG, sanitized: true }), maya.id, expiresAt]
   );
   const signalActivity = await client.query<{ id: string }>(
     `
@@ -285,7 +245,7 @@ async function seedSocialRows(
       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'signal', 'friends', 'packed', $5::timestamptz, $6::jsonb)
       RETURNING id
     `,
-    [maya.id, venueId, marketId, signal.rows[0]?.id, expiresAt, JSON.stringify({ seed: SEED_TAG })]
+    [maya.id, venueId, marketId, signal.rows[0]?.id, expiresAt, JSON.stringify({ seed: PHASE6_SOCIAL_SMOKE_SEED_TAG })]
   );
   const comingActivity = await client.query<{ id: string }>(
     `
@@ -301,7 +261,7 @@ async function seedSocialRows(
       VALUES ($1::uuid, $2::uuid, $3::uuid, 'coming', 'friends', $4::timestamptz, $5::jsonb)
       RETURNING id
     `,
-    [alex.id, venueId, marketId, expiresAt, JSON.stringify({ seed: SEED_TAG })]
+    [alex.id, venueId, marketId, expiresAt, JSON.stringify({ seed: PHASE6_SOCIAL_SMOKE_SEED_TAG })]
   );
   await client.query(
     `
@@ -328,7 +288,7 @@ async function seedSocialRows(
       )
       VALUES ($1::uuid, $2::uuid, $3::uuid, 'comment', 'friends', 'I am leaning yes.', $4::timestamptz, $5::jsonb)
     `,
-    [jules.id, maya.id, signalActivity.rows[0]?.id, expiresAt, JSON.stringify({ seed: SEED_TAG })]
+    [jules.id, maya.id, signalActivity.rows[0]?.id, expiresAt, JSON.stringify({ seed: PHASE6_SOCIAL_SMOKE_SEED_TAG })]
   );
 }
 
@@ -341,6 +301,7 @@ async function main(): Promise<void> {
     market: string;
     venue: string;
     users: Array<{ id: string; username: string; auth_user_id: string }>;
+    audit: ReturnType<typeof validatePhase6SocialSmokeSnapshot>;
   } | null = null;
 
   await dbTransaction(async (client) => {
@@ -355,6 +316,12 @@ async function main(): Promise<void> {
       users.push(await upsertUser(client, user, market.id));
     }
     await seedSocialRows(client, users, market.id, venue.id, expiresAt);
+    const audit = validatePhase6SocialSmokeSnapshot(
+      await collectPhase6SocialSmokeSnapshot(client, market.slug)
+    );
+    if (!audit.ok) {
+      throw new Error(`Phase 6 social smoke audit failed: ${audit.failures.map((failure) => failure.code).join(", ")}`);
+    }
     summary = {
       market: market.slug,
       venue: venue.name,
@@ -362,11 +329,13 @@ async function main(): Promise<void> {
         id: user.id,
         username: user.username,
         auth_user_id: user.authUserId
-      }))
+      })),
+      audit
     };
   });
 
   console.log("Phase 6 social smoke seed ready.");
+  console.log("Phase 6 social smoke audit passed.");
   console.log(JSON.stringify(summary, null, 2));
   console.log("Note: these are database dev profiles, not Supabase Auth sign-in credentials.");
 }

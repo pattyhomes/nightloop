@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DecisionShellView: View {
     let apiClient: NightloopAPIClient
@@ -234,6 +235,11 @@ struct DecisionShellView: View {
                     .disabled(joinSessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isMutating)
                     .accessibilityLabel("Join decision session")
                 }
+
+                Text("Use a room ID plus code, or tap an invited room from your list.")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -354,17 +360,32 @@ struct DecisionShellView: View {
                     Text("Expires \(relativeTime(session.expiresAt))")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(NightloopTheme.inkMuted)
+                    Text("Room ID \(shortSessionID(session.id))")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
                 }
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 5) {
+                VStack(alignment: .trailing, spacing: 8) {
                     Text("\(session.memberCounts.joined)")
                         .font(.title3.weight(.black))
                         .foregroundStyle(NightloopTheme.ink)
                     Text("joined")
                         .font(.caption2.weight(.black))
                         .foregroundStyle(NightloopTheme.inkMuted)
+                    HStack(spacing: 6) {
+                        if let code = session.code, session.codeRevokedAt == nil {
+                            ClipboardMiniButton(systemName: "qrcode", label: "Copy code") {
+                                UIPasteboard.general.string = code
+                                showToast("Code copied")
+                            }
+                        }
+                        ClipboardMiniButton(systemName: "number", label: "Copy room ID") {
+                            UIPasteboard.general.string = session.id
+                            showToast("Room ID copied")
+                        }
+                    }
                 }
             }
         }
@@ -785,6 +806,29 @@ private struct DecisionCountPill: View {
             .background(isSelected ? NightloopTheme.purple : Color.white.opacity(0.055))
             .clipShape(Capsule())
     }
+}
+
+private struct ClipboardMiniButton: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.caption2.weight(.black))
+                .frame(width: 28, height: 26)
+        }
+        .buttonStyle(.bordered)
+        .tint(NightloopTheme.inkMuted)
+        .accessibilityLabel(label)
+    }
+}
+
+private func shortSessionID(_ id: String) -> String {
+    let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count > 12 else { return trimmed }
+    return "\(trimmed.prefix(8))..."
 }
 
 private func relativeTime(_ value: String) -> String {

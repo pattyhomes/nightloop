@@ -11,10 +11,12 @@ Committed checkpoints:
 
 - `315e668 feat: add phase 6b decision backend`
 - `207a8a2 feat: build phase 6b decision ios mvp`
+- Phase 6B.1 hardening checkpoint: see `PHASE6B1_SOCIAL_DECISION_HARDENING.md`.
 
 Implemented:
 
 - Dev social smoke seed: `npm --prefix backend run phase6:social-smoke -- --market=san-francisco --reset`.
+- Dev social smoke audit: `npm --prefix backend run phase6:social-smoke:audit -- --market=san-francisco`.
 - Backend decision sessions, members, fixed candidates, votes, code join,
   code revoke, creator end, strict block checks, and account-deletion cleanup.
 - Session candidate slate snapshots exactly 12 recommendations at creation.

@@ -255,6 +255,18 @@ struct FriendsShellView: View {
 
                     if let invite {
                         Button {
+                            UIPasteboard.general.string = invite.code
+                            showToast("Code copied")
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption.weight(.black))
+                                .frame(width: 38, height: 30)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(NightloopTheme.purple)
+                        .accessibilityLabel("Copy invite code")
+
+                        Button {
                             revokeInvite(invite)
                         } label: {
                             Image(systemName: "xmark")
