@@ -30,7 +30,7 @@ Known caveats:
 - Recommendations still need real active-night calibration once live usage
   and signal density exist.
 
-## Phase 6A Recommendation
+## Phase 6 Status
 
 Phase 6A has started and the first broad beta foundation is implemented:
 
@@ -40,18 +40,26 @@ Phase 6A has started and the first broad beta foundation is implemented:
   tab beta surface;
 - docs/API contract checkpoint in `PHASE6A_SOCIAL_BETA.md`.
 
+Phase 6A.1 and the Phase 6B decision MVP are also implemented:
+
+- dev social smoke seed for 3-4 eligible local profiles;
+- backend private decision sessions, fixed 12-venue candidate slates, code
+  join, aggregate votes, group fit, creator end, code revoke, and deletion
+  cleanup;
+- iOS Decision tab create/join/list/vote/detail/"I'm Coming" flows;
+- docs/API checkpoint in `PHASE6B_DECISION_MVP.md`.
+
 Do not add live social presence, friend-influenced recommendations, contacts
-matching, universal links, or push notification behavior until the Phase 6A
-foundation has been exercised with seeded/dev users and reviewed.
+matching, universal links, public rooms, realtime, or push notification behavior
+without a fresh privacy/product plan.
 
-Recommended mode for Phase 6A: Codex Plan Mode, xhigh reasoning while privacy
-and abuse-prevention decisions are being made; high reasoning is fine for
-implementation after the plan is approved.
+Recommended mode for the next Phase 6 boundary: Codex Plan Mode, xhigh
+reasoning while privacy and abuse-prevention decisions are being made; high
+reasoning is fine for implementation after the plan is approved.
 
-Next recommended slice: a short Phase 6A hardening pass with simulator/dev-user
-exercise, account-deletion verification against real social rows, and the full
-verification set below. After that, Phase 6B can begin with group planning and
-decision sessions.
+Next recommended slice: simulator walkthrough with the seeded social users and
+one real dev account, then patch any UI friction. After that, choose between
+Phase 6C realtime/push or richer group planning tools.
 
 ## Verification
 

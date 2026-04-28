@@ -211,26 +211,68 @@ Attendance intents do not count as live signals or liveness evidence.
 
 ### decision_sessions
 
-Group voting session.
+Private friend-scoped group voting session.
 
 Important columns:
 
-- `id`
-- `creator_user_id`
-- `market_id`
-- `status`
-- `expires_at`
+- `id uuid primary key`
+- `creator_user_id uuid references users(id)`
+- `market_id uuid references markets(id)`
+- `status text`: `active`, `ended`, or `expired`
+- `token_hash text unique`
+- `code_hint text`
+- `code_revoked_at timestamptz`
+- `filters jsonb`
+- `metadata jsonb`
+- `expires_at timestamptz`
+- `ended_at timestamptz`
 - `created_at`
 
-Default expiry is 12 hours.
+Plaintext session codes are not stored. Expiry is the market nightlife-day end.
 
 ### decision_session_members
 
 Users invited/joined to a session.
 
+Important columns:
+
+- `session_id uuid references decision_sessions(id)`
+- `user_id uuid references users(id)`
+- `role text`: `creator` or `member`
+- `status text`: `invited` or `joined`
+- `source text`: `creator`, `invited`, or `code`
+- `joined_at timestamptz`
+
+Only joined members affect group fit. Invited-but-not-joined members do not.
+
+### decision_session_candidates
+
+Fixed candidate slate for a decision session.
+
+Important columns:
+
+- `session_id uuid references decision_sessions(id)`
+- `venue_id uuid references venues(id)`
+- `original_rank integer`
+- `base_score numeric`
+- `snapshot jsonb`
+
+Snapshots store safe venue/recommendation payloads only. Do not store raw
+provider payloads or raw provider records in candidate snapshots.
+
 ### decision_votes
 
 User vote per session and venue.
+
+Important columns:
+
+- `session_id uuid references decision_sessions(id)`
+- `candidate_id uuid references decision_session_candidates(id)`
+- `user_id uuid references users(id)`
+- `vote text`: `in` or `skip`
+
+Votes are exposed to clients only as aggregate counts plus the viewer's own
+vote. Do not expose named voter lists in Phase 6B.
 
 ### device_push_tokens
 

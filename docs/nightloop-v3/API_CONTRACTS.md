@@ -496,15 +496,102 @@ Request:
 
 ## Decision Sessions
 
+Phase 6B implements private friend-scoped group decision rooms. It does not
+include realtime, push, contacts, universal links, public rooms, named vote
+display, live social presence, or recommendation influence.
+
+Privacy rules:
+
+- Creator-selected accepted friends can join without a code.
+- A session code works only for accepted friends of current joined members.
+- Blocks prevent visibility, joining, and voting.
+- Ghost mode does not hide explicit session participation.
+- Votes expose aggregate counts and the viewer's own vote only.
+- Candidate payloads reuse safe venue/recommendation formatting and must not
+  expose raw provider records.
+
+### GET /decision-sessions
+
+Returns rooms visible to the viewer.
+
 ### POST /decision-sessions
 
-Creates a night-of group voting session.
+Creates a night-of group voting session. The candidate slate is fixed to 12
+venues selected from recommendations at creation time.
 
-Default TTL: 12 hours.
+Request:
+
+```json
+{
+  "market_id": "market-sf",
+  "invited_user_ids": ["user-maya"],
+  "filters": {
+    "neighborhood": "SoMa",
+    "category": "club",
+    "pulse": "active"
+  }
+}
+```
+
+Session expiry is the market nightlife-day end, around 4am local time.
+
+Response:
+
+```json
+{
+  "session": {
+    "id": "session-1",
+    "status": "active",
+    "market": {
+      "id": "market-sf",
+      "slug": "san-francisco",
+      "short_label": "SF"
+    },
+    "code": "ND-ABCD-2345",
+    "code_hint": "2345",
+    "code_revoked_at": null,
+    "member_counts": {
+      "joined": 1,
+      "invited": 1
+    },
+    "viewer_role": "creator",
+    "viewer_status": "joined",
+    "expires_at": "2026-04-29T11:00:00Z"
+  },
+  "candidates": [
+    {
+      "id": "candidate-1",
+      "venue_id": "venue-halcyon",
+      "original_rank": 1,
+      "venue": {},
+      "recommendation": {},
+      "in_count": 0,
+      "skip_count": 0,
+      "viewer_vote": null,
+      "group_fit_score": 72.5,
+      "group_fit_member_count": 1,
+      "group_fit_reason": "Group fit is based on the creator's saved picks."
+    }
+  ],
+  "leader": null
+}
+```
 
 ### GET /decision-sessions/:id
 
-Returns session state, candidates, members, votes, and current counters.
+Returns session state, fixed candidates, aggregate votes, viewer vote, group fit
+reason, and the soft leader. It does not expose named votes.
+
+### POST /decision-sessions/:id/join
+
+Invited members can join with an empty body. Friends of joined members can join
+with the session code.
+
+```json
+{
+  "code": "ND-ABCD-2345"
+}
+```
 
 ### POST /decision-sessions/:id/votes
 
@@ -512,12 +599,21 @@ Request:
 
 ```json
 {
-  "venue_id": "venue-halcyon",
+  "candidate_id": "candidate-1",
   "vote": "in"
 }
 ```
 
-Allowed `vote`: `skip`, `in`.
+Allowed `vote`: `skip`, `in`. `venue_id` is also accepted for clients that do
+not have the candidate id.
+
+### POST /decision-sessions/:id/revoke-code
+
+Creator-only. Existing joined members remain in the room.
+
+### POST /decision-sessions/:id/end
+
+Creator-only. Ended sessions reject joins and votes.
 
 ## Realtime
 

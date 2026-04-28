@@ -10,6 +10,8 @@ Committed checkpoints:
 
 - `c59b872 feat: add phase 6a social backend`
 - `316b9b4 feat: build phase 6a friends ios beta`
+- `315e668 feat: add phase 6b decision backend`
+- `207a8a2 feat: build phase 6b decision ios mvp`
 
 Implemented:
 
@@ -109,14 +111,15 @@ The latest iOS run passed 39 tests with 0 failures.
 Before calling Phase 6A fully complete, run the full verification set from
 `PHASE6_READINESS.md`.
 
-## Next Recommended Slice
+## Follow-Up
 
-Do a short Phase 6A hardening pass before Phase 6B:
+Phase 6A.1 hardening has begun:
 
-- Exercise the social APIs with seeded/dev users in the simulator.
-- Add any missing edge-case tests found from real UI use.
-- Confirm account deletion cleanup against real social rows.
-- Run the full backend/root/iOS verification set.
+- `phase6:social-smoke` seeds dev social rows for local exercise.
+- Account deletion now has backend coverage against real social/decision rows.
+- Phase 6B decision sessions are implemented in
+  `PHASE6B_DECISION_MVP.md`.
 
-After that, Phase 6B can start with group planning/decision sessions, still
-without live presence or recommendation influence.
+Remaining follow-up is hands-on simulator walkthrough and friction patching.
+Still do not add live presence, realtime, push, contacts, public rooms, or
+recommendation influence without a fresh plan.
