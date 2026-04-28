@@ -22,6 +22,8 @@ type VenueInputRow = {
   schedule_status: string | null;
   schedule_source: string | null;
   schedule_confidence: string | null;
+  has_osm_hours_evidence: boolean;
+  has_venue_website_hours: boolean;
   manual_quality_score: string | null;
 };
 
@@ -64,8 +66,8 @@ function sourceConfidence(row: VenueInputRow): number {
   let score = 0.42;
   if (row.source?.startsWith("curated:")) score += 0.14;
   if (metadata.google_place_id || row.schedule_source === "provider:google_places") score += 0.20;
-  if (row.schedule_source === "venue_website") score += 0.16;
-  if (row.schedule_source === "provider:openstreetmap") score += 0.04;
+  if (row.has_venue_website_hours || row.schedule_source === "venue_website") score += 0.16;
+  if (row.has_osm_hours_evidence) score += 0.04;
   if (metadata.datasf_poe_record_id) score += 0.12;
   if (metadata.foursquare_id || row.schedule_source === "provider:foursquare") score += 0.08;
   if (Number(row.provider_count) >= 2) score += 0.10;
@@ -112,8 +114,8 @@ function buildInput(row: VenueInputRow) {
       has_google_place_id: Boolean(row.metadata?.google_place_id),
       has_datasf_evidence: Boolean(row.metadata?.datasf_poe_record_id),
       has_foursquare_id: Boolean(row.metadata?.foursquare_id),
-      has_osm_hours_evidence: row.schedule_source === "provider:openstreetmap",
-      has_venue_website_hours: row.schedule_source === "venue_website"
+      has_osm_hours_evidence: row.has_osm_hours_evidence,
+      has_venue_website_hours: row.has_venue_website_hours || row.schedule_source === "venue_website"
     }
   };
 }
@@ -144,6 +146,21 @@ async function loadRows(marketId: string, limit: number): Promise<VenueInputRow[
         schedule_pack.status AS schedule_status,
         schedule_pack.source AS schedule_source,
         schedule_pack.confidence::text AS schedule_confidence,
+        EXISTS (
+          SELECT 1
+          FROM venue_schedules osm_vs
+          WHERE osm_vs.venue_id = v.id
+            AND osm_vs.source = 'provider:openstreetmap'
+            AND osm_vs.status = 'verified_hours'
+        ) AS has_osm_hours_evidence,
+        EXISTS (
+          SELECT 1
+          FROM venue_schedules website_vs
+          WHERE website_vs.venue_id = v.id
+            AND website_vs.source = 'venue_website'
+            AND website_vs.status = 'verified_hours'
+            AND (website_vs.expires_at IS NULL OR website_vs.expires_at > NOW())
+        ) AS has_venue_website_hours,
         (v.metadata->>'nightloop_quality_score') AS manual_quality_score
       FROM venues v
       LEFT JOIN LATERAL (

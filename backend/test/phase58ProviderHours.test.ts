@@ -118,6 +118,8 @@ describe("Phase 5.8 provider hours normalization", () => {
     expect(FOURSQUARE_PRO_FIELD_MASK).toContain("website");
     expect(FOURSQUARE_PRO_FIELD_MASK).toContain("social_media");
     expect(FOURSQUARE_PRO_FIELD_MASK).toContain("related_places");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("geocodes");
+    expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("verified");
     expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("hours");
     expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("hours_popular");
     expect(FOURSQUARE_PRO_FIELD_MASK).not.toContain("rating");

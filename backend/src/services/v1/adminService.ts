@@ -566,7 +566,6 @@ type FoursquarePlace = {
   social_media?: JsonRecord;
   related_places?: JsonRecord;
   verified?: boolean;
-  geocodes?: JsonRecord;
 };
 
 type FoursquareSearchResponse = {

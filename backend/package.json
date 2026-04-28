@@ -20,6 +20,7 @@
     "audit:sf-trust": "tsx src/scripts/auditSfTrust.ts",
     "hours:google": "tsx src/scripts/syncGoogleHours.ts",
     "hours:foursquare": "tsx src/scripts/syncFoursquareHours.ts",
+    "evidence:foursquare": "tsx src/scripts/syncFoursquareEvidence.ts",
     "hours:osm": "tsx src/scripts/syncOpenStreetMapHours.ts",
     "hours:website": "tsx src/scripts/syncVenueWebsiteHours.ts",
     "events:sync": "tsx src/scripts/syncVenueEvents.ts",

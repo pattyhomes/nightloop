@@ -9,9 +9,7 @@ export const FOURSQUARE_PRO_FIELDS = [
   "website",
   "social_media",
   "categories",
-  "related_places",
-  "verified",
-  "geocodes"
+  "related_places"
 ] as const;
 
 // PREMIUM - requires credits: "hours", "hours_popular", "rating", "popularity", "price", "closed_bucket", "stats".
