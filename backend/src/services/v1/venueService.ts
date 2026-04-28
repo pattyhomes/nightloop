@@ -313,7 +313,8 @@ export async function listVenues(query: VenueQuery) {
       LEFT JOIN LATERAL (
         SELECT
           CASE
-            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            WHEN vs.source = 'provider:openstreetmap' THEN 'unknown'
+            WHEN vs.source IN ('provider:google_places', 'provider:foursquare', 'venue_website') AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
             ELSE vs.status
           END AS status,
           vs.source,
@@ -327,11 +328,12 @@ export async function listVenues(query: VenueQuery) {
         ORDER BY
           CASE
             WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
-            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
-            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
-            WHEN vs.status = 'temporarily_closed' THEN 3
-            WHEN vs.status = 'manual_hold' THEN 4
-            ELSE 5
+            WHEN vs.source = 'venue_website' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 3
+            WHEN vs.status = 'temporarily_closed' THEN 4
+            WHEN vs.status = 'manual_hold' THEN 5
+            ELSE 6
           END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
@@ -474,7 +476,8 @@ export async function getVenue(idOrSlug: string) {
       LEFT JOIN LATERAL (
         SELECT
           CASE
-            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            WHEN vs.source = 'provider:openstreetmap' THEN 'unknown'
+            WHEN vs.source IN ('provider:google_places', 'provider:foursquare', 'venue_website') AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
             ELSE vs.status
           END AS status,
           vs.source,
@@ -488,11 +491,12 @@ export async function getVenue(idOrSlug: string) {
         ORDER BY
           CASE
             WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
-            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
-            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
-            WHEN vs.status = 'temporarily_closed' THEN 3
-            WHEN vs.status = 'manual_hold' THEN 4
-            ELSE 5
+            WHEN vs.source = 'venue_website' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 3
+            WHEN vs.status = 'temporarily_closed' THEN 4
+            WHEN vs.status = 'manual_hold' THEN 5
+            ELSE 6
           END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1

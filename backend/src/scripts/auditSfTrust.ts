@@ -7,6 +7,7 @@ type Args = {
   json: boolean;
   market: string;
   fixNeighborhoods: boolean;
+  fixFixtures: boolean;
   top: number;
 };
 
@@ -15,6 +16,7 @@ function parseArgs(argv: string[]): Args {
     json: argv.includes("--json"),
     market: argv.find((arg) => arg.startsWith("--market="))?.slice("--market=".length) ?? "san-francisco",
     fixNeighborhoods: argv.includes("--fix-neighborhoods"),
+    fixFixtures: argv.includes("--fix-fixtures"),
     top: Number(argv.find((arg) => arg.startsWith("--top="))?.slice("--top=".length) ?? "20")
   };
 }
@@ -49,9 +51,33 @@ async function fixNeighborhoods(marketId: string): Promise<number> {
   return result.rowCount;
 }
 
+async function fixFixtures(marketId: string): Promise<number> {
+  const result = await dbQuery(
+    `
+      UPDATE venues
+      SET is_active = false,
+          admin_status = 'fixture_archived',
+          metadata = COALESCE(metadata, '{}'::jsonb) || '{"fixture_archived_by": "audit:sf-trust", "fixture_archived_reason": "phase58a_fixture_cleanup"}'::jsonb,
+          updated_at = NOW()
+      WHERE market_id = $1::uuid
+        AND is_active = true
+        AND admin_status = 'approved'
+        AND (
+          COALESCE(source, '') = 'phase2-test'
+          OR COALESCE(metadata->>'fixture', 'false') = 'true'
+          OR COALESCE(metadata->>'test_run_id', '') <> ''
+          OR name ILIKE 'Phase 2 %'
+        )
+    `,
+    [marketId]
+  );
+  return result.rowCount;
+}
+
 async function loadAudit(args: Args) {
   const marketId = await getMarketId(args.market);
   const fixedNeighborhoods = args.fixNeighborhoods ? await fixNeighborhoods(marketId) : 0;
+  const fixedFixtures = args.fixFixtures ? await fixFixtures(marketId) : 0;
 
   const coverage = await dbQuery<{
     neighborhood: string | null;
@@ -381,6 +407,38 @@ async function loadAudit(args: Args) {
     [marketId]
   );
 
+  const hoursSourceCoverage = await dbQuery<{
+    source: string;
+    verified: string;
+    unknown: string;
+    fresh: string;
+    expired: string;
+    count: string;
+  }>(
+    `
+      WITH public_venues AS (
+        SELECT v.id
+        FROM venues v
+        WHERE v.market_id = $1::uuid
+          AND v.is_active = true
+          AND v.admin_status = 'approved'
+          ${PUBLIC_VENUE_SQL}
+      )
+      SELECT
+        vs.source,
+        COUNT(*) FILTER (WHERE vs.status = 'verified_hours')::text AS verified,
+        COUNT(*) FILTER (WHERE vs.status = 'unknown')::text AS unknown,
+        COUNT(*) FILTER (WHERE COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) >= NOW() - INTERVAL '30 days')::text AS fresh,
+        COUNT(*) FILTER (WHERE vs.expires_at IS NOT NULL AND vs.expires_at <= NOW())::text AS expired,
+        COUNT(*)::text AS count
+      FROM venue_schedules vs
+      JOIN public_venues pv ON pv.id = vs.venue_id
+      GROUP BY vs.source
+      ORDER BY vs.source ASC
+    `,
+    [marketId]
+  );
+
   const normalizedCoverage = coverage.rows.map((row) => ({
     neighborhood: normalizedNeighborhood(row.neighborhood),
     category: row.category ?? "unknown",
@@ -392,6 +450,7 @@ async function loadAudit(args: Args) {
     generated_at: new Date().toISOString(),
     market_id: marketId,
     fixed_neighborhood_rows: fixedNeighborhoods,
+    fixed_fixture_rows: fixedFixtures,
     coverage: normalizedCoverage,
     unknown_neighborhood_cleanup: unknownNeighborhoods.rows.map((row) => ({
       id: row.id,
@@ -456,6 +515,14 @@ async function loadAudit(args: Args) {
       approved_future_events: Number(eventCoverage.rows[0]?.approved_future_events ?? 0),
       review_future_events: Number(eventCoverage.rows[0]?.review_future_events ?? 0)
     },
+    hours_source_coverage: hoursSourceCoverage.rows.map((row) => ({
+      source: row.source,
+      verified: Number(row.verified),
+      unknown: Number(row.unknown),
+      fresh: Number(row.fresh),
+      expired: Number(row.expired),
+      count: Number(row.count)
+    })),
     signal_integrity: signalIntegrity.rows.map((row) => ({
       ...row,
       live_signals: Number(row.live_signals),
@@ -471,6 +538,9 @@ function printAudit(audit: Awaited<ReturnType<typeof loadAudit>>): void {
   console.log(`Market: ${audit.market_id}`);
   if (audit.fixed_neighborhood_rows > 0) {
     console.log(`Fixed SOMA -> SoMa rows: ${audit.fixed_neighborhood_rows}`);
+  }
+  if (audit.fixed_fixture_rows > 0) {
+    console.log(`Archived fixture rows: ${audit.fixed_fixture_rows}`);
   }
 
   console.log("\nCoverage by neighborhood/type/source");
@@ -499,6 +569,9 @@ function printAudit(audit: Awaited<ReturnType<typeof loadAudit>>): void {
 
   console.log("\nEvent coverage");
   console.table([audit.event_coverage]);
+
+  console.log("\nHours source coverage");
+  console.table(audit.hours_source_coverage);
 
   console.log("\nTop-20 diversity");
   console.log(JSON.stringify(audit.recommendation_top_20_diversity, null, 2));

@@ -449,6 +449,8 @@ describe("Nightloop v1 admin/data ops API", () => {
   it("runs Google Places fixture QA imports without network calls", async () => {
     const admin = await createAdminUser();
     const marketId = await getSfMarketId();
+    await createTempVenue(marketId, "Phase 2 Google Fixture QA One");
+    await createTempVenue(marketId, "Phase 2 Google Fixture QA Two");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
     const created = await request(app)

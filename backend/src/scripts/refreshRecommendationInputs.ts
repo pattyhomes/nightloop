@@ -64,6 +64,8 @@ function sourceConfidence(row: VenueInputRow): number {
   let score = 0.42;
   if (row.source?.startsWith("curated:")) score += 0.14;
   if (metadata.google_place_id || row.schedule_source === "provider:google_places") score += 0.20;
+  if (row.schedule_source === "venue_website") score += 0.16;
+  if (row.schedule_source === "provider:openstreetmap") score += 0.04;
   if (metadata.datasf_poe_record_id) score += 0.12;
   if (metadata.foursquare_id || row.schedule_source === "provider:foursquare") score += 0.08;
   if (Number(row.provider_count) >= 2) score += 0.10;
@@ -109,7 +111,9 @@ function buildInput(row: VenueInputRow) {
       schedule_source: row.schedule_source ?? "missing",
       has_google_place_id: Boolean(row.metadata?.google_place_id),
       has_datasf_evidence: Boolean(row.metadata?.datasf_poe_record_id),
-      has_foursquare_id: Boolean(row.metadata?.foursquare_id)
+      has_foursquare_id: Boolean(row.metadata?.foursquare_id),
+      has_osm_hours_evidence: row.schedule_source === "provider:openstreetmap",
+      has_venue_website_hours: row.schedule_source === "venue_website"
     }
   };
 }
@@ -164,7 +168,8 @@ async function loadRows(marketId: string, limit: number): Promise<VenueInputRow[
       LEFT JOIN LATERAL (
         SELECT
           CASE
-            WHEN vs.source LIKE 'provider:%' AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
+            WHEN vs.source = 'provider:openstreetmap' THEN 'unknown'
+            WHEN vs.source IN ('provider:google_places', 'provider:foursquare', 'venue_website') AND vs.expires_at IS NOT NULL AND vs.expires_at <= NOW() THEN 'unknown'
             ELSE vs.status
           END AS status,
           vs.source,
@@ -174,11 +179,12 @@ async function loadRows(marketId: string, limit: number): Promise<VenueInputRow[
         ORDER BY
           CASE
             WHEN vs.source = 'manual' AND vs.status = 'verified_hours' THEN 0
-            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
-            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
-            WHEN vs.status = 'temporarily_closed' THEN 3
-            WHEN vs.status = 'manual_hold' THEN 4
-            ELSE 5
+            WHEN vs.source = 'venue_website' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 1
+            WHEN vs.source = 'provider:google_places' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 2
+            WHEN vs.source = 'provider:foursquare' AND vs.status = 'verified_hours' AND (vs.expires_at IS NULL OR vs.expires_at > NOW()) THEN 3
+            WHEN vs.status = 'temporarily_closed' THEN 4
+            WHEN vs.status = 'manual_hold' THEN 5
+            ELSE 6
           END,
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
