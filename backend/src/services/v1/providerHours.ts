@@ -54,6 +54,7 @@ type FoursquarePeriod = {
 
 export type FoursquarePlaceHours = {
   fsq_id?: string;
+  fsq_place_id?: string;
   name?: string;
   timezone?: string;
   verified?: boolean;
@@ -439,7 +440,7 @@ export function normalizeFoursquarePlaceHours(
       : "unknown";
   const popularity = typeof place.popularity === "number" ? clamp(place.popularity) : null;
   const metadata: Record<string, unknown> = {
-    fsq_id: place.fsq_id ?? null,
+    fsq_id: place.fsq_place_id ?? place.fsq_id ?? null,
     source_provider: "foursquare",
     fetched_by: "syncFoursquareHours",
     fetched_at: now.toISOString(),

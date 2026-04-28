@@ -11,7 +11,7 @@
  *
  * Required environment
  * ────────────────────
- *   FOURSQUARE_API_KEY  — your Foursquare Places API v3 key.
+ *   FOURSQUARE_API_KEY  — your Foursquare Places API service key.
  *                         Obtain at https://foursquare.com/developers/app
  *                         Copy backend/.env.example → backend/.env.local
  *                         and fill in the value.

@@ -1089,9 +1089,11 @@ describe("Nightloop v1 admin/data ops API", () => {
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       const text = String(url);
-      if (!text.startsWith("https://api.foursquare.com/v3")) {
+      if (!text.startsWith("https://places-api.foursquare.com")) {
         return originalFetch(url, init);
       }
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer test-foursquare-key");
+      expect((init?.headers as Record<string, string>)?.["X-Places-Api-Version"]).toBe("2025-06-17");
 
       if (text.includes("/places/search")) {
         expect(text).toContain("Phase+2+Google+Discovery+Venue");
@@ -1100,7 +1102,7 @@ describe("Nightloop v1 admin/data ops API", () => {
           json: async () => ({
             results: [
               {
-                fsq_id: "fsq-phase2-google-discovery",
+                fsq_place_id: "fsq-phase2-google-discovery",
                 name: "Phase 2 Google Discovery Venue"
               }
             ]
@@ -1111,7 +1113,7 @@ describe("Nightloop v1 admin/data ops API", () => {
       return {
         ok: true,
         json: async () => ({
-          fsq_id: "fsq-phase2-google-discovery",
+          fsq_place_id: "fsq-phase2-google-discovery",
           name: "Phase 2 Google Discovery Venue",
           categories: [{ id: 13003, name: "Bar" }],
           location: {},
@@ -1182,9 +1184,11 @@ describe("Nightloop v1 admin/data ops API", () => {
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       const text = String(url);
-      if (!text.startsWith("https://api.foursquare.com/v3")) {
+      if (!text.startsWith("https://places-api.foursquare.com")) {
         return originalFetch(url, init);
       }
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer test-foursquare-key");
+      expect((init?.headers as Record<string, string>)?.["X-Places-Api-Version"]).toBe("2025-06-17");
 
       if (text.includes("/places/search")) {
         expect(text).toContain("Phase+2+Curated+Notable+Venue");
@@ -1193,7 +1197,7 @@ describe("Nightloop v1 admin/data ops API", () => {
           json: async () => ({
             results: [
               {
-                fsq_id: "fsq-phase2-curated-notable",
+                fsq_place_id: "fsq-phase2-curated-notable",
                 name: "Phase 2 Curated Notable Venue"
               }
             ]
@@ -1204,7 +1208,7 @@ describe("Nightloop v1 admin/data ops API", () => {
       return {
         ok: true,
         json: async () => ({
-          fsq_id: "fsq-phase2-curated-notable",
+          fsq_place_id: "fsq-phase2-curated-notable",
           name: "Phase 2 Curated Notable Venue",
           categories: [{ id: 13003, name: "Bar" }],
           location: {},
@@ -1264,9 +1268,11 @@ describe("Nightloop v1 admin/data ops API", () => {
     });
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
-      if (!String(url).startsWith("https://api.foursquare.com/v3")) {
+      if (!String(url).startsWith("https://places-api.foursquare.com")) {
         return originalFetch(url, init);
       }
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer bad-foursquare-key");
+      expect((init?.headers as Record<string, string>)?.["X-Places-Api-Version"]).toBe("2025-06-17");
 
       return {
         ok: false,
@@ -1295,7 +1301,7 @@ describe("Nightloop v1 admin/data ops API", () => {
     expect(run.body.run.status).toBe("failed");
     expect(run.body.summary.provider_records_created).toBe(0);
     expect(run.body.summary.errors).toHaveLength(1);
-    expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("https://api.foursquare.com/v3"))).toHaveLength(1);
+    expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("https://places-api.foursquare.com"))).toHaveLength(1);
   });
 
   it("approves or rejects provider review items without silently mutating venues", async () => {

@@ -2,6 +2,7 @@ import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, getDBClient } from "../lib/db";
 import { loadConfig } from "../lib/config";
+import { FOURSQUARE_PLACES_API_BASE_URL, foursquareHeaders } from "../lib/foursquareHttp";
 import {
   normalizeFoursquarePlaceHours,
   type FoursquarePlaceHours,
@@ -29,8 +30,8 @@ type FoursquareSearchResponse = {
   results?: FoursquarePlaceHours[];
 };
 
-const FSQ_BASE = "https://api.foursquare.com/v3";
-const FSQ_DETAIL_FIELDS = "fsq_id,name,timezone,verified,popularity,price,rating,closed_bucket,hours,hours_popular,location";
+const FSQ_BASE = FOURSQUARE_PLACES_API_BASE_URL;
+const FSQ_DETAIL_FIELDS = "fsq_place_id,name,timezone,verified,popularity,price,rating,closed_bucket,hours,hours_popular,location";
 
 function parseArgs(argv: string[]): Args {
   const apply = argv.includes("--apply");
@@ -117,10 +118,7 @@ async function fsqFetch<T>(pathName: string, apiKey: string, params: Record<stri
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: {
-        Authorization: apiKey,
-        Accept: "application/json"
-      }
+      headers: foursquareHeaders(apiKey)
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -140,13 +138,14 @@ async function fetchFoursquareHours(candidate: VenueCandidate, apiKey: string): 
     ll: `${candidate.latitude},${candidate.longitude}`,
     radius: "300",
     limit: "5",
-    fields: "fsq_id,name,location"
+    fields: "fsq_place_id,name,location"
   });
   const best = (search.results ?? [])
     .map((place) => ({ place, score: candidateScore(candidate.name, place.name) }))
     .sort((left, right) => right.score - left.score)[0];
-  if (!best || best.score < 0.55 || !best.place.fsq_id) return null;
-  return fsqFetch<FoursquarePlaceHours>(`/places/${best.place.fsq_id}`, apiKey, {
+  const fsqPlaceId = best?.place.fsq_place_id ?? best?.place.fsq_id;
+  if (!best || best.score < 0.55 || !fsqPlaceId) return null;
+  return fsqFetch<FoursquarePlaceHours>(`/places/${fsqPlaceId}`, apiKey, {
     fields: FSQ_DETAIL_FIELDS
   });
 }

@@ -3,6 +3,7 @@ import { ApiError, notFoundError, validationError } from "../../lib/apiError";
 import type { AppConfig } from "../../lib/config";
 import type { DBClient } from "../../lib/db";
 import { dbQuery, dbTransaction } from "../../lib/db";
+import { FOURSQUARE_PLACES_API_BASE_URL, foursquareHeaders } from "../../lib/foursquareHttp";
 import { ensureAccountForAuthUser } from "./accountService";
 import {
   findProviderDuplicateWarnings,
@@ -156,9 +157,9 @@ type ProviderCandidatePayload = {
   matchConfidence: number;
 };
 
-const FSQ_BASE_URL = "https://api.foursquare.com/v3";
+const FSQ_BASE_URL = FOURSQUARE_PLACES_API_BASE_URL;
 const FSQ_SEARCH_RADIUS_METERS = 300;
-const FSQ_DETAIL_FIELDS = "fsq_id,name,location,categories,hours,website,verified,geocodes";
+const FSQ_DETAIL_FIELDS = "fsq_place_id,name,location,categories,hours,website,verified,geocodes";
 const FSQ_DELAY_MS = 250;
 const GOOGLE_PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText";
 export const GOOGLE_PLACES_TEXT_SEARCH_FIELD_MASK =
@@ -243,10 +244,7 @@ async function fetchFoursquare<T>(
   }
 
   const response = await fetch(url.toString(), {
-    headers: {
-      Accept: "application/json",
-      Authorization: apiKey
-    }
+    headers: foursquareHeaders(apiKey)
   });
 
   if (!response.ok) {
@@ -558,7 +556,8 @@ async function getMarketVenues(
 }
 
 type FoursquarePlace = {
-  fsq_id: string;
+  fsq_id?: string;
+  fsq_place_id?: string;
   name: string;
   location?: JsonRecord;
   categories?: Array<{ id: number; name: string }>;
@@ -571,6 +570,10 @@ type FoursquarePlace = {
 type FoursquareSearchResponse = {
   results?: FoursquarePlace[];
 };
+
+function foursquarePlaceId(place: FoursquarePlace): string | null {
+  return place.fsq_place_id ?? place.fsq_id ?? null;
+}
 
 type GooglePlace = {
   id: string;
@@ -858,18 +861,42 @@ async function getFoursquarePayloadForVenue(
   }
 
   await sleep(FSQ_DELAY_MS);
+  const bestFoursquareId = foursquarePlaceId(best.place);
+  if (!bestFoursquareId) {
+    return {
+      providerRecordId: `unmatched-${run.id}-${venue.id}`,
+      rawPayload: {
+        ...basePayload,
+        candidates: search.results ?? [],
+        source: "foursquare_live",
+        unmatched: true
+      },
+      normalizedPayload: {
+        name: venue.name,
+        source: "foursquare_live"
+      },
+      proposedChanges: {
+        metadata_patch: {
+          foursquare_match_status: "unmatched"
+        }
+      },
+      matchConfidence: best.score
+    };
+  }
+
   const detail = await fetchFoursquare<FoursquarePlace>(
-    `/places/${best.place.fsq_id}`,
+    `/places/${bestFoursquareId}`,
     config.foursquareApiKey,
     { fields: FSQ_DETAIL_FIELDS }
   );
+  const detailFoursquareId = foursquarePlaceId(detail) ?? bestFoursquareId;
 
   const category = detail.categories?.[0]?.name;
   const metadataOnly =
     run.summary.enrichment_target === "google_discovery_approved"
     || run.summary.enrichment_target === "curated_sf_notable";
   const normalizedPayload = {
-    fsq_id: detail.fsq_id,
+    fsq_id: detailFoursquareId,
     name: detail.name,
     categories: detail.categories ?? [],
     location: detail.location ?? {},
@@ -879,7 +906,7 @@ async function getFoursquarePayloadForVenue(
   };
 
   return {
-    providerRecordId: detail.fsq_id,
+    providerRecordId: detailFoursquareId,
     rawPayload: {
       ...basePayload,
       source: "foursquare_live",
@@ -894,7 +921,7 @@ async function getFoursquarePayloadForVenue(
             canonical_type: venue.canonical_type ?? (category ? "bar" : undefined)
           }),
       metadata_patch: {
-        foursquare_id: detail.fsq_id,
+        foursquare_id: detailFoursquareId,
         foursquare_category: category,
         foursquare_verified: detail.verified ?? false,
         website: detail.website,
@@ -902,7 +929,7 @@ async function getFoursquarePayloadForVenue(
           provider: "foursquare",
           runId: run.id,
           matchConfidence: best.score,
-          fields: ["fsq_id", "name", "location", "categories", "hours", "website", "verified", "geocodes"]
+          fields: ["fsq_place_id", "name", "location", "categories", "hours", "website", "verified", "geocodes"]
         })
       }
     },
