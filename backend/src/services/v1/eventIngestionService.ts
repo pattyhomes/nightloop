@@ -26,7 +26,15 @@ function decodeEntities(value: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&eacute;/g, "é")
+    .replace(/&ldquo;/g, "\"")
+    .replace(/&rdquo;/g, "\"")
+    .replace(/&lsquo;/g, "'")
+    .replace(/&rsquo;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
 }
 
 function stripCdata(value: string): string {
@@ -162,6 +170,66 @@ export function parseJsonLdEvents(html: string, sourceUrl: string): FetchedEvent
     }
   }
   return events;
+}
+
+function parseMonthDay(value: string): { month: number; day: number } | null {
+  const match = value.trim().match(/^(\d{1,2})\.(\d{1,2})$/);
+  if (!match) return null;
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { month, day };
+}
+
+function parseVenueTime(value: string): { hour: number; minute: number } | null {
+  const match = value.trim().match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] ?? 0);
+  const meridiem = match[3]?.toLowerCase();
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+  if (meridiem === "pm" && hour !== 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  return { hour, minute };
+}
+
+function dateTimeIsoPacific(month: number, day: number, hour: number, minute: number): string {
+  const now = new Date();
+  let year = now.getUTCFullYear();
+  const currentMonth = now.getUTCMonth() + 1;
+  if (month < currentMonth - 1) year += 1;
+  return new Date(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-07:00`).toISOString();
+}
+
+export function parseTicketwebPluginEvents(html: string, sourceUrl: string): FetchedEvent[] {
+  const blocks = html.match(/<div class=["'][^"']*date-img-wrapper[^"']*["'][\s\S]*?(?=<div class=["'][^"']*date-img-wrapper|<\/body>|$)/gi) ?? [];
+  const events: FetchedEvent[] = [];
+  for (const block of blocks) {
+    const dateText = textBetween(block, "span")?.match(/^\d{1,2}\.\d{1,2}$/)
+      ? textBetween(block, "span")
+      : (block.match(/<span class=["'][^"']*tw-event-date[^"']*["'][^>]*>([^<]+)<\/span>/i)?.[1] ?? null);
+    const date = dateText ? parseMonthDay(decodeEntities(dateText)) : null;
+    const timeText = block.match(/<span class=["'][^"']*tw-event-time[^"']*["'][^>]*>([^<]+)<\/span>/i)?.[1] ?? "";
+    const time = parseVenueTime(decodeEntities(timeText));
+    const eventUrl = block.match(/href=["']([^"']*\/tm-event\/[^"']+)["']/i)?.[1] ?? null;
+    const resolvedUrl = eventUrl ? new URL(decodeEntities(eventUrl), sourceUrl).toString() : null;
+    const titleAttr = block.match(/(?:aria-label|title)=["']Event Name - ([^"']+?)(?: \| Event Date|["'])/i)?.[1] ?? null;
+    const title = titleAttr ? decodeEntities(titleAttr).replace(/\s+/g, " ").trim() : null;
+    if (!date || !time || !title) continue;
+    events.push({
+      source_event_id: resolvedUrl ?? `${sourceUrl}#${date.month}-${date.day}-${title}`,
+      title,
+      starts_at: dateTimeIsoPacific(date.month, date.day, time.hour, time.minute),
+      ends_at: null,
+      url: resolvedUrl,
+      source_url: sourceUrl
+    });
+  }
+  return events;
+}
+
+export function parseVenueOwnedHtmlEvents(html: string, sourceUrl: string): FetchedEvent[] {
+  return parseTicketwebPluginEvents(html, sourceUrl);
 }
 
 export function parseRssEvents(input: string, sourceUrl: string): FetchedEvent[] {

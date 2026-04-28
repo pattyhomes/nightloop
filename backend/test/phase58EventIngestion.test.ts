@@ -1,12 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   parseIcsEvents,
   parseJsonFeedEvents,
   parseJsonLdEvents,
   parseRssEvents,
+  parseVenueOwnedHtmlEvents,
   robotsAllowsPath,
   sanitizeFetchedEvent
 } from "../src/services/v1/eventIngestionService";
+import { discoverEventSourcesFromHtml } from "../src/services/v1/eventSourceDiscovery";
 
 describe("Phase 5.8 venue event ingestion", () => {
   it("parses iCal feeds and stores only approved event fields", () => {
@@ -113,5 +115,66 @@ Allow: /events
 
     expect(robotsAllowsPath(robots, "/events")).toBe(true);
     expect(robotsAllowsPath(robots, "/private/show")).toBe(false);
+  });
+
+  it("parses venue-owned TicketWeb plugin event markup without image or description payloads", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-28T12:00:00Z"));
+    try {
+      const events = parseVenueOwnedHtmlEvents(`
+<div class="three columns date-img-wrapper">
+  <span class="tw-event-date">5.1</span>
+  <a href="https://venue.example/tm-event/otis-kane/" title="Event Name - Otis Kane with Hugo de la Lune | Event Date - 01 May"><span>Otis Kane</span></a>
+  <span class="tw-event-time">Show: 8:00 pm</span>
+  <img src="https://venue.example/poster.jpg" alt="promo art">
+  <div class="tw-description">Long promo text.</div>
+</div>
+`, "https://venue.example/tm-event/otis-kane/");
+
+      expect(sanitizeFetchedEvent(events[0])).toMatchObject({
+        source_event_id: "https://venue.example/tm-event/otis-kane/",
+        title: "Otis Kane with Hugo de la Lune",
+        starts_at: "2026-05-02T03:00:00.000Z",
+        ends_at: null,
+        url: "https://venue.example/tm-event/otis-kane/",
+        metadata: {
+          source_url: "https://venue.example/tm-event/otis-kane/"
+        }
+      });
+      expect(JSON.stringify(sanitizeFetchedEvent(events[0]))).not.toContain("poster.jpg");
+      expect(JSON.stringify(sanitizeFetchedEvent(events[0]))).not.toContain("Long promo text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discovers venue-owned event pages and feeds without storing promo content", () => {
+    const sources = discoverEventSourcesFromHtml(`
+<html><body>
+  <a href="/events">Events</a>
+  <a href="/events/feed">Events RSS</a>
+  <a href="/calendar.ics">iCal</a>
+  <a href="/">Calendar</a>
+  <link href="/wp-content/themes/site/css/build/style-non-critical.css?ver=1">
+  <link href="/comments/feed/">
+  <a href="/venue-rental">Book An Event</a>
+  <a href="/private">Private</a>
+  <a href="https://tickets.example.com/venue">Third-party tickets</a>
+  <a href="https://www.eventbrite.com/o/nightloop-room-123456789">Eventbrite</a>
+</body></html>
+`, "https://venue.example/");
+
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_type: "venue_json_ld", source_url: "https://venue.example/events" }),
+      expect.objectContaining({ source_type: "venue_rss", source_url: "https://venue.example/events/feed" }),
+      expect.objectContaining({ source_type: "venue_ical", source_url: "https://venue.example/calendar.ics" }),
+      expect.objectContaining({ source_type: "eventbrite_organizer", provider_id: "123456789", source_url: null })
+    ]));
+    expect(JSON.stringify(sources)).not.toContain("tickets.example.com");
+    expect(JSON.stringify(sources)).not.toContain("/private");
+    expect(JSON.stringify(sources)).not.toContain("non-critical.css");
+    expect(JSON.stringify(sources)).not.toContain("comments/feed");
+    expect(JSON.stringify(sources)).not.toContain("venue-rental");
+    expect(JSON.stringify(sources)).not.toContain("\"https://venue.example/\"");
   });
 });

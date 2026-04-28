@@ -7,6 +7,7 @@ import {
   parseJsonFeedEvents,
   parseJsonLdEvents,
   parseRssEvents,
+  parseVenueOwnedHtmlEvents,
   robotsAllowsPath,
   sanitizeFetchedEvent,
   type FetchedEvent,
@@ -18,6 +19,7 @@ type Args = {
   fetchDryRun: boolean;
   market: string;
   limit: number;
+  summaryOnly: boolean;
 };
 
 type EventSourceRow = {
@@ -41,7 +43,8 @@ function parseArgs(argv: string[]): Args {
     apply,
     fetchDryRun: argv.includes("--fetch-dry-run"),
     market: argv.find((arg) => arg.startsWith("--market="))?.slice("--market=".length) ?? "san-francisco",
-    limit: Number(argv.find((arg) => arg.startsWith("--limit="))?.slice("--limit=".length) ?? (apply ? "25" : "50"))
+    limit: Number(argv.find((arg) => arg.startsWith("--limit="))?.slice("--limit=".length) ?? (apply ? "25" : "50")),
+    summaryOnly: argv.includes("--summary")
   };
 }
 
@@ -143,6 +146,18 @@ function eventbriteEventsFromResponse(payload: unknown, sourceUrl: string): Fetc
     }));
 }
 
+function sanitizeFetchedEvents(events: FetchedEvent[]): SanitizedFetchedEvent[] {
+  const sanitized: SanitizedFetchedEvent[] = [];
+  for (const event of events) {
+    try {
+      sanitized.push(sanitizeFetchedEvent(event));
+    } catch {
+      continue;
+    }
+  }
+  return sanitized;
+}
+
 async function fetchEventsForSource(source: EventSourceRow): Promise<{
   events: SanitizedFetchedEvent[];
   robotsStatus: string;
@@ -158,7 +173,7 @@ async function fetchEventsForSource(source: EventSourceRow): Promise<{
     url.searchParams.set("status", "live");
     const payload = JSON.parse(await fetchText(url.toString(), { Authorization: `Bearer ${token}` }));
     return {
-      events: eventbriteEventsFromResponse(payload, url.toString()).map(sanitizeFetchedEvent),
+      events: sanitizeFetchedEvents(eventbriteEventsFromResponse(payload, url.toString())),
       robotsStatus: "not_applicable"
     };
   }
@@ -171,9 +186,9 @@ async function fetchEventsForSource(source: EventSourceRow): Promise<{
   if (source.source_type === "venue_ical") fetched = parseIcsEvents(body, source.source_url);
   else if (source.source_type === "venue_json") fetched = parseJsonFeedEvents(JSON.parse(body), source.source_url);
   else if (source.source_type === "venue_rss") fetched = parseRssEvents(body, source.source_url);
-  else fetched = parseJsonLdEvents(body, source.source_url);
+  else fetched = [...parseJsonLdEvents(body, source.source_url), ...parseVenueOwnedHtmlEvents(body, source.source_url)];
   return {
-    events: fetched.map(sanitizeFetchedEvent),
+    events: sanitizeFetchedEvents(fetched),
     robotsStatus: robots.status
   };
 }
@@ -230,7 +245,20 @@ async function applyEvent(source: EventSourceRow, event: SanitizedFetchedEvent):
   );
 
   if (!approved) {
-    const providerRecord = await dbQuery<{ id: string }>(
+    const existingProviderRecord = await dbQuery<{ id: string }>(
+      `
+        SELECT id
+        FROM provider_records
+        WHERE provider = $1
+          AND provider_record_id = $2
+          AND record_type = 'event'
+          AND market_id = $3::uuid
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      [eventSource, sourceEventId, source.market_id]
+    );
+    const providerRecord = existingProviderRecord.rows[0] ? existingProviderRecord : await dbQuery<{ id: string }>(
       `
         INSERT INTO provider_records (
           provider,
@@ -269,8 +297,14 @@ async function applyEvent(source: EventSourceRow, event: SanitizedFetchedEvent):
             market_id,
             proposed_changes
           )
-          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::jsonb)
-          ON CONFLICT DO NOTHING
+          SELECT $1::uuid, $2::uuid, $3::uuid, $4::jsonb
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM venue_review_items
+            WHERE provider_record_id = $1::uuid
+              AND COALESCE(venue_id, $2::uuid) = $2::uuid
+              AND status = 'pending'
+          )
         `,
         [
           providerRecordId,
@@ -326,10 +360,14 @@ async function main(): Promise<void> {
 
   const events: Array<{ source_id: string; venue_name: string; event: SanitizedFetchedEvent }> = [];
   const errors: Array<{ source_id: string; venue_name: string; error: string }> = [];
+  const seenEvents = new Set<string>();
   for (const source of sources) {
     try {
       const fetched = await fetchEventsForSource(source);
       for (const event of fetched.events) {
+        const eventKey = `${eventSourceName(source)}:${event.source_event_id ?? event.url ?? event.title}:${event.starts_at}`;
+        if (seenEvents.has(eventKey)) continue;
+        seenEvents.add(eventKey);
         if (Date.parse(event.starts_at) >= Date.now() - 6 * 60 * 60 * 1000) {
           events.push({ source_id: source.id, venue_name: source.venue_name, event });
           if (args.apply) await applyEvent(source, event);
@@ -346,8 +384,10 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     ...summary,
     writes_completed: args.apply ? events.length : 0,
-    events,
-    errors
+    events_count: events.length,
+    errors_count: errors.length,
+    events: args.summaryOnly ? undefined : events,
+    errors: args.summaryOnly ? undefined : errors
   }, null, 2));
 }
 
