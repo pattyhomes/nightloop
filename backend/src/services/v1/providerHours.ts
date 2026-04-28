@@ -3,6 +3,7 @@ export const GOOGLE_HOURS_FIELD_MASK =
   "id,businessStatus,utcOffsetMinutes,regularOpeningHours,currentOpeningHours,regularSecondaryOpeningHours,currentSecondaryOpeningHours";
 
 const GOOGLE_TTL_DAYS = 30;
+const WEBSITE_TTL_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type GoogleTimePoint = {
@@ -87,16 +88,43 @@ export type FoursquareHoursCandidate = {
   longitude: number;
 };
 
+export type OpenStreetMapHoursCandidate = {
+  id: string;
+  name: string;
+  market_id: string;
+  timezone: string;
+};
+
+export type OpenStreetMapHoursPlace = {
+  osm_type: "node" | "way" | "relation";
+  osm_id: number;
+  name?: string;
+  opening_hours?: string;
+  lat?: number;
+  lon?: number;
+};
+
+export type ParsedWebsiteHours = {
+  source_url: string;
+  raw_opening_hours?: string[];
+  normalized_periods: NormalizedPeriod[];
+};
+
+export type VenueWebsiteHoursSource = {
+  source_url: string;
+  parsed: ParsedWebsiteHours;
+};
+
 export type ProviderSchedulePlan = {
   venue_id: string;
   venue_name: string;
   status: "unknown" | "verified_hours" | "temporarily_closed" | "manual_hold";
-  source: "provider:google_places" | "provider:foursquare";
+  source: "provider:google_places" | "provider:foursquare" | "provider:openstreetmap" | "venue_website";
   timezone: string;
   confidence: number;
   weekly_hours: Record<string, unknown>;
   metadata: Record<string, unknown>;
-  expires_at: string;
+  expires_at: string | null;
 };
 
 type NormalizeOptions = {
@@ -208,6 +236,10 @@ function expiresAt(now: Date): string {
   return new Date(now.getTime() + GOOGLE_TTL_DAYS * DAY_MS).toISOString();
 }
 
+function ttlExpiresAt(now: Date, days: number): string {
+  return new Date(now.getTime() + days * DAY_MS).toISOString();
+}
+
 function normalizeGooglePeriod(period: GooglePeriod): NormalizedPeriod | null {
   if (!period.open || !period.close) return null;
   const day = Number(period.open.day);
@@ -252,6 +284,161 @@ function normalizeFoursquarePeriod(period: FoursquarePeriod): NormalizedPeriod |
     close_day: rollsToNextDay ? (day + 1) % 7 : day,
     close_hour: close.hour,
     close_minute: close.minute
+  };
+}
+
+const osmDayMap: Record<string, number> = {
+  Su: 0,
+  Mo: 1,
+  Tu: 2,
+  We: 3,
+  Th: 4,
+  Fr: 5,
+  Sa: 6
+};
+
+const schemaDayMap: Record<string, string> = {
+  Sunday: "Su",
+  Monday: "Mo",
+  Tuesday: "Tu",
+  Wednesday: "We",
+  Thursday: "Th",
+  Friday: "Fr",
+  Saturday: "Sa"
+};
+
+function dayCodesFromToken(token: string): string[] {
+  const [startRaw, endRaw] = token.split("-");
+  const start = startRaw?.trim();
+  const end = endRaw?.trim();
+  if (!start || osmDayMap[start] == null) return [];
+  if (!end) return [start];
+  if (osmDayMap[end] == null) return [];
+  const days: string[] = [];
+  let current = osmDayMap[start];
+  const target = osmDayMap[end];
+  for (let guard = 0; guard < 7; guard += 1) {
+    const code = Object.entries(osmDayMap).find(([, value]) => value === current)?.[0];
+    if (code) days.push(code);
+    if (current === target) break;
+    current = (current + 1) % 7;
+  }
+  return days;
+}
+
+function parseOpeningHoursValue(value: string): { periods: NormalizedPeriod[]; error?: string } {
+  const trimmed = value.trim();
+  if (!trimmed) return { periods: [], error: "empty opening_hours" };
+  if (trimmed === "24/7") {
+    return {
+      periods: Object.values(osmDayMap).map((day) => ({
+        day,
+        open_hour: 0,
+        open_minute: 0,
+        close_day: (day + 1) % 7,
+        close_hour: 0,
+        close_minute: 0
+      }))
+    };
+  }
+
+  const periods: NormalizedPeriod[] = [];
+  const rules = trimmed.split(";").map((rule) => rule.trim()).filter(Boolean);
+  for (const rule of rules) {
+    if (/\b(off|closed)\b/i.test(rule)) continue;
+    const match = rule.match(/^([A-Z][a-z](?:-[A-Z][a-z])?(?:,[A-Z][a-z](?:-[A-Z][a-z])?)*)\s+(.+)$/);
+    if (!match) return { periods: [], error: `unsupported opening_hours rule: ${rule}` };
+    const days = match[1].split(",").flatMap((token) => dayCodesFromToken(token.trim()));
+    if (days.length === 0) return { periods: [], error: `unsupported opening_hours days: ${match[1]}` };
+    const ranges = match[2].split(",").map((range) => range.trim()).filter(Boolean);
+    for (const range of ranges) {
+      const timeMatch = range.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
+      if (!timeMatch) return { periods: [], error: `unsupported opening_hours time range: ${range}` };
+      const open = { hour: Number(timeMatch[1]), minute: Number(timeMatch[2]) };
+      const close = { hour: Number(timeMatch[3]), minute: Number(timeMatch[4]) };
+      if (
+        open.hour < 0 || open.hour > 23 || close.hour < 0 || close.hour > 24 ||
+        open.minute < 0 || open.minute > 59 || close.minute < 0 || close.minute > 59
+      ) {
+        return { periods: [], error: `invalid opening_hours time range: ${range}` };
+      }
+      for (const dayCode of days) {
+        const day = osmDayMap[dayCode];
+        const rollsToNextDay = close.hour < open.hour || (close.hour === open.hour && close.minute <= open.minute);
+        periods.push({
+          day,
+          open_hour: open.hour,
+          open_minute: open.minute,
+          close_day: rollsToNextDay || close.hour === 24 ? (day + 1) % 7 : day,
+          close_hour: close.hour === 24 ? 0 : close.hour,
+          close_minute: close.minute
+        });
+      }
+    }
+  }
+
+  return periods.length > 0 ? { periods } : { periods: [], error: "opening_hours contains no open periods" };
+}
+
+function scriptJsonLdBodies(html: string): string[] {
+  const scriptMatches = html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) ?? [];
+  return scriptMatches.map((script) => script.replace(/^<script[^>]*>/i, "").replace(/<\/script>$/i, "").trim());
+}
+
+function flattenJsonLd(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) return value.flatMap(flattenJsonLd);
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const graph = record["@graph"];
+  return [record, ...(Array.isArray(graph) ? graph.flatMap(flattenJsonLd) : [])];
+}
+
+function schemaDayToOsm(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const raw = value.split("/").pop()?.trim() ?? value.trim();
+  return schemaDayMap[raw] ?? (osmDayMap[raw] == null ? null : raw);
+}
+
+function openingHoursSpecToRule(spec: Record<string, unknown>): string | null {
+  const opens = typeof spec.opens === "string" ? spec.opens.slice(0, 5) : null;
+  const closes = typeof spec.closes === "string" ? spec.closes.slice(0, 5) : null;
+  if (!opens || !closes) return null;
+  const days = Array.isArray(spec.dayOfWeek) ? spec.dayOfWeek : [spec.dayOfWeek];
+  const dayCodes = days.map(schemaDayToOsm).filter((day): day is string => Boolean(day));
+  if (dayCodes.length === 0) return null;
+  return `${dayCodes.join(",")} ${opens}-${closes}`;
+}
+
+export function parseVenueWebsiteHoursFromHtml(html: string, sourceUrl: string): ParsedWebsiteHours {
+  const rawRules: string[] = [];
+  for (const body of scriptJsonLdBodies(html)) {
+    try {
+      const parsed = JSON.parse(body);
+      for (const item of flattenJsonLd(parsed)) {
+        const specs = item.openingHoursSpecification;
+        const specItems = Array.isArray(specs) ? specs : specs ? [specs] : [];
+        for (const spec of specItems) {
+          if (spec && typeof spec === "object") {
+            const rule = openingHoursSpecToRule(spec as Record<string, unknown>);
+            if (rule) rawRules.push(rule);
+          }
+        }
+        const openingHours = item.openingHours;
+        const openingRules = Array.isArray(openingHours) ? openingHours : openingHours ? [openingHours] : [];
+        for (const rule of openingRules) {
+          if (typeof rule === "string" && rule.trim()) rawRules.push(rule.trim());
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  const combined = rawRules.join("; ");
+  const parsed = combined ? parseOpeningHoursValue(combined) : { periods: [], error: "no structured website hours found" };
+  return {
+    source_url: sourceUrl,
+    raw_opening_hours: rawRules,
+    normalized_periods: parsed.periods
   };
 }
 
@@ -416,6 +603,102 @@ export function normalizeGooglePlaceHours(
       current_secondary_opening_hours: place.currentSecondaryOpeningHours ?? [],
       normalized_periods: normalizedPeriods,
       normalized_secondary_periods: secondaryPeriods
+    },
+    metadata
+  };
+}
+
+export function normalizeOpenStreetMapHours(
+  candidate: OpenStreetMapHoursCandidate,
+  place: OpenStreetMapHoursPlace,
+  options: NormalizeOptions = {}
+): ProviderSchedulePlan {
+  const now = options.now ?? new Date();
+  const rawOpeningHours = place.opening_hours ?? "";
+  const parsed = parseOpeningHoursValue(rawOpeningHours);
+  const hasHours = parsed.periods.length > 0;
+  const window = evaluateNightlifeWindow(parsed.periods, candidate.timezone, now);
+  const sourceUrl = `https://www.openstreetmap.org/${place.osm_type}/${place.osm_id}`;
+  const metadata: Record<string, unknown> = {
+    osm_type: place.osm_type,
+    osm_id: place.osm_id,
+    osm_name: place.name ?? null,
+    osm_opening_hours: rawOpeningHours,
+    source_provider: "openstreetmap",
+    source_url: sourceUrl,
+    attribution: "OpenStreetMap contributors",
+    license: "ODbL",
+    fetched_by: "syncOpenStreetMapHours",
+    fetched_at: now.toISOString(),
+    nightlife_day_window: NIGHTLIFE_DAY_WINDOW,
+    internal_only_until_ui_attribution: true,
+    is_open_now: hasHours ? window.is_open_now : null,
+    opens_at: hasHours ? window.opens_at ?? null : null,
+    closes_at: hasHours ? window.closes_at ?? null : null,
+    hours_missing: !hasHours
+  };
+  if (!hasHours && parsed.error) metadata.parse_error = parsed.error;
+  if (hasHours) {
+    metadata.opens_later = window.opens_later === true;
+    metadata.closed_today = window.closed_today === true;
+  }
+
+  return {
+    venue_id: candidate.id,
+    venue_name: candidate.name,
+    status: hasHours ? "verified_hours" : "unknown",
+    source: "provider:openstreetmap",
+    timezone: candidate.timezone,
+    confidence: hasHours ? 0.58 : 0.18,
+    expires_at: null,
+    weekly_hours: {
+      raw_opening_hours: rawOpeningHours,
+      normalized_periods: parsed.periods
+    },
+    metadata
+  };
+}
+
+export function normalizeVenueWebsiteHours(
+  candidate: OpenStreetMapHoursCandidate,
+  source: VenueWebsiteHoursSource,
+  options: NormalizeOptions = {}
+): ProviderSchedulePlan {
+  const now = options.now ?? new Date();
+  const periods = source.parsed.normalized_periods;
+  const hasHours = periods.length > 0;
+  const window = evaluateNightlifeWindow(periods, candidate.timezone, now);
+  const expires = ttlExpiresAt(now, WEBSITE_TTL_DAYS);
+  const metadata: Record<string, unknown> = {
+    source_provider: "venue_website",
+    source_url: source.source_url,
+    fetched_by: "syncVenueWebsiteHours",
+    fetched_at: now.toISOString(),
+    expires_at: expires,
+    ttl_days: WEBSITE_TTL_DAYS,
+    nightlife_day_window: NIGHTLIFE_DAY_WINDOW,
+    is_open_now: hasHours ? window.is_open_now : null,
+    opens_at: hasHours ? window.opens_at ?? null : null,
+    closes_at: hasHours ? window.closes_at ?? null : null,
+    hours_missing: !hasHours
+  };
+  if (hasHours) {
+    metadata.opens_later = window.opens_later === true;
+    metadata.closed_today = window.closed_today === true;
+  }
+
+  return {
+    venue_id: candidate.id,
+    venue_name: candidate.name,
+    status: hasHours ? "verified_hours" : "unknown",
+    source: "venue_website",
+    timezone: candidate.timezone,
+    confidence: hasHours ? 0.82 : 0.2,
+    expires_at: expires,
+    weekly_hours: {
+      source_url: source.source_url,
+      raw_opening_hours: source.parsed.raw_opening_hours ?? [],
+      normalized_periods: periods
     },
     metadata
   };

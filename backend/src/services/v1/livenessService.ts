@@ -111,6 +111,7 @@ function confidenceFor(input: {
 function sourceLabel(source: string): string {
   if (source === "provider:google_places") return "Google Places";
   if (source === "provider:foursquare") return "Foursquare";
+  if (source === "provider:openstreetmap") return "OpenStreetMap";
   if (source === "eventbrite") return "Eventbrite";
   if (source === "venue_website") return "venue website";
   if (source === "manual") return "Nightloop ops";
@@ -173,9 +174,13 @@ function copyFor(input: {
 }
 
 export function buildVenueLiveness(input: VenueLivenessInput): VenueLiveness {
-  const metadata = input.scheduleMetadata ?? {};
-  const status = input.scheduleStatus ?? "unknown";
-  const source = input.scheduleSource ?? "unknown";
+  const rawMetadata = input.scheduleMetadata ?? {};
+  const rawSource = input.scheduleSource ?? "unknown";
+  const isInternalOnlyOsm =
+    rawSource === "provider:openstreetmap" && rawMetadata.internal_only_until_ui_attribution === true;
+  const metadata = isInternalOnlyOsm ? {} : rawMetadata;
+  const status = isInternalOnlyOsm ? "unknown" : input.scheduleStatus ?? "unknown";
+  const source = isInternalOnlyOsm ? "unknown" : rawSource;
   const stateFromHours = hoursState(status);
   const liveSignalCount = Math.max(0, Math.floor(numberValue(input.liveSignalCount ?? input.recentSignalCount)));
   const liveUniqueUserCount = Math.max(0, Math.floor(numberValue(input.liveUniqueUserCount)));

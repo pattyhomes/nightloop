@@ -69,4 +69,27 @@ describe("buildVenueLiveness", () => {
       hours_state: "source_verified"
     });
   });
+
+  it("does not let OSM-only hours drive public liveness before UI attribution exists", () => {
+    const liveness = buildVenueLiveness({
+      scheduleStatus: "verified_hours",
+      scheduleSource: "provider:openstreetmap",
+      scheduleConfidence: 0.58,
+      scheduleMetadata: {
+        internal_only_until_ui_attribution: true,
+        is_open_now: true,
+        closes_at: "4:00 AM"
+      },
+      liveSignalCount: 4,
+      liveUniqueUserCount: 3
+    });
+
+    expect(liveness).toMatchObject({
+      state: "unknown",
+      hours_state: "unknown",
+      confidence: "low",
+      closes_at: null
+    });
+    expect(liveness.copy.provenance).toBe("Hours not verified yet");
+  });
 });

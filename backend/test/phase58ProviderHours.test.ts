@@ -3,7 +3,10 @@ import { FOURSQUARE_PRO_FIELD_MASK } from "../src/lib/foursquareHttp";
 import {
   GOOGLE_HOURS_FIELD_MASK,
   normalizeFoursquarePlaceHours,
-  normalizeGooglePlaceHours
+  normalizeGooglePlaceHours,
+  normalizeOpenStreetMapHours,
+  normalizeVenueWebsiteHours,
+  parseVenueWebsiteHoursFromHtml
 } from "../src/services/v1/providerHours";
 
 const candidate = {
@@ -182,5 +185,128 @@ describe("Phase 5.8 provider hours normalization", () => {
     expect(serialized).not.toContain("Promo copy");
     expect(serialized).not.toContain("photo-1");
     expect(serialized).not.toContain("Do not store tips");
+  });
+
+  it("parses OSM opening_hours as storable internal evidence with cross-midnight windows", () => {
+    const plan = normalizeOpenStreetMapHours({
+      id: "venue-1",
+      name: "Nightloop Room",
+      market_id: "market-1",
+      timezone: "America/Los_Angeles"
+    }, {
+      osm_type: "node",
+      osm_id: 123,
+      name: "Nightloop Room",
+      opening_hours: "Mo-Th 22:00-04:00; Fr-Sa 21:00-05:00; Su off",
+      lat: 37.7749,
+      lon: -122.4194
+    }, {
+      now: new Date("2026-04-25T22:30:00-07:00")
+    });
+
+    expect(plan).toMatchObject({
+      source: "provider:openstreetmap",
+      status: "verified_hours",
+      expires_at: null,
+      metadata: expect.objectContaining({
+        source_provider: "openstreetmap",
+        osm_type: "node",
+        osm_id: 123,
+        attribution: "OpenStreetMap contributors",
+        internal_only_until_ui_attribution: true,
+        is_open_now: true,
+        closes_at: "5:00 AM"
+      })
+    });
+    expect(plan.weekly_hours).toMatchObject({
+      raw_opening_hours: "Mo-Th 22:00-04:00; Fr-Sa 21:00-05:00; Su off",
+      normalized_periods: expect.arrayContaining([
+        expect.objectContaining({
+          day: 5,
+          open_hour: 21,
+          close_day: 6,
+          close_hour: 5
+        })
+      ])
+    });
+  });
+
+  it("keeps invalid OSM opening_hours unknown instead of inferring open or closed", () => {
+    const plan = normalizeOpenStreetMapHours({
+      id: "venue-1",
+      name: "Nightloop Room",
+      market_id: "market-1",
+      timezone: "America/Los_Angeles"
+    }, {
+      osm_type: "way",
+      osm_id: 456,
+      name: "Nightloop Room",
+      opening_hours: "call for hours"
+    }, {
+      now: new Date("2026-04-25T22:30:00-07:00")
+    });
+
+    expect(plan).toMatchObject({
+      source: "provider:openstreetmap",
+      status: "unknown",
+      confidence: 0.18,
+      metadata: expect.objectContaining({
+        is_open_now: null,
+        hours_missing: true,
+        parse_error: expect.any(String)
+      })
+    });
+    expect(plan.metadata).not.toHaveProperty("closed_today");
+  });
+
+  it("parses venue website JSON-LD hours with 7-day TTL and no promo content", () => {
+    const html = `
+<html><head>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "NightClub",
+  "name": "Nightloop Room",
+  "description": "Promo copy must never be stored.",
+  "image": "https://venue.example/poster.jpg",
+  "openingHoursSpecification": [
+    {
+      "@type": "OpeningHoursSpecification",
+      "dayOfWeek": ["https://schema.org/Friday", "https://schema.org/Saturday"],
+      "opens": "21:00",
+      "closes": "04:00"
+    }
+  ]
+}
+</script>
+</head></html>`;
+    const parsed = parseVenueWebsiteHoursFromHtml(html, "https://venue.example/hours");
+    const plan = normalizeVenueWebsiteHours({
+      id: "venue-1",
+      name: "Nightloop Room",
+      market_id: "market-1",
+      timezone: "America/Los_Angeles"
+    }, {
+      source_url: "https://venue.example/hours",
+      parsed
+    }, {
+      now: new Date("2026-04-25T22:30:00-07:00")
+    });
+
+    expect(plan).toMatchObject({
+      source: "venue_website",
+      status: "verified_hours",
+      confidence: 0.82,
+      metadata: expect.objectContaining({
+        source_provider: "venue_website",
+        source_url: "https://venue.example/hours",
+        is_open_now: true,
+        closes_at: "4:00 AM"
+      })
+    });
+    expect(Date.parse(plan.expires_at ?? "")).toBe(Date.parse("2026-05-02T22:30:00-07:00"));
+    const serialized = JSON.stringify(plan);
+    expect(serialized).not.toContain("Promo copy");
+    expect(serialized).not.toContain("poster.jpg");
   });
 });
