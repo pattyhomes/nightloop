@@ -1,0 +1,897 @@
+import { createHash, randomBytes } from "crypto";
+import { ApiError, notFoundError, validationError } from "../../lib/apiError";
+import { dbQuery, dbTransaction, type DBClient } from "../../lib/db";
+import type { AccountState } from "./accountService";
+import { requireEligible } from "./accountService";
+import { findMarketByIdOrSlug } from "./marketService";
+import { listRecommendations } from "./recommendationService";
+
+type DecisionStatus = "active" | "ended" | "expired";
+type MemberRole = "creator" | "member";
+type MemberStatus = "invited" | "joined";
+type VoteValue = "in" | "skip";
+type PulseFilter = "chill" | "active" | "packed";
+
+type RecommendationResponse = Awaited<ReturnType<typeof listRecommendations>>;
+type RecommendationItemPayload = RecommendationResponse["items"][number];
+type VenuePayload = RecommendationItemPayload["venue"];
+
+export type DecisionFilters = {
+  neighborhood?: string;
+  category?: string;
+  pulse?: PulseFilter;
+};
+
+type SessionRow = {
+  id: string;
+  creator_user_id: string;
+  market_id: string;
+  market_slug: string;
+  market_short_label: string;
+  status: DecisionStatus;
+  code_hint: string | null;
+  code_revoked_at: string | null;
+  filters: DecisionFilters | null;
+  expires_at: string;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type MembershipRow = {
+  id: string;
+  session_id: string;
+  user_id: string;
+  role: MemberRole;
+  status: MemberStatus;
+  source: "creator" | "invited" | "code";
+  joined_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type CandidateSnapshot = {
+  venue: VenuePayload;
+  recommendation: {
+    rank: number;
+    score: number;
+    reason: string;
+    confidence: string | null;
+    liveness: unknown;
+    expected_pulse_basis: string[];
+    factors: unknown;
+  };
+};
+
+type CandidateRow = {
+  id: string;
+  session_id: string;
+  venue_id: string;
+  original_rank: number;
+  base_score: string | number;
+  snapshot: CandidateSnapshot;
+  in_count: string | number;
+  skip_count: string | number;
+  viewer_vote: VoteValue | null;
+};
+
+type JoinedPreferenceRow = {
+  user_id: string;
+  preferences: Record<string, string[]>;
+};
+
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const SESSION_SIZE = 12;
+
+function normalizeCode(code: string): string {
+  return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function hashCode(code: string): string {
+  return createHash("sha256").update(normalizeCode(code)).digest("hex");
+}
+
+function generateDecisionCode(): string {
+  const chars = Array.from(randomBytes(8)).map((byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]);
+  return `ND-${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}`;
+}
+
+function codeHint(code: string): string {
+  return normalizeCode(code).slice(-4);
+}
+
+function normalizeText(value?: string | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function normalizePreferenceKey(value?: string | null): string {
+  return normalizeText(value).replace(/\s+/g, "-");
+}
+
+function safeFilters(filters?: DecisionFilters): DecisionFilters {
+  return {
+    ...(filters?.neighborhood ? { neighborhood: filters.neighborhood.trim() } : {}),
+    ...(filters?.category ? { category: filters.category.trim() } : {}),
+    ...(filters?.pulse ? { pulse: filters.pulse } : {})
+  };
+}
+
+function candidateMatchesFilters(item: RecommendationItemPayload, filters: DecisionFilters): boolean {
+  if (filters.neighborhood) {
+    const wanted = normalizePreferenceKey(filters.neighborhood);
+    const actual = normalizePreferenceKey(item.venue.neighborhood);
+    if (wanted && actual !== wanted) return false;
+  }
+  if (filters.category) {
+    const wanted = normalizePreferenceKey(filters.category);
+    const actual = normalizePreferenceKey(item.venue.category);
+    if (wanted && actual !== wanted) return false;
+  }
+  return true;
+}
+
+function buildSnapshot(item: RecommendationItemPayload): CandidateSnapshot {
+  return {
+    venue: item.venue,
+    recommendation: {
+      rank: item.rank,
+      score: item.score,
+      reason: item.reason,
+      confidence: item.confidence ?? null,
+      liveness: item.liveness ?? null,
+      expected_pulse_basis: item.expected_pulse_basis ?? [],
+      factors: item.factors ?? null
+    }
+  };
+}
+
+function textSet(values?: string[]): Set<string> {
+  return new Set((values ?? []).map(normalizePreferenceKey).filter(Boolean));
+}
+
+function scoreMemberFit(venue: VenuePayload, preferences: Record<string, string[]>): number {
+  const neighborhoods = textSet(preferences.neighborhoods);
+  const vibe = textSet(preferences.vibe);
+  const music = textSet(preferences.music);
+  const crowd = textSet(preferences.crowd);
+  const category = normalizePreferenceKey(venue.category);
+  const neighborhood = normalizePreferenceKey(venue.neighborhood);
+
+  let score = 0.18;
+  if (neighborhoods.has(neighborhood)) score += 0.34;
+  if (vibe.has(category) || music.has(category) || crowd.has(category)) score += 0.18;
+  if (category.includes("club") && (vibe.has("dance") || crowd.has("packed"))) score += 0.14;
+  if (category.includes("bar") && (vibe.has("cocktails") || vibe.has("conversation"))) score += 0.1;
+  if (category.includes("live") && music.size > 0) score += 0.12;
+  if (venue.event) score += 0.08;
+  return Math.min(1, Math.max(0, score));
+}
+
+function groupFitForCandidate(candidate: CandidateRow, joinedPreferences: JoinedPreferenceRow[]) {
+  const memberCount = joinedPreferences.length;
+  if (memberCount === 0) {
+    return {
+      score: 0,
+      memberCount,
+      reason: "Group fit updates after friends join."
+    };
+  }
+
+  const venue = candidate.snapshot.venue;
+  const average =
+    joinedPreferences.reduce((sum, row) => sum + scoreMemberFit(venue, row.preferences), 0) / memberCount;
+  const inCount = Number(candidate.in_count ?? 0);
+  const skipCount = Number(candidate.skip_count ?? 0);
+  const score = Math.min(100, Math.max(0, average * 100 + inCount * 4 - skipCount * 2));
+  const reason =
+    memberCount === 1
+      ? `Group fit is based on the creator's saved picks.`
+      : `Group fit blends ${memberCount} joined friends' saved picks.`;
+
+  return {
+    score: Math.round(score * 10) / 10,
+    memberCount,
+    reason
+  };
+}
+
+function formatCandidate(candidate: CandidateRow, joinedPreferences: JoinedPreferenceRow[]) {
+  const groupFit = groupFitForCandidate(candidate, joinedPreferences);
+
+  return {
+    id: candidate.id,
+    venue_id: candidate.venue_id,
+    original_rank: Number(candidate.original_rank),
+    base_score: Number(candidate.base_score),
+    venue: candidate.snapshot.venue,
+    recommendation: candidate.snapshot.recommendation,
+    in_count: Number(candidate.in_count ?? 0),
+    skip_count: Number(candidate.skip_count ?? 0),
+    viewer_vote: candidate.viewer_vote,
+    group_fit_score: groupFit.score,
+    group_fit_member_count: groupFit.memberCount,
+    group_fit_reason: groupFit.reason
+  };
+}
+
+function chooseLeader(candidates: ReturnType<typeof formatCandidate>[]) {
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, candidate) => {
+    if (candidate.in_count !== best.in_count) {
+      return candidate.in_count > best.in_count ? candidate : best;
+    }
+    if (candidate.group_fit_score !== best.group_fit_score) {
+      return candidate.group_fit_score > best.group_fit_score ? candidate : best;
+    }
+    return candidate.original_rank < best.original_rank ? candidate : best;
+  }, candidates[0]);
+}
+
+async function expireSessionIfNeeded(client: DBClient, sessionId: string): Promise<void> {
+  await client.query(
+    `
+      UPDATE decision_sessions
+      SET status = 'expired',
+          updated_at = NOW()
+      WHERE id = $1::uuid
+        AND status = 'active'
+        AND expires_at <= NOW()
+    `,
+    [sessionId]
+  );
+}
+
+async function readSession(client: DBClient, sessionId: string): Promise<SessionRow> {
+  await expireSessionIfNeeded(client, sessionId);
+  const result = await client.query<SessionRow>(
+    `
+      SELECT
+        ds.id,
+        ds.creator_user_id,
+        ds.market_id,
+        m.slug AS market_slug,
+        m.short_label AS market_short_label,
+        ds.status,
+        ds.code_hint,
+        ds.code_revoked_at,
+        ds.filters,
+        ds.expires_at,
+        ds.ended_at,
+        ds.created_at,
+        ds.updated_at
+      FROM decision_sessions ds
+      JOIN markets m ON m.id = ds.market_id
+      WHERE ds.id = $1::uuid
+      LIMIT 1
+    `,
+    [sessionId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw notFoundError("Decision session was not found.");
+  }
+  return row;
+}
+
+async function readMembership(
+  client: DBClient,
+  sessionId: string,
+  userId: string
+): Promise<MembershipRow | null> {
+  const result = await client.query<MembershipRow>(
+    `
+      SELECT id, session_id, user_id, role, status, source, joined_at, created_at, updated_at
+      FROM decision_session_members
+      WHERE session_id = $1::uuid
+        AND user_id = $2::uuid
+      LIMIT 1
+    `,
+    [sessionId, userId]
+  );
+  return result.rows[0] ?? null;
+}
+
+async function assertNoBlocksBetween(client: DBClient, leftUserId: string, rightUserId: string): Promise<void> {
+  const result = await client.query<{ blocked: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM blocked_users
+        WHERE (blocker_user_id = $1::uuid AND blocked_user_id = $2::uuid)
+           OR (blocker_user_id = $2::uuid AND blocked_user_id = $1::uuid)
+      ) AS blocked
+    `,
+    [leftUserId, rightUserId]
+  );
+  if (result.rows[0]?.blocked) {
+    throw new ApiError(403, "USER_BLOCKED", "This decision session is blocked.");
+  }
+}
+
+async function assertNoBlocksWithJoinedMembers(
+  client: DBClient,
+  sessionId: string,
+  userId: string
+): Promise<void> {
+  const result = await client.query<{ blocked: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM decision_session_members dsm
+        JOIN blocked_users b
+          ON (b.blocker_user_id = $2::uuid AND b.blocked_user_id = dsm.user_id)
+          OR (b.blocker_user_id = dsm.user_id AND b.blocked_user_id = $2::uuid)
+        WHERE dsm.session_id = $1::uuid
+          AND dsm.status = 'joined'
+          AND dsm.user_id <> $2::uuid
+      ) AS blocked
+    `,
+    [sessionId, userId]
+  );
+  if (result.rows[0]?.blocked) {
+    throw new ApiError(403, "USER_BLOCKED", "This decision session is blocked.");
+  }
+}
+
+async function assertAcceptedFriendship(client: DBClient, leftUserId: string, rightUserId: string): Promise<void> {
+  const result = await client.query<{ is_friend: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM friendships
+        WHERE status = 'accepted'
+          AND LEAST(requester_user_id::text, addressee_user_id::text) = LEAST($1::uuid::text, $2::uuid::text)
+          AND GREATEST(requester_user_id::text, addressee_user_id::text) = GREATEST($1::uuid::text, $2::uuid::text)
+      ) AS is_friend
+    `,
+    [leftUserId, rightUserId]
+  );
+  if (!result.rows[0]?.is_friend) {
+    throw new ApiError(403, "FRIENDSHIP_REQUIRED", "Decision sessions are friend-scoped.");
+  }
+}
+
+async function assertCodeFriendshipWithJoinedMember(
+  client: DBClient,
+  sessionId: string,
+  userId: string
+): Promise<void> {
+  const result = await client.query<{ is_friend: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM decision_session_members dsm
+        JOIN friendships f
+          ON f.status = 'accepted'
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST(dsm.user_id::text, $2::uuid::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST(dsm.user_id::text, $2::uuid::text)
+        WHERE dsm.session_id = $1::uuid
+          AND dsm.status = 'joined'
+          AND dsm.user_id <> $2::uuid
+      ) AS is_friend
+    `,
+    [sessionId, userId]
+  );
+  if (!result.rows[0]?.is_friend) {
+    throw new ApiError(403, "FRIENDSHIP_REQUIRED", "A session code only works for friends of joined members.");
+  }
+}
+
+async function assertVisibleMember(client: DBClient, sessionId: string, userId: string): Promise<MembershipRow> {
+  const membership = await readMembership(client, sessionId, userId);
+  if (!membership) {
+    throw notFoundError("Decision session was not found.");
+  }
+  await assertNoBlocksWithJoinedMembers(client, sessionId, userId);
+  return membership;
+}
+
+function assertActiveSession(session: SessionRow): void {
+  if (session.status !== "active") {
+    throw new ApiError(409, "DECISION_SESSION_CLOSED", "This decision session is no longer active.");
+  }
+}
+
+function assertCreator(session: SessionRow, account: AccountState): void {
+  if (session.creator_user_id !== account.user.id) {
+    throw new ApiError(403, "CREATOR_REQUIRED", "Only the session creator can do this.");
+  }
+}
+
+async function ensureEligibleUser(client: DBClient, userId: string): Promise<void> {
+  const result = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM users
+      WHERE id = $1::uuid
+        AND deleted_at IS NULL
+        AND eligibility_status = 'eligible'
+      LIMIT 1
+    `,
+    [userId]
+  );
+  if (!result.rows[0]) {
+    throw notFoundError("User profile was not found.");
+  }
+}
+
+async function sessionExpiryForMarket(client: DBClient, marketId: string): Promise<string> {
+  const result = await client.query<{ expires_at: string }>(
+    `
+      SELECT (
+        (
+          date_trunc('day', NOW() AT TIME ZONE timezone)
+          + CASE
+              WHEN (NOW() AT TIME ZONE timezone)::time < TIME '04:00'
+                THEN INTERVAL '4 hours'
+              ELSE INTERVAL '1 day 4 hours'
+            END
+        ) AT TIME ZONE timezone
+      ) AS expires_at
+      FROM markets
+      WHERE id = $1::uuid
+      LIMIT 1
+    `,
+    [marketId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw notFoundError("Market was not found.");
+  }
+  return row.expires_at;
+}
+
+async function readJoinedPreferences(client: DBClient, sessionId: string): Promise<JoinedPreferenceRow[]> {
+  const result = await client.query<JoinedPreferenceRow>(
+    `
+      SELECT
+        dsm.user_id,
+        COALESCE(pref.preferences, '{}'::jsonb) AS preferences
+      FROM decision_session_members dsm
+      LEFT JOIN LATERAL (
+        SELECT jsonb_object_agg(category, keys) AS preferences
+        FROM (
+          SELECT category, jsonb_agg(preference_key ORDER BY position ASC) AS keys
+          FROM user_preferences
+          WHERE user_id = dsm.user_id
+          GROUP BY category
+        ) grouped
+      ) pref ON true
+      WHERE dsm.session_id = $1::uuid
+        AND dsm.status = 'joined'
+      ORDER BY dsm.joined_at ASC NULLS LAST, dsm.created_at ASC
+    `,
+    [sessionId]
+  );
+  return result.rows;
+}
+
+async function readCandidates(
+  client: DBClient,
+  sessionId: string,
+  viewerUserId: string
+): Promise<CandidateRow[]> {
+  const result = await client.query<CandidateRow>(
+    `
+      SELECT
+        dsc.id,
+        dsc.session_id,
+        dsc.venue_id,
+        dsc.original_rank,
+        dsc.base_score,
+        dsc.snapshot,
+        COALESCE(vote_counts.in_count, 0) AS in_count,
+        COALESCE(vote_counts.skip_count, 0) AS skip_count,
+        viewer_vote.vote AS viewer_vote
+      FROM decision_session_candidates dsc
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*) FILTER (WHERE vote = 'in')::int AS in_count,
+          COUNT(*) FILTER (WHERE vote = 'skip')::int AS skip_count
+        FROM decision_votes dv
+        WHERE dv.session_id = dsc.session_id
+          AND dv.candidate_id = dsc.id
+      ) vote_counts ON true
+      LEFT JOIN LATERAL (
+        SELECT vote
+        FROM decision_votes dv
+        WHERE dv.session_id = dsc.session_id
+          AND dv.candidate_id = dsc.id
+          AND dv.user_id = $2::uuid
+        LIMIT 1
+      ) viewer_vote ON true
+      WHERE dsc.session_id = $1::uuid
+      ORDER BY dsc.original_rank ASC
+    `,
+    [sessionId, viewerUserId]
+  );
+  return result.rows;
+}
+
+async function countMembers(client: DBClient, sessionId: string) {
+  const result = await client.query<{ joined: string; invited: string }>(
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'joined')::text AS joined,
+        COUNT(*) FILTER (WHERE status = 'invited')::text AS invited
+      FROM decision_session_members
+      WHERE session_id = $1::uuid
+    `,
+    [sessionId]
+  );
+  const row = result.rows[0];
+  return {
+    joined: Number(row?.joined ?? 0),
+    invited: Number(row?.invited ?? 0)
+  };
+}
+
+async function formatSessionResponse(
+  client: DBClient,
+  sessionId: string,
+  account: AccountState,
+  code?: string
+) {
+  const session = await readSession(client, sessionId);
+  const membership = await assertVisibleMember(client, sessionId, account.user.id);
+  const joinedPreferences = await readJoinedPreferences(client, sessionId);
+  const candidates = (await readCandidates(client, sessionId, account.user.id)).map((candidate) =>
+    formatCandidate(candidate, joinedPreferences)
+  );
+  const leader = chooseLeader(candidates);
+  const memberCounts = await countMembers(client, sessionId);
+
+  return {
+    session: {
+      id: session.id,
+      status: session.status,
+      market: {
+        id: session.market_id,
+        slug: session.market_slug,
+        short_label: session.market_short_label
+      },
+      filters: session.filters ?? {},
+      expires_at: session.expires_at,
+      ended_at: session.ended_at,
+      code_hint: session.code_hint,
+      code_revoked_at: session.code_revoked_at,
+      ...(code ? { code } : {}),
+      member_counts: memberCounts,
+      viewer_role: membership.role,
+      viewer_status: membership.status,
+      created_at: session.created_at,
+      updated_at: session.updated_at
+    },
+    candidates,
+    leader
+  };
+}
+
+async function formatSessionSummary(client: DBClient, sessionId: string, account: AccountState) {
+  const detail = await formatSessionResponse(client, sessionId, account);
+  return {
+    id: detail.session.id,
+    status: detail.session.status,
+    market: detail.session.market,
+    expires_at: detail.session.expires_at,
+    code_hint: detail.session.code_hint,
+    code_revoked_at: detail.session.code_revoked_at,
+    member_counts: detail.session.member_counts,
+    viewer_role: detail.session.viewer_role,
+    viewer_status: detail.session.viewer_status,
+    leader: detail.leader
+      ? {
+          id: detail.leader.id,
+          venue_id: detail.leader.venue_id,
+          venue_name: detail.leader.venue.name,
+          in_count: detail.leader.in_count,
+          group_fit_score: detail.leader.group_fit_score
+        }
+      : null
+  };
+}
+
+export async function listDecisionSessions(account: AccountState) {
+  requireEligible(account);
+  const result = await dbQuery<{ id: string }>(
+    `
+      SELECT ds.id
+      FROM decision_sessions ds
+      JOIN decision_session_members dsm ON dsm.session_id = ds.id
+      WHERE dsm.user_id = $1::uuid
+        AND ds.status IN ('active', 'ended')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM decision_session_members joined
+          JOIN blocked_users b
+            ON (b.blocker_user_id = $1::uuid AND b.blocked_user_id = joined.user_id)
+            OR (b.blocker_user_id = joined.user_id AND b.blocked_user_id = $1::uuid)
+          WHERE joined.session_id = ds.id
+            AND joined.status = 'joined'
+            AND joined.user_id <> $1::uuid
+        )
+      ORDER BY ds.expires_at DESC, ds.created_at DESC
+      LIMIT 20
+    `,
+    [account.user.id]
+  );
+
+  const items = [];
+  for (const row of result.rows) {
+    items.push(await formatSessionSummary({ query: dbQuery }, row.id, account));
+  }
+  return { items };
+}
+
+export async function createDecisionSession(input: {
+  account: AccountState;
+  marketId: string;
+  filters?: DecisionFilters;
+  invitedUserIds?: string[];
+}) {
+  requireEligible(input.account);
+  const market = await findMarketByIdOrSlug(input.marketId);
+  if (market.launch_status !== "active" && market.launch_status !== "preview") {
+    throw new ApiError(404, "MARKET_NOT_AVAILABLE", "This market is not available yet.");
+  }
+
+  const filters = safeFilters(input.filters);
+  const recommendations = await listRecommendations({
+    account: input.account,
+    marketId: market.id,
+    pulse: filters.pulse,
+    limit: 60
+  });
+  const preferred = recommendations.items.filter((item) => candidateMatchesFilters(item, filters));
+  const preferredIds = new Set(preferred.map((item) => item.venue.id));
+  const fallback = recommendations.items.filter((item) => !preferredIds.has(item.venue.id));
+  const slate = [...preferred, ...fallback].slice(0, SESSION_SIZE);
+
+  if (slate.length < SESSION_SIZE) {
+    throw new ApiError(409, "INSUFFICIENT_CANDIDATES", "Not enough venues are available for a decision session.");
+  }
+
+  const invitedUserIds = [...new Set(input.invitedUserIds ?? [])].filter((userId) => userId !== input.account.user.id);
+  const code = generateDecisionCode();
+  const tokenHash = hashCode(code);
+
+  const sessionId = await dbTransaction(async (client) => {
+    for (const invitedUserId of invitedUserIds) {
+      await ensureEligibleUser(client, invitedUserId);
+      await assertNoBlocksBetween(client, input.account.user.id, invitedUserId);
+      await assertAcceptedFriendship(client, input.account.user.id, invitedUserId);
+    }
+
+    const expiresAt = await sessionExpiryForMarket(client, market.id);
+    const session = await client.query<{ id: string }>(
+      `
+        INSERT INTO decision_sessions (
+          creator_user_id,
+          market_id,
+          token_hash,
+          code_hint,
+          filters,
+          metadata,
+          expires_at
+        )
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::timestamptz)
+        RETURNING id
+      `,
+      [
+        input.account.user.id,
+        market.id,
+        tokenHash,
+        codeHint(code),
+        JSON.stringify(filters),
+        JSON.stringify({ phase: "phase_6b_decision_mvp" }),
+        expiresAt
+      ]
+    );
+    const id = session.rows[0]?.id;
+    if (!id) {
+      throw new Error("Failed to create decision session.");
+    }
+
+    await client.query(
+      `
+        INSERT INTO decision_session_members (session_id, user_id, role, status, source, joined_at)
+        VALUES ($1::uuid, $2::uuid, 'creator', 'joined', 'creator', NOW())
+      `,
+      [id, input.account.user.id]
+    );
+
+    for (const invitedUserId of invitedUserIds) {
+      await client.query(
+        `
+          INSERT INTO decision_session_members (session_id, user_id, role, status, source)
+          VALUES ($1::uuid, $2::uuid, 'member', 'invited', 'invited')
+          ON CONFLICT (session_id, user_id) DO NOTHING
+        `,
+        [id, invitedUserId]
+      );
+    }
+
+    for (const [index, item] of slate.entries()) {
+      await client.query(
+        `
+          INSERT INTO decision_session_candidates (
+            session_id,
+            venue_id,
+            original_rank,
+            base_score,
+            snapshot
+          )
+          VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb)
+        `,
+        [id, item.venue.id, index + 1, item.score, JSON.stringify(buildSnapshot(item))]
+      );
+    }
+
+    return id;
+  });
+
+  return formatSessionResponse({ query: dbQuery }, sessionId, input.account, code);
+}
+
+export async function getDecisionSession(account: AccountState, sessionId: string) {
+  requireEligible(account);
+  return formatSessionResponse({ query: dbQuery }, sessionId, account);
+}
+
+export async function joinDecisionSession(input: {
+  account: AccountState;
+  sessionId: string;
+  code?: string;
+}) {
+  requireEligible(input.account);
+
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, input.sessionId);
+    assertActiveSession(session);
+    await assertNoBlocksWithJoinedMembers(client, input.sessionId, input.account.user.id);
+    const membership = await readMembership(client, input.sessionId, input.account.user.id);
+
+    if (membership?.status === "joined") {
+      return;
+    }
+
+    if (membership?.status === "invited") {
+      await client.query(
+        `
+          UPDATE decision_session_members
+          SET status = 'joined',
+              joined_at = NOW()
+          WHERE id = $1::uuid
+        `,
+        [membership.id]
+      );
+      return;
+    }
+
+    if (!input.code) {
+      throw new ApiError(403, "SESSION_CODE_REQUIRED", "A session code is required.");
+    }
+
+    const codeResult = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM decision_sessions
+        WHERE id = $1::uuid
+          AND status = 'active'
+          AND expires_at > NOW()
+          AND code_revoked_at IS NULL
+          AND token_hash = $2
+        LIMIT 1
+      `,
+      [input.sessionId, hashCode(input.code)]
+    );
+    if (!codeResult.rows[0]) {
+      throw new ApiError(403, "SESSION_CODE_INVALID", "This session code is no longer available.");
+    }
+
+    await assertCodeFriendshipWithJoinedMember(client, input.sessionId, input.account.user.id);
+    await client.query(
+      `
+        INSERT INTO decision_session_members (session_id, user_id, role, status, source, joined_at)
+        VALUES ($1::uuid, $2::uuid, 'member', 'joined', 'code', NOW())
+        ON CONFLICT (session_id, user_id) DO UPDATE SET
+          status = 'joined',
+          source = 'code',
+          joined_at = COALESCE(decision_session_members.joined_at, NOW())
+      `,
+      [input.sessionId, input.account.user.id]
+    );
+  });
+
+  return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
+}
+
+export async function voteDecisionSession(input: {
+  account: AccountState;
+  sessionId: string;
+  candidateId?: string;
+  venueId?: string;
+  vote: VoteValue;
+}) {
+  requireEligible(input.account);
+  if (!input.candidateId && !input.venueId) {
+    throw validationError("candidate_id or venue_id is required.", { candidate_id: "Required" });
+  }
+
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, input.sessionId);
+    assertActiveSession(session);
+    const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
+    if (membership.status !== "joined") {
+      throw new ApiError(403, "SESSION_JOIN_REQUIRED", "Join the decision session before voting.");
+    }
+
+    const candidate = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM decision_session_candidates
+        WHERE session_id = $1::uuid
+          AND (
+            ($2::uuid IS NOT NULL AND id = $2::uuid)
+            OR ($3::uuid IS NOT NULL AND venue_id = $3::uuid)
+          )
+        LIMIT 1
+      `,
+      [input.sessionId, input.candidateId ?? null, input.venueId ?? null]
+    );
+    const candidateId = candidate.rows[0]?.id;
+    if (!candidateId) {
+      throw notFoundError("Decision candidate was not found.");
+    }
+
+    await client.query(
+      `
+        INSERT INTO decision_votes (session_id, candidate_id, user_id, vote)
+        VALUES ($1::uuid, $2::uuid, $3::uuid, $4)
+        ON CONFLICT (session_id, candidate_id, user_id) DO UPDATE SET
+          vote = EXCLUDED.vote,
+          updated_at = NOW()
+      `,
+      [input.sessionId, candidateId, input.account.user.id, input.vote]
+    );
+  });
+
+  return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
+}
+
+export async function revokeDecisionSessionCode(account: AccountState, sessionId: string) {
+  requireEligible(account);
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, sessionId);
+    assertCreator(session, account);
+    await client.query(
+      `
+        UPDATE decision_sessions
+        SET code_revoked_at = COALESCE(code_revoked_at, NOW()),
+            token_hash = NULL
+        WHERE id = $1::uuid
+      `,
+      [sessionId]
+    );
+  });
+  return formatSessionResponse({ query: dbQuery }, sessionId, account);
+}
+
+export async function endDecisionSession(account: AccountState, sessionId: string) {
+  requireEligible(account);
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, sessionId);
+    assertCreator(session, account);
+    await client.query(
+      `
+        UPDATE decision_sessions
+        SET status = 'ended',
+            ended_at = COALESCE(ended_at, NOW())
+        WHERE id = $1::uuid
+          AND status = 'active'
+      `,
+      [sessionId]
+    );
+  });
+  return formatSessionResponse({ query: dbQuery }, sessionId, account);
+}

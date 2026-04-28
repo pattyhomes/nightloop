@@ -23,6 +23,15 @@ import { getVenue, listVenues } from "../../services/v1/venueService";
 import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
 import {
+  createDecisionSession,
+  endDecisionSession,
+  getDecisionSession,
+  joinDecisionSession,
+  listDecisionSessions,
+  revokeDecisionSessionCode,
+  voteDecisionSession
+} from "../../services/v1/decisionService";
+import {
   acceptFriendInvite,
   acceptFriendRequest,
   addActivityReply,
@@ -205,6 +214,45 @@ const SocialReportSchema = z
     details: z.record(z.string(), z.unknown()).optional()
   })
   .strict();
+
+const DecisionFiltersSchema = z
+  .object({
+    neighborhood: z.string().trim().min(1).max(80).optional(),
+    category: z.string().trim().min(1).max(40).optional(),
+    pulse: z.enum(["chill", "active", "packed"]).optional()
+  })
+  .strict();
+
+const DecisionCreateSchema = z
+  .object({
+    market_id: z.string().min(1),
+    invited_user_ids: z.array(z.string().uuid()).max(20).optional(),
+    filters: DecisionFiltersSchema.optional()
+  })
+  .strict();
+
+const DecisionJoinSchema = z
+  .object({
+    code: z.string().trim().min(6).max(40).optional()
+  })
+  .strict();
+
+const DecisionVoteSchema = z
+  .object({
+    candidate_id: z.string().uuid().optional(),
+    venue_id: z.string().uuid().optional(),
+    vote: z.enum(["in", "skip"])
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.candidate_id && !value.venue_id) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["candidate_id"],
+        message: "candidate_id or venue_id is required."
+      });
+    }
+  });
 
 function accountFromRequest(req: Request): AccountState {
   if (!req.account) {
@@ -582,6 +630,91 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
           details: body.details
         })
       );
+    })
+  );
+
+  router.get(
+    "/decision-sessions",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await listDecisionSessions(accountFromRequest(req)));
+    })
+  );
+
+  router.post(
+    "/decision-sessions",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionCreateSchema, req.body);
+      res.status(201).json(
+        await createDecisionSession({
+          account: accountFromRequest(req),
+          marketId: body.market_id,
+          invitedUserIds: body.invited_user_ids,
+          filters: body.filters
+        })
+      );
+    })
+  );
+
+  router.get(
+    "/decision-sessions/:id",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await getDecisionSession(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/join",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionJoinSchema, req.body);
+      res.json(
+        await joinDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          code: body.code
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/votes",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionVoteSchema, req.body);
+      res.json(
+        await voteDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: body.candidate_id,
+          venueId: body.venue_id,
+          vote: body.vote
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/revoke-code",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await revokeDecisionSessionCode(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/end",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await endDecisionSession(accountFromRequest(req), req.params.id));
     })
   );
 

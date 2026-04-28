@@ -469,6 +469,27 @@ export async function deleteAccount(
     );
     await client.query(
       `
+        DELETE FROM decision_sessions
+        WHERE creator_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        DELETE FROM decision_votes
+        WHERE user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        DELETE FROM decision_session_members
+        WHERE user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
         DELETE FROM blocked_users
         WHERE blocker_user_id = $1::uuid
            OR blocked_user_id = $1::uuid
