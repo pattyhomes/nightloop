@@ -14,6 +14,27 @@ export type DiscoveredEventSource = {
   score: number;
 };
 
+export type DiscoveryRejectionReason =
+  | "external_non_provider"
+  | "invalid_url"
+  | "not_event_source"
+  | "one_off_event_detail_page"
+  | "static_or_excluded";
+
+export type RejectedEventSourceCandidate = {
+  href: string;
+  source_url: string | null;
+  label: string | null;
+  reason: DiscoveryRejectionReason;
+};
+
+export type EventSourceDiscoveryReport = {
+  durable_sources: DiscoveredEventSource[];
+  detail_page_candidates: RejectedEventSourceCandidate[];
+  rejected_candidates: RejectedEventSourceCandidate[];
+  errored_candidates: RejectedEventSourceCandidate[];
+};
+
 type LinkCandidate = {
   href: string;
   label: string;
@@ -52,6 +73,15 @@ function normalizeUrl(value: string, baseUrl: string): string | null {
   }
 }
 
+function rejection(link: LinkCandidate, sourceUrl: string | null, reason: DiscoveryRejectionReason): RejectedEventSourceCandidate {
+  return {
+    href: link.href,
+    source_url: sourceUrl,
+    label: link.label || null,
+    reason
+  };
+}
+
 function linkCandidates(html: string): LinkCandidate[] {
   const candidates: LinkCandidate[] = [];
   const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
@@ -72,6 +102,19 @@ function linkCandidates(html: string): LinkCandidate[] {
     });
   }
   return candidates;
+}
+
+function isStaticOrExcluded(candidateUrl: URL, label: string): boolean {
+  return staticAssetPattern.test(`${candidateUrl.pathname}${candidateUrl.search}`)
+    || excludedPathPattern.test(candidateUrl.pathname)
+    || excludedLabelPattern.test(label);
+}
+
+function isOneOffEventDetailPage(candidateUrl: URL): boolean {
+  const path = candidateUrl.pathname.replace(/\/+$/, "");
+  if (/^\/tm-event\/[^/]+$/i.test(path)) return true;
+  if (/^\/event\/[^/]+$/i.test(path)) return true;
+  return false;
 }
 
 function eventbriteProvider(candidateUrl: URL): DiscoveredEventSource | null {
@@ -101,8 +144,8 @@ function eventbriteProvider(candidateUrl: URL): DiscoveredEventSource | null {
 
 function venueSourceType(candidateUrl: URL, label: string): DiscoveredEventSourceType | null {
   const haystack = `${candidateUrl.pathname} ${candidateUrl.search} ${label}`;
-  if (staticAssetPattern.test(`${candidateUrl.pathname}${candidateUrl.search}`)) return null;
-  if (excludedLabelPattern.test(label)) return null;
+  if (isStaticOrExcluded(candidateUrl, label)) return null;
+  if (isOneOffEventDetailPage(candidateUrl)) return null;
   const isRootPath = candidateUrl.pathname === "/" || candidateUrl.pathname === "";
   if (/\.ics(?:$|\?)|^webcal:/i.test(`${candidateUrl.pathname}${candidateUrl.search}`)) return "venue_ical";
   if (/\.json(?:$|\?)|format=json|output=json/i.test(haystack) && eventIntentPattern.test(haystack)) return "venue_json";
@@ -126,14 +169,20 @@ function dedupeKey(source: DiscoveredEventSource): string {
   return `${source.source_type}:${source.provider_id ?? source.source_url}`;
 }
 
-export function discoverEventSourcesFromHtml(html: string, baseUrl: string, maxPerVenue = 4): DiscoveredEventSource[] {
+export function analyzeEventSourcesFromHtml(html: string, baseUrl: string, maxPerVenue = 4): EventSourceDiscoveryReport {
   const base = new URL(baseUrl);
   const baseHost = normalizeHost(base.hostname);
   const discovered = new Map<string, DiscoveredEventSource>();
+  const detailPageCandidates: RejectedEventSourceCandidate[] = [];
+  const rejectedCandidates: RejectedEventSourceCandidate[] = [];
+  const erroredCandidates: RejectedEventSourceCandidate[] = [];
 
   for (const link of linkCandidates(html)) {
     const normalized = normalizeUrl(link.href, baseUrl);
-    if (!normalized) continue;
+    if (!normalized) {
+      erroredCandidates.push(rejection(link, null, "invalid_url"));
+      continue;
+    }
     const candidateUrl = new URL(normalized);
     const eventbrite = eventbriteProvider(candidateUrl);
     if (eventbrite) {
@@ -141,11 +190,28 @@ export function discoverEventSourcesFromHtml(html: string, baseUrl: string, maxP
       continue;
     }
 
-    if (normalizeHost(candidateUrl.hostname) !== baseHost) continue;
+    if (normalizeHost(candidateUrl.hostname) !== baseHost) {
+      rejectedCandidates.push(rejection(link, candidateUrl.toString(), "external_non_provider"));
+      continue;
+    }
+    if (isOneOffEventDetailPage(candidateUrl)) {
+      detailPageCandidates.push(rejection(link, candidateUrl.toString(), "one_off_event_detail_page"));
+      continue;
+    }
+    if (isStaticOrExcluded(candidateUrl, link.label)) {
+      rejectedCandidates.push(rejection(link, candidateUrl.toString(), "static_or_excluded"));
+      continue;
+    }
     const sourceType = venueSourceType(candidateUrl, link.label);
-    if (!sourceType) continue;
+    if (!sourceType) {
+      rejectedCandidates.push(rejection(link, candidateUrl.toString(), "not_event_source"));
+      continue;
+    }
     const score = scoreVenueSource(sourceType, candidateUrl, link.label);
-    if (score < 0.55) continue;
+    if (score < 0.55) {
+      rejectedCandidates.push(rejection(link, candidateUrl.toString(), "not_event_source"));
+      continue;
+    }
     const source = {
       source_type: sourceType,
       source_url: candidateUrl.toString(),
@@ -156,7 +222,16 @@ export function discoverEventSourcesFromHtml(html: string, baseUrl: string, maxP
     discovered.set(dedupeKey(source), source);
   }
 
-  return [...discovered.values()]
+  return {
+    durable_sources: [...discovered.values()]
     .sort((left, right) => right.score - left.score)
-    .slice(0, Math.max(1, maxPerVenue));
+      .slice(0, Math.max(1, maxPerVenue)),
+    detail_page_candidates: detailPageCandidates,
+    rejected_candidates: rejectedCandidates,
+    errored_candidates: erroredCandidates
+  };
+}
+
+export function discoverEventSourcesFromHtml(html: string, baseUrl: string, maxPerVenue = 4): DiscoveredEventSource[] {
+  return analyzeEventSourcesFromHtml(html, baseUrl, maxPerVenue).durable_sources;
 }

@@ -1,7 +1,11 @@
 import path from "path";
 import { config as loadDotenv } from "dotenv";
 import { dbQuery, getDBClient } from "../lib/db";
-import { discoverEventSourcesFromHtml, type DiscoveredEventSource } from "../services/v1/eventSourceDiscovery";
+import {
+  analyzeEventSourcesFromHtml,
+  type DiscoveredEventSource,
+  type EventSourceDiscoveryReport
+} from "../services/v1/eventSourceDiscovery";
 import { robotsAllowsPath } from "../services/v1/eventIngestionService";
 import { PUBLIC_VENUE_SQL } from "../services/v1/recommendationTrust";
 
@@ -11,6 +15,7 @@ type Args = {
   market: string;
   limit: number;
   maxPerVenue: number;
+  reportMode: boolean;
   trustStatus: "trusted" | "review_required";
   summaryOnly: boolean;
 };
@@ -26,6 +31,7 @@ type DiscoveryPlan = {
   candidate: VenueWebsiteRow;
   robots_status: string;
   sources: DiscoveredEventSource[];
+  report: EventSourceDiscoveryReport;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -37,6 +43,7 @@ function parseArgs(argv: string[]): Args {
     market: argv.find((arg) => arg.startsWith("--market="))?.slice("--market=".length) ?? "san-francisco",
     limit: Number(argv.find((arg) => arg.startsWith("--limit="))?.slice("--limit=".length) ?? (apply ? "25" : "50")),
     maxPerVenue: Number(argv.find((arg) => arg.startsWith("--max-per-venue="))?.slice("--max-per-venue=".length) ?? "4"),
+    reportMode: argv.includes("--report"),
     trustStatus: trust === "trusted" ? "trusted" : "review_required",
     summaryOnly: argv.includes("--summary")
   };
@@ -139,12 +146,25 @@ async function existingSourceKeys(venueId: string): Promise<Set<string>> {
 
 async function discover(candidate: VenueWebsiteRow, maxPerVenue: number): Promise<DiscoveryPlan> {
   const robots = await robotsAllowed(candidate.website_url);
-  if (!robots.allowed) return { candidate, robots_status: robots.status, sources: [] };
+  if (!robots.allowed) {
+    return {
+      candidate,
+      robots_status: robots.status,
+      sources: [],
+      report: {
+        durable_sources: [],
+        detail_page_candidates: [],
+        rejected_candidates: [],
+        errored_candidates: []
+      }
+    };
+  }
   const html = await fetchText(candidate.website_url);
   const existing = await existingSourceKeys(candidate.id);
-  const sources = discoverEventSourcesFromHtml(html, candidate.website_url, maxPerVenue)
+  const report = analyzeEventSourcesFromHtml(html, candidate.website_url, maxPerVenue);
+  const sources = report.durable_sources
     .filter((source) => !existing.has(`${source.source_type}:${source.provider_id ?? source.source_url}`));
-  return { candidate, robots_status: robots.status, sources };
+  return { candidate, robots_status: robots.status, sources, report };
 }
 
 async function applySource(plan: DiscoveryPlan, source: DiscoveredEventSource, trustStatus: Args["trustStatus"]): Promise<void> {
@@ -196,7 +216,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const marketId = await getMarketId(args.market);
   const candidates = await loadCandidates(marketId, args.limit);
-  const shouldFetch = args.apply || args.fetchDryRun;
+  const shouldFetch = args.apply || args.fetchDryRun || args.reportMode;
   const summary = {
     mode: args.apply ? "apply" : "dry-run",
     market_id: marketId,
@@ -238,11 +258,19 @@ async function main(): Promise<void> {
   }
 
   const sourceCount = plans.reduce((count, plan) => count + plan.sources.length, 0);
+  const reportSummary = {
+    durable_source_candidates: plans.reduce((count, plan) => count + plan.report.durable_sources.length, 0),
+    new_durable_sources: sourceCount,
+    detail_page_candidates: plans.reduce((count, plan) => count + plan.report.detail_page_candidates.length, 0),
+    rejected_candidates: plans.reduce((count, plan) => count + plan.report.rejected_candidates.length, 0),
+    errored_candidates: plans.reduce((count, plan) => count + plan.report.errored_candidates.length, 0)
+  };
   console.log(JSON.stringify({
     ...summary,
     discovered_sources: sourceCount,
     writes_completed: args.apply ? sourceCount : 0,
     errors_count: errors.length,
+    report_summary: args.reportMode ? reportSummary : undefined,
     plans: args.summaryOnly ? undefined : plans
       .filter((plan) => plan.sources.length > 0)
       .map((plan) => ({
@@ -252,6 +280,24 @@ async function main(): Promise<void> {
         robots_status: plan.robots_status,
         sources: plan.sources
       })),
+    report: args.reportMode && !args.summaryOnly ? plans
+      .map((plan) => ({
+        venue_id: plan.candidate.id,
+        venue_name: plan.candidate.name,
+        website_url: plan.candidate.website_url,
+        robots_status: plan.robots_status,
+        durable_source_candidates: plan.report.durable_sources,
+        new_durable_sources: plan.sources,
+        detail_page_candidates: plan.report.detail_page_candidates,
+        rejected_candidates: plan.report.rejected_candidates,
+        errored_candidates: plan.report.errored_candidates
+      }))
+      .filter((plan) =>
+        plan.durable_source_candidates.length > 0
+        || plan.detail_page_candidates.length > 0
+        || plan.rejected_candidates.length > 0
+        || plan.errored_candidates.length > 0
+      ) : undefined,
     errors: args.summaryOnly ? undefined : errors
   }, null, 2));
 }

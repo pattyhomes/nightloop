@@ -8,7 +8,7 @@ import {
   robotsAllowsPath,
   sanitizeFetchedEvent
 } from "../src/services/v1/eventIngestionService";
-import { discoverEventSourcesFromHtml } from "../src/services/v1/eventSourceDiscovery";
+import { analyzeEventSourcesFromHtml, discoverEventSourcesFromHtml } from "../src/services/v1/eventSourceDiscovery";
 
 describe("Phase 5.8 venue event ingestion", () => {
   it("parses iCal feeds and stores only approved event fields", () => {
@@ -176,5 +176,48 @@ Allow: /events
     expect(JSON.stringify(sources)).not.toContain("comments/feed");
     expect(JSON.stringify(sources)).not.toContain("venue-rental");
     expect(JSON.stringify(sources)).not.toContain("\"https://venue.example/\"");
+  });
+
+  it("does not persist one-off event detail pages as reusable event sources", () => {
+    const sources = discoverEventSourcesFromHtml(`
+<html><body>
+  <a href="/events/">All Events</a>
+  <a href="/tm-event/otis-kane/">More Info</a>
+  <a href="/event/coco-breezy-05-02/">Coco Breezy</a>
+  <a href="/calendar">Calendar</a>
+</body></html>
+`, "https://venue.example/");
+
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_url: "https://venue.example/events/" }),
+      expect.objectContaining({ source_url: "https://venue.example/calendar" })
+    ]));
+    expect(JSON.stringify(sources)).not.toContain("/tm-event/");
+    expect(JSON.stringify(sources)).not.toContain("/event/coco-breezy");
+  });
+
+  it("reports durable, detail-page, rejected, and errored discovery buckets for ops review", () => {
+    const report = analyzeEventSourcesFromHtml(`
+<html><body>
+  <a href="/events">Events</a>
+  <a href="/tm-event/otis-kane/">More Info</a>
+  <a href="/private">Private</a>
+  <link href="/wp-content/themes/site.css">
+  <a href="https://www.eventbrite.com/o/nightloop-room-123456789">Eventbrite</a>
+</body></html>
+`, "https://venue.example/");
+
+    expect(report.durable_sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_url: "https://venue.example/events" }),
+      expect.objectContaining({ source_type: "eventbrite_organizer", provider_id: "123456789" })
+    ]));
+    expect(report.detail_page_candidates).toEqual([
+      expect.objectContaining({ source_url: "https://venue.example/tm-event/otis-kane/", reason: "one_off_event_detail_page" })
+    ]);
+    expect(report.rejected_candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_url: "https://venue.example/private", reason: "static_or_excluded" }),
+      expect.objectContaining({ source_url: "https://venue.example/wp-content/themes/site.css", reason: "static_or_excluded" })
+    ]));
+    expect(report.errored_candidates).toEqual([]);
   });
 });

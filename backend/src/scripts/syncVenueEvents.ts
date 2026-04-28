@@ -19,6 +19,7 @@ type Args = {
   fetchDryRun: boolean;
   market: string;
   limit: number;
+  reportMode: boolean;
   summaryOnly: boolean;
 };
 
@@ -35,6 +36,17 @@ type EventSourceRow = {
   metadata: Record<string, unknown>;
 };
 
+type SourceFetchReport = {
+  source_id: string;
+  venue_name: string;
+  source_type: string;
+  source_url: string | null;
+  provider_id: string | null;
+  trust_status: EventSourceRow["trust_status"];
+  robots_status: string;
+  events_count: number;
+};
+
 const EVENTBRITE_BASE = "https://www.eventbriteapi.com/v3";
 
 function parseArgs(argv: string[]): Args {
@@ -44,6 +56,7 @@ function parseArgs(argv: string[]): Args {
     fetchDryRun: argv.includes("--fetch-dry-run"),
     market: argv.find((arg) => arg.startsWith("--market="))?.slice("--market=".length) ?? "san-francisco",
     limit: Number(argv.find((arg) => arg.startsWith("--limit="))?.slice("--limit=".length) ?? (apply ? "25" : "50")),
+    reportMode: argv.includes("--report"),
     summaryOnly: argv.includes("--summary")
   };
 }
@@ -339,7 +352,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const marketId = await getMarketId(args.market);
   const sources = await loadSources(marketId, args.limit);
-  const shouldFetch = args.apply || args.fetchDryRun;
+  const shouldFetch = args.apply || args.fetchDryRun || args.reportMode;
 
   const summary = {
     mode: args.apply ? "apply" : "dry-run",
@@ -360,19 +373,32 @@ async function main(): Promise<void> {
 
   const events: Array<{ source_id: string; venue_name: string; event: SanitizedFetchedEvent }> = [];
   const errors: Array<{ source_id: string; venue_name: string; error: string }> = [];
+  const sourceReports: SourceFetchReport[] = [];
   const seenEvents = new Set<string>();
   for (const source of sources) {
     try {
       const fetched = await fetchEventsForSource(source);
+      let sourceEventCount = 0;
       for (const event of fetched.events) {
         const eventKey = `${eventSourceName(source)}:${event.source_event_id ?? event.url ?? event.title}:${event.starts_at}`;
         if (seenEvents.has(eventKey)) continue;
         seenEvents.add(eventKey);
         if (Date.parse(event.starts_at) >= Date.now() - 6 * 60 * 60 * 1000) {
           events.push({ source_id: source.id, venue_name: source.venue_name, event });
+          sourceEventCount += 1;
           if (args.apply) await applyEvent(source, event);
         }
       }
+      sourceReports.push({
+        source_id: source.id,
+        venue_name: source.venue_name,
+        source_type: source.source_type,
+        source_url: source.source_url,
+        provider_id: source.provider_id,
+        trust_status: source.trust_status,
+        robots_status: fetched.robotsStatus,
+        events_count: sourceEventCount
+      });
       if (args.apply) await markSource(source, fetched.robotsStatus);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -386,6 +412,15 @@ async function main(): Promise<void> {
     writes_completed: args.apply ? events.length : 0,
     events_count: events.length,
     errors_count: errors.length,
+    report_summary: args.reportMode ? {
+      fetched_sources: sourceReports.length,
+      zero_event_sources: sourceReports.filter((source) => source.events_count === 0).length,
+      errored_sources: errors.length
+    } : undefined,
+    source_report: args.reportMode && !args.summaryOnly ? {
+      zero_event_sources: sourceReports.filter((source) => source.events_count === 0),
+      errored_sources: errors
+    } : undefined,
     events: args.summaryOnly ? undefined : events,
     errors: args.summaryOnly ? undefined : errors
   }, null, 2));
