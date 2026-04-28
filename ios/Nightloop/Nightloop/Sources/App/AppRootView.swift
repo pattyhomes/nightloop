@@ -101,7 +101,7 @@ struct NightloopTabShell: View {
                 }
             case .friends:
                 NavigationStack {
-                    FriendsShellView()
+                    FriendsShellView(apiClient: apiClient, authStore: authStore, me: me)
                 }
             case .profile:
                 NavigationStack {

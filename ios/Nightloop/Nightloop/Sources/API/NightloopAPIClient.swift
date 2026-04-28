@@ -117,6 +117,116 @@ struct NightloopAPIClient {
         )
     }
 
+    func friends(bearerToken: String) async throws -> FriendsResponse {
+        try await send(path: "friends", bearerToken: bearerToken)
+    }
+
+    func searchFriends(query: String, bearerToken: String, limit: Int = 20) async throws -> FriendSearchResponse {
+        try await send(
+            path: "friends/search",
+            queryItems: [
+                URLQueryItem(name: "q", value: query),
+                URLQueryItem(name: "limit", value: String(limit))
+            ],
+            bearerToken: bearerToken
+        )
+    }
+
+    func friendActivity(bearerToken: String, limit: Int = 30) async throws -> FriendActivityResponse {
+        try await send(
+            path: "friends/activity",
+            queryItems: [URLQueryItem(name: "limit", value: String(limit))],
+            bearerToken: bearerToken
+        )
+    }
+
+    func sendFriendRequest(userID: String, bearerToken: String) async throws -> FriendRequestResponse {
+        try await send(path: "friends/requests", method: "POST", bearerToken: bearerToken, body: UserIDBody(userID: userID))
+    }
+
+    func acceptFriendRequest(friendshipID: String, bearerToken: String) async throws -> FriendshipResponse {
+        try await send(path: "friends/requests/\(friendshipID)/accept", method: "POST", bearerToken: bearerToken, body: EmptyBody())
+    }
+
+    func declineFriendRequest(friendshipID: String, bearerToken: String) async throws -> FriendshipResponse {
+        try await send(path: "friends/requests/\(friendshipID)/decline", method: "POST", bearerToken: bearerToken, body: EmptyBody())
+    }
+
+    func cancelFriendRequest(friendshipID: String, bearerToken: String) async throws -> SocialStatusResponse {
+        try await send(path: "friends/requests/\(friendshipID)", method: "DELETE", bearerToken: bearerToken)
+    }
+
+    func unfriend(userID: String, bearerToken: String) async throws -> SocialStatusResponse {
+        try await send(path: "friends/\(userID)", method: "DELETE", bearerToken: bearerToken)
+    }
+
+    func blockUser(userID: String, bearerToken: String) async throws -> FriendBlockResponse {
+        try await send(path: "friends/blocks", method: "POST", bearerToken: bearerToken, body: UserIDBody(userID: userID))
+    }
+
+    func createFriendInvite(bearerToken: String) async throws -> FriendInviteResponse {
+        try await send(path: "friends/invites", method: "POST", bearerToken: bearerToken, body: EmptyBody())
+    }
+
+    func acceptFriendInvite(code: String, bearerToken: String) async throws -> FriendshipResponse {
+        try await send(path: "friends/invites/accept", method: "POST", bearerToken: bearerToken, body: InviteAcceptBody(code: code))
+    }
+
+    func revokeFriendInvite(inviteID: String, bearerToken: String) async throws -> FriendInviteResponse {
+        try await send(path: "friends/invites/\(inviteID)", method: "DELETE", bearerToken: bearerToken)
+    }
+
+    func toggleComing(venueID: String, isComing: Bool, bearerToken: String) async throws -> FriendActivityMutationResponse {
+        try await send(
+            path: "friends/venues/\(venueID)/coming",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: ComingBody(isComing: isComing)
+        )
+    }
+
+    func cancelComing(venueID: String, bearerToken: String) async throws -> SocialStatusResponse {
+        try await send(
+            path: "friends/venues/\(venueID)/coming",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: ComingBody(isComing: false)
+        )
+    }
+
+    func replyToActivity(
+        activityID: String,
+        kind: FriendActivityType,
+        text: String? = nil,
+        signalKind: SignalKind? = nil,
+        bearerToken: String
+    ) async throws -> FriendReplyResponse {
+        try await send(
+            path: "friends/activity/\(activityID)/replies",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: ActivityReplyBody(kind: kind, text: text, signalKind: signalKind)
+        )
+    }
+
+    func reportActivity(activityID: String, reason: String, bearerToken: String) async throws -> SocialReportResponse {
+        try await send(
+            path: "friends/activity/\(activityID)/report",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: SocialReportBody(reason: reason)
+        )
+    }
+
+    func reportProfile(userID: String, reason: String, bearerToken: String) async throws -> SocialReportResponse {
+        try await send(
+            path: "friends/profiles/\(userID)/report",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: SocialReportBody(reason: reason)
+        )
+    }
+
     func replacePreferences(_ preferences: [String: [String]], bearerToken: String) async throws -> PreferencesResponse {
         try await send(path: "me/preferences", method: "PUT", bearerToken: bearerToken, body: preferences)
     }
@@ -301,6 +411,44 @@ private struct SignalBody: Encodable {
         case location
         case details
     }
+}
+
+private struct EmptyBody: Encodable {}
+
+private struct UserIDBody: Encodable {
+    let userID: String
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+    }
+}
+
+private struct InviteAcceptBody: Encodable {
+    let code: String
+}
+
+private struct ComingBody: Encodable {
+    let isComing: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case isComing = "is_coming"
+    }
+}
+
+private struct ActivityReplyBody: Encodable {
+    let kind: FriendActivityType
+    let text: String?
+    let signalKind: SignalKind?
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case text
+        case signalKind = "signal_kind"
+    }
+}
+
+private struct SocialReportBody: Encodable {
+    let reason: String
 }
 
 #if DEBUG

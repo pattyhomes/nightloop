@@ -340,6 +340,138 @@ struct RecentSignalItem: Decodable, Identifiable, Equatable {
     let observedAt: String
 }
 
+struct FriendProfile: Codable, Identifiable, Equatable {
+    let id: String
+    let displayName: String
+    let username: String
+    let avatarKind: String
+    let bio: String?
+}
+
+struct Friendship: Codable, Identifiable, Equatable {
+    let id: String
+    let status: String
+    let direction: String
+    let requesterUserId: String
+    let addresseeUserId: String
+    let respondedAt: String?
+    let createdAt: String
+    let updatedAt: String
+}
+
+struct FriendConnection: Codable, Identifiable, Equatable {
+    let user: FriendProfile
+    let friendship: Friendship
+
+    var id: String { friendship.id }
+}
+
+struct FriendsResponse: Decodable, Equatable {
+    let friends: [FriendConnection]
+    let incomingRequests: [FriendConnection]
+    let outgoingRequests: [FriendConnection]
+}
+
+struct FriendSearchItem: Decodable, Identifiable, Equatable {
+    let id: String
+    let displayName: String
+    let username: String
+    let avatarKind: String
+    let bio: String?
+    let friendshipStatus: String
+    let friendshipId: String?
+    let direction: String
+}
+
+struct FriendSearchResponse: Decodable, Equatable {
+    let items: [FriendSearchItem]
+}
+
+struct FriendshipResponse: Decodable, Equatable {
+    let friendship: Friendship
+}
+
+struct FriendRequestResponse: Decodable, Equatable {
+    let created: Bool?
+    let user: FriendProfile?
+    let friendship: Friendship
+}
+
+struct FriendBlockResponse: Decodable, Equatable {
+    let blocked: FriendProfile
+}
+
+struct FriendInvite: Decodable, Identifiable, Equatable {
+    let id: String
+    let code: String?
+    let codeHint: String
+    let expiresAt: String
+    let revokedAt: String?
+    let createdAt: String
+}
+
+struct FriendInviteResponse: Decodable, Equatable {
+    let invite: FriendInvite
+}
+
+enum FriendActivityType: String, Codable, Equatable {
+    case signal
+    case coming
+    case comment
+    case emojiSignal = "emoji_signal"
+}
+
+struct FriendActivityVenue: Codable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let neighborhood: String?
+    let category: String?
+}
+
+struct FriendActivityReply: Codable, Identifiable, Equatable {
+    let id: String
+    let type: FriendActivityType
+    let text: String?
+    let signalKind: SignalKind?
+    let createdAt: String
+    let actor: FriendProfile
+}
+
+struct FriendActivityItem: Codable, Identifiable, Equatable {
+    let id: String
+    let type: FriendActivityType
+    let signalKind: SignalKind?
+    let text: String?
+    let actor: FriendProfile
+    let venue: FriendActivityVenue?
+    let viewerHasComing: Bool
+    let comingCount: Int
+    let replies: [FriendActivityReply]
+    let expiresAt: String
+    let createdAt: String
+}
+
+struct FriendActivityResponse: Decodable, Equatable {
+    let items: [FriendActivityItem]
+}
+
+struct FriendActivityMutationResponse: Decodable, Equatable {
+    let activity: FriendActivityItem
+}
+
+struct FriendReplyResponse: Decodable, Equatable {
+    let reply: FriendActivityItem
+}
+
+struct SocialReportResponse: Decodable, Equatable {
+    let reportId: String?
+}
+
+struct SocialStatusResponse: Decodable, Equatable {
+    let status: String
+    let message: String?
+}
+
 #if DEBUG
 struct DevConfirmedAuthUserResponse: Decodable, Equatable {
     let message: String

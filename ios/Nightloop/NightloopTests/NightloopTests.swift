@@ -651,6 +651,112 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.items.first?.pointsAwarded, 3)
     }
 
+    func testSocialPayloadsDecodeFriendsAndActivity() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let friends = try decoder.decode(FriendsResponse.self, from: Self.friendsFixtureData())
+        XCTAssertEqual(friends.friends.first?.user.displayName, "Maya")
+        XCTAssertEqual(friends.friends.first?.friendship.status, "accepted")
+        XCTAssertEqual(friends.incomingRequests.first?.friendship.direction, "incoming")
+
+        let activity = try decoder.decode(FriendActivityResponse.self, from: Self.friendActivityFixtureData())
+        XCTAssertEqual(activity.items.first?.type, .signal)
+        XCTAssertEqual(activity.items.first?.signalKind, .packed)
+        XCTAssertEqual(activity.items.first?.actor.displayName, "Maya")
+        XCTAssertEqual(activity.items.first?.venue?.name, "Halcyon")
+        XCTAssertEqual(activity.items.first?.replies.first?.type, .comment)
+        XCTAssertEqual(activity.items.first?.replies.first?.text, "got a booth")
+    }
+
+    func testSocialClientBuildsProtectedRequests() async throws {
+        var seen: [String] = []
+        URLProtocolMock.requestHandler = { request in
+            let path = try XCTUnwrap(request.url?.path)
+            seen.append(path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: path.contains("invites") || path.contains("blocks") || path.contains("coming") || path.contains("replies") || path.contains("report") ? 201 : 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+
+            switch path {
+            case "/api/v1/friends/search":
+                XCTAssertEqual(request.url?.query, "q=maya&limit=20")
+                return (response, Data(#"{"items":[{"id":"user-2","display_name":"Maya","username":"maya","avatar_kind":"initials","bio":null,"friendship_status":"none","friendship_id":null,"direction":"none"}]}"#.utf8))
+            case "/api/v1/friends/requests":
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["user_id"] as? String, "user-2")
+                return (response, Data(#"{"friendship":{"id":"friendship-1","status":"pending","direction":"outgoing","requester_user_id":"user-1","addressee_user_id":"user-2","responded_at":null,"created_at":"2026-04-28T00:00:00Z","updated_at":"2026-04-28T00:00:00Z"}}"#.utf8))
+            case "/api/v1/friends/requests/friendship-1/accept":
+                return (response, Data(#"{"friendship":{"id":"friendship-1","status":"accepted","direction":"incoming","requester_user_id":"user-1","addressee_user_id":"user-2","responded_at":"2026-04-28T00:00:00Z","created_at":"2026-04-28T00:00:00Z","updated_at":"2026-04-28T00:00:00Z"}}"#.utf8))
+            case "/api/v1/friends/blocks":
+                return (response, Data(#"{"blocked":{"id":"user-2","display_name":"Maya","username":"maya","avatar_kind":"initials","bio":null}}"#.utf8))
+            case "/api/v1/friends/invites":
+                return (response, Data(#"{"invite":{"id":"invite-1","code":"NL-ABCD-2345","code_hint":"2345","expires_at":"2026-05-05T00:00:00Z","revoked_at":null,"created_at":"2026-04-28T00:00:00Z"}}"#.utf8))
+            case "/api/v1/friends/invites/accept":
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["code"] as? String, "NL-ABCD-2345")
+                return (response, Data(#"{"friendship":{"id":"friendship-1","status":"accepted","direction":"incoming","requester_user_id":"user-1","addressee_user_id":"user-2","responded_at":"2026-04-28T00:00:00Z","created_at":"2026-04-28T00:00:00Z","updated_at":"2026-04-28T00:00:00Z"}}"#.utf8))
+            case "/api/v1/friends/activity":
+                return (response, Self.friendActivityFixtureData())
+            case "/api/v1/friends/venues/venue-1/coming":
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                if object["is_coming"] as? Bool == true {
+                    return (response, Data(#"{"activity":{"id":"activity-2","type":"coming","signal_kind":null,"text":null,"actor":{"id":"user-1","display_name":"Alex","username":"alex","avatar_kind":"initials","bio":null},"venue":{"id":"venue-1","name":"Halcyon","neighborhood":"SoMa","category":"club"},"viewer_has_coming":true,"coming_count":1,"replies":[],"expires_at":"2026-04-29T11:00:00Z","created_at":"2026-04-28T00:00:00Z"}}"#.utf8))
+                }
+                XCTAssertEqual(object["is_coming"] as? Bool, false)
+                return (response, Data(#"{"status":"cancelled"}"#.utf8))
+            case "/api/v1/friends/activity/activity-1/replies":
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["kind"] as? String, "comment")
+                XCTAssertEqual(object["text"] as? String, "got a booth")
+                return (response, Data(#"{"reply":{"id":"reply-1","type":"comment","signal_kind":null,"text":"got a booth","actor":{"id":"user-1","display_name":"Alex","username":"alex","avatar_kind":"initials","bio":null},"venue":null,"viewer_has_coming":false,"coming_count":0,"replies":[],"expires_at":"2026-04-29T11:00:00Z","created_at":"2026-04-28T00:00:00Z"}}"#.utf8))
+            case "/api/v1/friends/activity/activity-1/report":
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["reason"] as? String, "spam")
+                return (response, Data(#"{"report_id":"report-1"}"#.utf8))
+            case "/api/v1/friends/profiles/user-2/report":
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["reason"] as? String, "inappropriate")
+                return (response, Data(#"{"report_id":"report-2"}"#.utf8))
+            default:
+                XCTFail("Unexpected social path \(path)")
+                return (response, Data("{}".utf8))
+            }
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        _ = try await client.searchFriends(query: "maya", bearerToken: "test-token")
+        _ = try await client.sendFriendRequest(userID: "user-2", bearerToken: "test-token")
+        _ = try await client.acceptFriendRequest(friendshipID: "friendship-1", bearerToken: "test-token")
+        _ = try await client.blockUser(userID: "user-2", bearerToken: "test-token")
+        _ = try await client.createFriendInvite(bearerToken: "test-token")
+        _ = try await client.acceptFriendInvite(code: "NL-ABCD-2345", bearerToken: "test-token")
+        _ = try await client.friendActivity(bearerToken: "test-token")
+        _ = try await client.toggleComing(venueID: "venue-1", isComing: true, bearerToken: "test-token")
+        _ = try await client.cancelComing(venueID: "venue-1", bearerToken: "test-token")
+        _ = try await client.replyToActivity(activityID: "activity-1", kind: .comment, text: "got a booth", bearerToken: "test-token")
+        _ = try await client.reportActivity(activityID: "activity-1", reason: "spam", bearerToken: "test-token")
+        _ = try await client.reportProfile(userID: "user-2", reason: "inappropriate", bearerToken: "test-token")
+
+        XCTAssertEqual(seen.count, 12)
+    }
+
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {
         URLProtocolMock.requestHandler = { request in
             XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/me/profile")
@@ -820,6 +926,75 @@ final class NightloopTests: XCTestCase {
           "next_cursor": null,
           "items": [
             \(String(data: venueFixtureJSON(), encoding: .utf8)!)
+          ]
+        }
+        """.utf8)
+    }
+
+    private static func friendsFixtureData() -> Data {
+        Data("""
+        {
+          "friends": [
+            {
+              "user": { "id": "user-2", "display_name": "Maya", "username": "maya", "avatar_kind": "initials", "bio": null },
+              "friendship": {
+                "id": "friendship-1",
+                "status": "accepted",
+                "direction": "outgoing",
+                "requester_user_id": "user-1",
+                "addressee_user_id": "user-2",
+                "responded_at": "2026-04-28T00:00:00Z",
+                "created_at": "2026-04-28T00:00:00Z",
+                "updated_at": "2026-04-28T00:00:00Z"
+              }
+            }
+          ],
+          "incoming_requests": [
+            {
+              "user": { "id": "user-3", "display_name": "Rosa", "username": "rosa", "avatar_kind": "initials", "bio": null },
+              "friendship": {
+                "id": "friendship-2",
+                "status": "pending",
+                "direction": "incoming",
+                "requester_user_id": "user-3",
+                "addressee_user_id": "user-1",
+                "responded_at": null,
+                "created_at": "2026-04-28T00:00:00Z",
+                "updated_at": "2026-04-28T00:00:00Z"
+              }
+            }
+          ],
+          "outgoing_requests": []
+        }
+        """.utf8)
+    }
+
+    private static func friendActivityFixtureData() -> Data {
+        Data("""
+        {
+          "items": [
+            {
+              "id": "activity-1",
+              "type": "signal",
+              "signal_kind": "packed",
+              "text": null,
+              "actor": { "id": "user-2", "display_name": "Maya", "username": "maya", "avatar_kind": "initials", "bio": null },
+              "venue": { "id": "venue-1", "name": "Halcyon", "neighborhood": "SoMa", "category": "club" },
+              "viewer_has_coming": false,
+              "coming_count": 1,
+              "replies": [
+                {
+                  "id": "reply-1",
+                  "type": "comment",
+                  "text": "got a booth",
+                  "signal_kind": null,
+                  "created_at": "2026-04-28T00:05:00Z",
+                  "actor": { "id": "user-3", "display_name": "Rosa", "username": "rosa", "avatar_kind": "initials" }
+                }
+              ],
+              "expires_at": "2026-04-29T11:00:00Z",
+              "created_at": "2026-04-28T00:00:00Z"
+            }
           ]
         }
         """.utf8)
