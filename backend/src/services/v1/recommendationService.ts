@@ -302,6 +302,7 @@ export async function listRecommendations(query: RecommendationQuery) {
   const limit = Math.max(1, Math.min(60, Math.floor(query.limit ?? 20)));
   const pulseLevel = pulseFilterToLevel(query.pulse);
   const mode = recommendationMode(market);
+  const viewerUserId = query.account.user.id;
 
   if (market.launch_status !== "active" && market.launch_status !== "preview") {
     throw new ApiError(404, "MARKET_NOT_AVAILABLE", "This market is not available yet.");
@@ -343,6 +344,8 @@ export async function listRecommendations(query: RecommendationQuery) {
         schedule_pack.verified_at AS schedule_verified_at,
         schedule_pack.fetched_at AS schedule_fetched_at,
         COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata,
+        COALESCE(friend_pack.friends_here_count, 0) AS friends_here_count,
+        friend_pack.first_friend_name,
         vri.venue_quality_score,
         vri.source_confidence_score,
         vri.event_score,
@@ -426,6 +429,30 @@ export async function listRecommendations(query: RecommendationQuery) {
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(DISTINCT ae.actor_user_id)::int AS friends_here_count,
+          MIN(p.display_name) AS first_friend_name
+        FROM activity_events ae
+        JOIN user_profiles p ON p.user_id = ae.actor_user_id
+        JOIN user_settings us ON us.user_id = ae.actor_user_id
+        JOIN friendships f
+          ON f.status = 'accepted'
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($3::uuid::text, ae.actor_user_id::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($3::uuid::text, ae.actor_user_id::text)
+        WHERE ae.venue_id = v.id
+          AND ae.parent_activity_id IS NULL
+          AND ae.type IN ('signal', 'coming')
+          AND ae.expires_at > NOW()
+          AND ae.actor_user_id <> $3::uuid
+          AND COALESCE(us.ghost_mode, false) = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM blocked_users b
+            WHERE (b.blocker_user_id = $3::uuid AND b.blocked_user_id = ae.actor_user_id)
+               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $3::uuid)
+          )
+      ) friend_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
@@ -433,7 +460,7 @@ export async function listRecommendations(query: RecommendationQuery) {
         AND ($2::int IS NULL OR COALESCE(vls.pulse_level, 1) = $2::int)
       LIMIT 300
     `,
-    [market.id, pulseLevel ?? null]
+    [market.id, pulseLevel ?? null, viewerUserId]
   );
 
   const scored = rerankForDiversity(
@@ -457,6 +484,7 @@ export async function listRecommendations(query: RecommendationQuery) {
   const counts = { all: 0, packed: 0, active: 0, chill: 0, friends: 0 };
   for (const row of result.rows) {
     counts.all += 1;
+    if (Number(row.friends_here_count ?? 0) > 0) counts.friends += 1;
     if (Number(row.pulse_level ?? 1) >= 3) counts.packed += 1;
     else if (Number(row.pulse_level ?? 1) >= 2) counts.active += 1;
     else counts.chill += 1;

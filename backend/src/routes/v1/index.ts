@@ -22,6 +22,26 @@ import { getMarketConfig, listMarkets } from "../../services/v1/marketService";
 import { getVenue, listVenues } from "../../services/v1/venueService";
 import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
+import {
+  acceptFriendInvite,
+  acceptFriendRequest,
+  addActivityReply,
+  blockUser,
+  cancelFriendRequest,
+  createFriendInvite,
+  declineFriendRequest,
+  listBlocks,
+  listFriendActivity,
+  listFriends,
+  reportActivity,
+  reportProfile,
+  revokeFriendInvite,
+  searchProfiles,
+  sendFriendRequest,
+  toggleComing,
+  unblockUser,
+  unfriend
+} from "../../services/v1/socialService";
 import { createAdminRouter } from "./admin";
 
 declare global {
@@ -126,6 +146,65 @@ const DevConfirmedAuthUserSchema = z
 const RecentSignalsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).optional()
 });
+
+const FriendSearchQuerySchema = z.object({
+  q: z.string().trim().min(2).max(80),
+  limit: z.coerce.number().int().positive().max(30).optional()
+});
+
+const FriendActivityQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).optional()
+});
+
+const UserIdBodySchema = z
+  .object({
+    user_id: z.string().uuid()
+  })
+  .strict();
+
+const InviteAcceptSchema = z
+  .object({
+    code: z.string().trim().min(6).max(40)
+  })
+  .strict();
+
+const ComingBodySchema = z
+  .object({
+    is_coming: z.boolean().default(true)
+  })
+  .strict();
+
+const ActivityReplySchema = z
+  .object({
+    kind: z.enum(["comment", "emoji_signal"]),
+    text: z.string().trim().min(1).max(140).optional(),
+    signal_kind: z.enum(["packed", "short_line", "long_line", "dead", "event_live"]).optional(),
+    details: z.record(z.string(), z.unknown()).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.kind === "comment" && !value.text) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "Text is required for comment replies."
+      });
+    }
+    if (value.kind === "emoji_signal" && !value.signal_kind) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["signal_kind"],
+        message: "signal_kind is required for emoji signal replies."
+      });
+    }
+  });
+
+const SocialReportSchema = z
+  .object({
+    reason: z.string().trim().min(2).max(80),
+    details: z.record(z.string(), z.unknown()).optional()
+  })
+  .strict();
 
 function accountFromRequest(req: Request): AccountState {
   if (!req.account) {
@@ -309,6 +388,203 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     })
   );
 
+  router.get(
+    "/friends",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await listFriends(accountFromRequest(req)));
+    })
+  );
+
+  router.get(
+    "/friends/search",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(FriendSearchQuerySchema, req.query);
+      res.json(await searchProfiles({ account: accountFromRequest(req), q: query.q, limit: query.limit }));
+    })
+  );
+
+  router.post(
+    "/friends/requests",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(UserIdBodySchema, req.body);
+      const result = await sendFriendRequest(accountFromRequest(req), body.user_id);
+      res.status(result.created ? 201 : 200).json(result);
+    })
+  );
+
+  router.post(
+    "/friends/requests/:id/accept",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await acceptFriendRequest(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/friends/requests/:id/decline",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await declineFriendRequest(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.delete(
+    "/friends/requests/:id",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await cancelFriendRequest(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.delete(
+    "/friends/:userId",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await unfriend(accountFromRequest(req), req.params.userId));
+    })
+  );
+
+  router.get(
+    "/friends/blocks",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await listBlocks(accountFromRequest(req)));
+    })
+  );
+
+  router.post(
+    "/friends/blocks",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(UserIdBodySchema, req.body);
+      const result = await blockUser(accountFromRequest(req), body.user_id);
+      res.status(201).json(result);
+    })
+  );
+
+  router.delete(
+    "/friends/blocks/:userId",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await unblockUser(accountFromRequest(req), req.params.userId));
+    })
+  );
+
+  router.post(
+    "/friends/invites",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.status(201).json(await createFriendInvite(accountFromRequest(req)));
+    })
+  );
+
+  router.delete(
+    "/friends/invites/:id",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await revokeFriendInvite(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/friends/invites/accept",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(InviteAcceptSchema, req.body);
+      res.json(await acceptFriendInvite(accountFromRequest(req), body.code));
+    })
+  );
+
+  router.get(
+    "/friends/activity",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(FriendActivityQuerySchema, req.query);
+      res.json(await listFriendActivity({ account: accountFromRequest(req), limit: query.limit }));
+    })
+  );
+
+  router.post(
+    "/friends/venues/:venueId/coming",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(ComingBodySchema, req.body);
+      const result = await toggleComing({
+        account: accountFromRequest(req),
+        venueId: req.params.venueId,
+        isComing: body.is_coming
+      });
+      res.status(body.is_coming ? 201 : 200).json(result);
+    })
+  );
+
+  router.post(
+    "/friends/activity/:id/replies",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(ActivityReplySchema, req.body);
+      res.status(201).json(
+        await addActivityReply({
+          account: accountFromRequest(req),
+          activityId: req.params.id,
+          kind: body.kind,
+          text: body.text,
+          signalKind: body.signal_kind,
+          details: body.details
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/friends/activity/:id/report",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SocialReportSchema, req.body);
+      res.status(201).json(
+        await reportActivity({
+          account: accountFromRequest(req),
+          activityId: req.params.id,
+          reason: body.reason,
+          details: body.details
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/friends/profiles/:userId/report",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SocialReportSchema, req.body);
+      res.status(201).json(
+        await reportProfile({
+          account: accountFromRequest(req),
+          userId: req.params.userId,
+          reason: body.reason,
+          details: body.details
+        })
+      );
+    })
+  );
+
   router.use("/admin", createAdminRouter(config));
 
   router.get(
@@ -334,6 +610,7 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
       const query = parseQuery(VenueQuerySchema, req.query);
       res.json(
         await listVenues({
+          account: accountFromRequest(req),
           marketId: query.market_id,
           lat: query.lat,
           lng: query.lng,
@@ -350,7 +627,7 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     "/venues/:id",
     requireEligibleMiddleware,
     asyncHandler(async (req, res) => {
-      res.json(await getVenue(req.params.id));
+      res.json(await getVenue(req.params.id, accountFromRequest(req)));
     })
   );
 

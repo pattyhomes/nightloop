@@ -1,5 +1,6 @@
 import { dbQuery } from "../../lib/db";
 import { notFoundError, validationError } from "../../lib/apiError";
+import type { AccountState } from "./accountService";
 import { findMarketByIdOrSlug } from "./marketService";
 import { buildVenueLiveness } from "./livenessService";
 import { PUBLIC_VENUE_SQL } from "./recommendationTrust";
@@ -38,9 +39,12 @@ export type VenueFeedRow = {
   schedule_verified_at: string | null;
   schedule_fetched_at: string | null;
   schedule_metadata: Record<string, unknown> | null;
+  friends_here_count?: number | null;
+  first_friend_name?: string | null;
 };
 
 export type VenueQuery = {
+  account?: AccountState;
   marketId: string;
   lat?: number;
   lng?: number;
@@ -197,8 +201,8 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
       metadata: effectiveScheduleMetadata ?? {}
     },
     friend_summary: {
-      friends_here_count: 0,
-      first_friend_name: null
+      friends_here_count: Number(row.friends_here_count ?? 0),
+      first_friend_name: row.first_friend_name ?? null
     },
     image,
     assets,
@@ -226,6 +230,7 @@ export async function listVenues(query: VenueQuery) {
   const pulseLevel = pulseFilterToLevel(query.pulse);
   const origin =
     query.lat == null || query.lng == null ? undefined : { lat: query.lat, lng: query.lng };
+  const viewerUserId = query.account?.user.id ?? null;
 
   const rows = await dbQuery<VenueFeedRow>(
     `
@@ -260,7 +265,9 @@ export async function listVenues(query: VenueQuery) {
         schedule_pack.confidence AS schedule_confidence,
         schedule_pack.verified_at AS schedule_verified_at,
         schedule_pack.fetched_at AS schedule_fetched_at,
-        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata
+        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata,
+        COALESCE(friend_pack.friends_here_count, 0) AS friends_here_count,
+        friend_pack.first_friend_name
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
@@ -338,6 +345,31 @@ export async function listVenues(query: VenueQuery) {
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(DISTINCT ae.actor_user_id)::int AS friends_here_count,
+          MIN(p.display_name) AS first_friend_name
+        FROM activity_events ae
+        JOIN user_profiles p ON p.user_id = ae.actor_user_id
+        JOIN user_settings us ON us.user_id = ae.actor_user_id
+        JOIN friendships f
+          ON f.status = 'accepted'
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($5::uuid::text, ae.actor_user_id::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($5::uuid::text, ae.actor_user_id::text)
+        WHERE $5::uuid IS NOT NULL
+          AND ae.venue_id = v.id
+          AND ae.parent_activity_id IS NULL
+          AND ae.type IN ('signal', 'coming')
+          AND ae.expires_at > NOW()
+          AND ae.actor_user_id <> $5::uuid
+          AND COALESCE(us.ghost_mode, false) = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM blocked_users b
+            WHERE (b.blocker_user_id = $5::uuid AND b.blocked_user_id = ae.actor_user_id)
+               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $5::uuid)
+          )
+      ) friend_pack ON true
       WHERE v.market_id = $1::uuid
         AND v.is_active = true
         AND v.admin_status = 'approved'
@@ -351,7 +383,7 @@ export async function listVenues(query: VenueQuery) {
       ORDER BY COALESCE(vls.energy_score, 28) DESC, v.name ASC
       LIMIT $4
     `,
-    [market.id, pulseLevel ?? null, query.q ?? null, limit]
+    [market.id, pulseLevel ?? null, query.q ?? null, limit, viewerUserId]
   );
 
   const countRows = await dbQuery<{ pulse_level: number; count: string }>(
@@ -376,6 +408,37 @@ export async function listVenues(query: VenueQuery) {
     else if (Number(row.pulse_level) >= 2) counts.active += count;
     else counts.chill += count;
   }
+  if (viewerUserId) {
+    const friendCount = await dbQuery<{ count: string }>(
+      `
+        SELECT COUNT(DISTINCT ae.venue_id)::text AS count
+        FROM activity_events ae
+        JOIN venues v ON v.id = ae.venue_id
+        JOIN user_settings us ON us.user_id = ae.actor_user_id
+        JOIN friendships f
+          ON f.status = 'accepted'
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($1::uuid::text, ae.actor_user_id::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($1::uuid::text, ae.actor_user_id::text)
+        WHERE v.market_id = $2::uuid
+          AND v.is_active = true
+          AND v.admin_status = 'approved'
+          ${PUBLIC_VENUE_SQL}
+          AND ae.parent_activity_id IS NULL
+          AND ae.type IN ('signal', 'coming')
+          AND ae.expires_at > NOW()
+          AND ae.actor_user_id <> $1::uuid
+          AND COALESCE(us.ghost_mode, false) = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM blocked_users b
+            WHERE (b.blocker_user_id = $1::uuid AND b.blocked_user_id = ae.actor_user_id)
+               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $1::uuid)
+          )
+      `,
+      [viewerUserId, market.id]
+    );
+    counts.friends = Number(friendCount.rows[0]?.count ?? 0);
+  }
 
   return {
     generated_at: new Date().toISOString(),
@@ -389,7 +452,8 @@ export async function listVenues(query: VenueQuery) {
   };
 }
 
-export async function getVenue(idOrSlug: string) {
+export async function getVenue(idOrSlug: string, account?: AccountState) {
+  const viewerUserId = account?.user.id ?? null;
   const result = await dbQuery<VenueFeedRow>(
     `
       SELECT
@@ -423,7 +487,9 @@ export async function getVenue(idOrSlug: string) {
         schedule_pack.confidence AS schedule_confidence,
         schedule_pack.verified_at AS schedule_verified_at,
         schedule_pack.fetched_at AS schedule_fetched_at,
-        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata
+        COALESCE(schedule_pack.metadata, '{}'::jsonb) AS schedule_metadata,
+        COALESCE(friend_pack.friends_here_count, 0) AS friends_here_count,
+        friend_pack.first_friend_name
       FROM venues v
       JOIN markets m ON m.id = v.market_id
       LEFT JOIN venue_live_states vls ON vls.venue_id = v.id
@@ -501,13 +567,38 @@ export async function getVenue(idOrSlug: string) {
           COALESCE(vs.verified_at, vs.fetched_at, vs.updated_at) DESC
         LIMIT 1
       ) schedule_pack ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(DISTINCT ae.actor_user_id)::int AS friends_here_count,
+          MIN(p.display_name) AS first_friend_name
+        FROM activity_events ae
+        JOIN user_profiles p ON p.user_id = ae.actor_user_id
+        JOIN user_settings us ON us.user_id = ae.actor_user_id
+        JOIN friendships f
+          ON f.status = 'accepted'
+         AND LEAST(f.requester_user_id::text, f.addressee_user_id::text) = LEAST($2::uuid::text, ae.actor_user_id::text)
+         AND GREATEST(f.requester_user_id::text, f.addressee_user_id::text) = GREATEST($2::uuid::text, ae.actor_user_id::text)
+        WHERE $2::uuid IS NOT NULL
+          AND ae.venue_id = v.id
+          AND ae.parent_activity_id IS NULL
+          AND ae.type IN ('signal', 'coming')
+          AND ae.expires_at > NOW()
+          AND ae.actor_user_id <> $2::uuid
+          AND COALESCE(us.ghost_mode, false) = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM blocked_users b
+            WHERE (b.blocker_user_id = $2::uuid AND b.blocked_user_id = ae.actor_user_id)
+               OR (b.blocker_user_id = ae.actor_user_id AND b.blocked_user_id = $2::uuid)
+          )
+      ) friend_pack ON true
       WHERE (v.id::text = $1 OR v.slug = $1)
         AND v.is_active = true
         AND v.admin_status = 'approved'
         ${PUBLIC_VENUE_SQL}
       LIMIT 1
     `,
-    [idOrSlug]
+    [idOrSlug, viewerUserId]
   );
 
   const row = result.rows[0];

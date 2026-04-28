@@ -3,6 +3,7 @@ import type { AccountState } from "./accountService";
 import { requireEligible } from "./accountService";
 import { dbQuery, dbTransaction } from "../../lib/db";
 import { ApiError, notFoundError } from "../../lib/apiError";
+import { createSignalActivity } from "./socialService";
 
 export type UserSignalKind = "packed" | "short_line" | "long_line" | "dead" | "event_live";
 export type SignalDetails = {
@@ -468,6 +469,12 @@ export async function submitUserSignal(input: {
   });
 
   await recomputeVenueLiveState(venue);
+  await createSignalActivity({
+    account: input.account,
+    venueId: input.venueId,
+    signalId: result.signalId,
+    signalKind: input.kind
+  });
 
   await dbQuery(
     `

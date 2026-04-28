@@ -445,6 +445,44 @@ export async function deleteAccount(
       `,
       [account.user.id]
     );
+    await client.query(
+      `
+        DELETE FROM attendance_intents
+        WHERE user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        DELETE FROM activity_events
+        WHERE actor_user_id = $1::uuid
+           OR target_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        DELETE FROM friend_invites
+        WHERE user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        DELETE FROM blocked_users
+        WHERE blocker_user_id = $1::uuid
+           OR blocked_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
+    await client.query(
+      `
+        DELETE FROM friendships
+        WHERE requester_user_id = $1::uuid
+           OR addressee_user_id = $1::uuid
+      `,
+      [account.user.id]
+    );
     await client.query("DELETE FROM user_preferences WHERE user_id = $1::uuid", [account.user.id]);
     await client.query("DELETE FROM user_settings WHERE user_id = $1::uuid", [account.user.id]);
     await client.query(
