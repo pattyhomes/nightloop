@@ -23,6 +23,8 @@
     "evidence:foursquare": "tsx src/scripts/syncFoursquareEvidence.ts",
     "hours:osm": "tsx src/scripts/syncOpenStreetMapHours.ts",
     "hours:website": "tsx src/scripts/syncVenueWebsiteHours.ts",
+    "hours:mark-unknown": "tsx src/scripts/markUnknownVenueHours.ts",
+    "events:bootstrap-websites": "tsx src/scripts/bootstrapVenueEventSources.ts",
     "events:sync": "tsx src/scripts/syncVenueEvents.ts",
     "neighborhoods:sf": "tsx src/scripts/normalizeSfNeighborhoods.ts",
     "recommendations:refresh-inputs": "tsx src/scripts/refreshRecommendationInputs.ts"

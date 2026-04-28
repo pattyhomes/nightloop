@@ -23,8 +23,11 @@ type VenueRow = {
   neighborhood: string | null;
 };
 
-const DATASF_ANALYSIS_NEIGHBORHOODS_GEOJSON =
-  "https://data.sfgov.org/api/geospatial/p5b7-5n3h?method=export&format=GeoJSON";
+const DATASF_ANALYSIS_NEIGHBORHOODS_GEOJSON_URLS = [
+  // p5b7-5n3h is the public map wrapper. j2bu-swwd is the underlying GeoJSON source dataset.
+  "https://data.sfgov.org/api/geospatial/j2bu-swwd?method=export&format=GeoJSON",
+  "https://data.sfgov.org/api/geospatial/p5b7-5n3h?method=export&format=GeoJSON"
+];
 
 const fallbackNightlifePolygons: NeighborhoodFeature[] = [
   box("SoMa", -122.421, 37.769, -122.387, 37.789),
@@ -76,14 +79,32 @@ async function getMarketId(market: string): Promise<string> {
 }
 
 async function fetchDataSfFeatures(): Promise<NeighborhoodFeature[]> {
-  const response = await fetch(DATASF_ANALYSIS_NEIGHBORHOODS_GEOJSON);
-  if (!response.ok) throw new Error(`DataSF neighborhoods fetch failed: ${response.status}`);
-  const payload = await response.json() as {
-    features?: Array<{
-      properties?: Record<string, unknown>;
-      geometry?: GeoJsonPolygon;
-    }>;
-  };
+  let lastError: unknown = null;
+  for (const url of DATASF_ANALYSIS_NEIGHBORHOODS_GEOJSON_URLS) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`DataSF neighborhoods fetch failed: ${response.status}`);
+      const payload = await response.json() as {
+        features?: Array<{
+          properties?: Record<string, unknown>;
+          geometry?: GeoJsonPolygon;
+        }>;
+      };
+      const features = dataSfPayloadToFeatures(payload);
+      if (features.length > 0) return features;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("DataSF neighborhoods fetch produced no features");
+}
+
+function dataSfPayloadToFeatures(payload: {
+  features?: Array<{
+    properties?: Record<string, unknown>;
+    geometry?: GeoJsonPolygon;
+  }>;
+}): NeighborhoodFeature[] {
   return (payload.features ?? [])
     .map((feature) => {
       const properties = feature.properties ?? {};
