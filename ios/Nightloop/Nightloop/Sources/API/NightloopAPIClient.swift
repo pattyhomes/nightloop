@@ -227,6 +227,69 @@ struct NightloopAPIClient {
         )
     }
 
+    func decisionSessions(bearerToken: String) async throws -> DecisionSessionListResponse {
+        try await send(path: "decision-sessions", bearerToken: bearerToken)
+    }
+
+    func createDecisionSession(
+        marketID: String,
+        invitedUserIDs: [String],
+        filters: DecisionFilters?,
+        bearerToken: String
+    ) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionCreateBody(marketID: marketID, invitedUserIDs: invitedUserIDs, filters: filters)
+        )
+    }
+
+    func decisionSession(id: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(path: "decision-sessions/\(id)", bearerToken: bearerToken)
+    }
+
+    func joinDecisionSession(id: String, code: String?, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(id)/join",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionJoinBody(code: code)
+        )
+    }
+
+    func voteDecisionSession(
+        id: String,
+        candidateID: String,
+        vote: DecisionVoteValue,
+        bearerToken: String
+    ) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(id)/votes",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionVoteBody(candidateID: candidateID, venueID: nil, vote: vote)
+        )
+    }
+
+    func revokeDecisionSessionCode(id: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(id)/revoke-code",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: EmptyBody()
+        )
+    }
+
+    func endDecisionSession(id: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(id)/end",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: EmptyBody()
+        )
+    }
+
     func replacePreferences(_ preferences: [String: [String]], bearerToken: String) async throws -> PreferencesResponse {
         try await send(path: "me/preferences", method: "PUT", bearerToken: bearerToken, body: preferences)
     }
@@ -449,6 +512,34 @@ private struct ActivityReplyBody: Encodable {
 
 private struct SocialReportBody: Encodable {
     let reason: String
+}
+
+private struct DecisionCreateBody: Encodable {
+    let marketID: String
+    let invitedUserIDs: [String]
+    let filters: DecisionFilters?
+
+    enum CodingKeys: String, CodingKey {
+        case marketID = "market_id"
+        case invitedUserIDs = "invited_user_ids"
+        case filters
+    }
+}
+
+private struct DecisionJoinBody: Encodable {
+    let code: String?
+}
+
+private struct DecisionVoteBody: Encodable {
+    let candidateID: String?
+    let venueID: String?
+    let vote: DecisionVoteValue
+
+    enum CodingKeys: String, CodingKey {
+        case candidateID = "candidate_id"
+        case venueID = "venue_id"
+        case vote
+    }
 }
 
 #if DEBUG

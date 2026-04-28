@@ -472,6 +472,101 @@ struct SocialStatusResponse: Decodable, Equatable {
     let message: String?
 }
 
+struct DecisionFilters: Codable, Equatable {
+    let neighborhood: String?
+    let category: String?
+    let pulse: String?
+}
+
+struct DecisionSessionMarket: Decodable, Equatable {
+    let id: String
+    let slug: String
+    let shortLabel: String
+}
+
+struct DecisionMemberCounts: Decodable, Equatable {
+    let joined: Int
+    let invited: Int
+}
+
+struct DecisionSession: Decodable, Identifiable, Equatable {
+    let id: String
+    let status: String
+    let market: DecisionSessionMarket
+    let filters: DecisionFilters?
+    let expiresAt: String
+    let endedAt: String?
+    let codeHint: String?
+    let codeRevokedAt: String?
+    let code: String?
+    let memberCounts: DecisionMemberCounts
+    let viewerRole: String
+    let viewerStatus: String
+    let createdAt: String?
+    let updatedAt: String?
+}
+
+struct DecisionCandidateRecommendation: Decodable, Equatable {
+    let rank: Int
+    let score: Double
+    let reason: String
+    let confidence: RecommendationConfidence?
+    let liveness: VenueLiveness?
+    let expectedPulseBasis: [String]?
+    let factors: RecommendationFactors?
+}
+
+enum DecisionVoteValue: String, Codable, Equatable {
+    case voteIn = "in"
+    case skip
+}
+
+struct DecisionCandidate: Decodable, Identifiable, Equatable {
+    let id: String
+    let venueId: String
+    let originalRank: Int
+    let baseScore: Double
+    let venue: VenueItem
+    let recommendation: DecisionCandidateRecommendation
+    let inCount: Int
+    let skipCount: Int
+    let viewerVote: DecisionVoteValue?
+    let groupFitScore: Double
+    let groupFitMemberCount: Int
+    let groupFitReason: String
+}
+
+struct DecisionSessionResponse: Decodable, Equatable {
+    let session: DecisionSession
+    let candidates: [DecisionCandidate]
+    let leader: DecisionCandidate?
+}
+
+struct DecisionSessionSummaryLeader: Decodable, Equatable {
+    let id: String
+    let venueId: String
+    let venueName: String
+    let inCount: Int
+    let groupFitScore: Double
+}
+
+struct DecisionSessionSummary: Decodable, Identifiable, Equatable {
+    let id: String
+    let status: String
+    let market: DecisionSessionMarket
+    let expiresAt: String
+    let codeHint: String?
+    let codeRevokedAt: String?
+    let memberCounts: DecisionMemberCounts
+    let viewerRole: String
+    let viewerStatus: String
+    let leader: DecisionSessionSummaryLeader?
+}
+
+struct DecisionSessionListResponse: Decodable, Equatable {
+    let items: [DecisionSessionSummary]
+}
+
 #if DEBUG
 struct DevConfirmedAuthUserResponse: Decodable, Equatable {
     let message: String

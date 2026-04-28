@@ -669,6 +669,21 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(activity.items.first?.replies.first?.text, "got a booth")
     }
 
+    func testDecisionPayloadsDecodeSessionAndCandidates() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let response = try decoder.decode(DecisionSessionResponse.self, from: Self.decisionSessionFixtureData())
+
+        XCTAssertEqual(response.session.status, "active")
+        XCTAssertEqual(response.session.code, "ND-ABCD-2345")
+        XCTAssertEqual(response.session.memberCounts.joined, 2)
+        XCTAssertEqual(response.candidates.first?.venue.name, "Halcyon")
+        XCTAssertEqual(response.candidates.first?.viewerVote, .voteIn)
+        XCTAssertEqual(response.candidates.first?.recommendation.expectedPulseBasis?.first, "source-backed hours")
+        XCTAssertEqual(response.leader?.id, "candidate-1")
+    }
+
     func testSocialClientBuildsProtectedRequests() async throws {
         var seen: [String] = []
         URLProtocolMock.requestHandler = { request in
@@ -755,6 +770,76 @@ final class NightloopTests: XCTestCase {
         _ = try await client.reportProfile(userID: "user-2", reason: "inappropriate", bearerToken: "test-token")
 
         XCTAssertEqual(seen.count, 12)
+    }
+
+    func testDecisionClientBuildsProtectedRequests() async throws {
+        var seen: [String] = []
+        URLProtocolMock.requestHandler = { request in
+            let path = try XCTUnwrap(request.url?.path)
+            seen.append(path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let statusCode = path == "/api/v1/decision-sessions" && request.httpMethod == "POST" ? 201 : 200
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: statusCode,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+
+            switch (request.httpMethod, path) {
+            case ("GET", "/api/v1/decision-sessions"):
+                return (response, Self.decisionSessionListFixtureData())
+            case ("POST", "/api/v1/decision-sessions"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["market_id"] as? String, "market-1")
+                XCTAssertEqual(object["invited_user_ids"] as? [String], ["user-2"])
+                let filters = try XCTUnwrap(object["filters"] as? [String: Any])
+                XCTAssertEqual(filters["pulse"] as? String, "active")
+                return (response, Self.decisionSessionFixtureData())
+            case ("GET", "/api/v1/decision-sessions/session-1"):
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/join"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["code"] as? String, "ND-ABCD-2345")
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/votes"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["candidate_id"] as? String, "candidate-1")
+                XCTAssertEqual(object["vote"] as? String, "in")
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/revoke-code"),
+                 ("POST", "/api/v1/decision-sessions/session-1/end"):
+                return (response, Self.decisionSessionFixtureData())
+            default:
+                XCTFail("Unexpected decision path \(path)")
+                return (response, Data("{}".utf8))
+            }
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        _ = try await client.decisionSessions(bearerToken: "test-token")
+        _ = try await client.createDecisionSession(
+            marketID: "market-1",
+            invitedUserIDs: ["user-2"],
+            filters: DecisionFilters(neighborhood: nil, category: nil, pulse: "active"),
+            bearerToken: "test-token"
+        )
+        _ = try await client.decisionSession(id: "session-1", bearerToken: "test-token")
+        _ = try await client.joinDecisionSession(id: "session-1", code: "ND-ABCD-2345", bearerToken: "test-token")
+        _ = try await client.voteDecisionSession(id: "session-1", candidateID: "candidate-1", vote: .voteIn, bearerToken: "test-token")
+        _ = try await client.revokeDecisionSessionCode(id: "session-1", bearerToken: "test-token")
+        _ = try await client.endDecisionSession(id: "session-1", bearerToken: "test-token")
+
+        XCTAssertEqual(seen.count, 7)
     }
 
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {
@@ -996,6 +1081,114 @@ final class NightloopTests: XCTestCase {
               "created_at": "2026-04-28T00:00:00Z"
             }
           ]
+        }
+        """.utf8)
+    }
+
+    private static func decisionSessionListFixtureData() -> Data {
+        Data("""
+        {
+          "items": [
+            {
+              "id": "session-1",
+              "status": "active",
+              "market": { "id": "market-1", "slug": "san-francisco", "short_label": "SF" },
+              "expires_at": "2026-04-29T11:00:00Z",
+              "code_hint": "2345",
+              "code_revoked_at": null,
+              "member_counts": { "joined": 2, "invited": 1 },
+              "viewer_role": "creator",
+              "viewer_status": "joined",
+              "leader": {
+                "id": "candidate-1",
+                "venue_id": "venue-1",
+                "venue_name": "Halcyon",
+                "in_count": 1,
+                "group_fit_score": 76.5
+              }
+            }
+          ]
+        }
+        """.utf8)
+    }
+
+    private static func decisionSessionFixtureData() -> Data {
+        let candidate = String(data: decisionCandidateFixtureJSON(), encoding: .utf8)!
+        return Data("""
+        {
+          "session": {
+            "id": "session-1",
+            "status": "active",
+            "market": { "id": "market-1", "slug": "san-francisco", "short_label": "SF" },
+            "filters": { "pulse": "active" },
+            "expires_at": "2026-04-29T11:00:00Z",
+            "ended_at": null,
+            "code_hint": "2345",
+            "code_revoked_at": null,
+            "code": "ND-ABCD-2345",
+            "member_counts": { "joined": 2, "invited": 1 },
+            "viewer_role": "creator",
+            "viewer_status": "joined",
+            "created_at": "2026-04-28T00:00:00Z",
+            "updated_at": "2026-04-28T00:05:00Z"
+          },
+          "candidates": [
+            \(candidate)
+          ],
+          "leader": \(candidate)
+        }
+        """.utf8)
+    }
+
+    private static func decisionCandidateFixtureJSON() -> Data {
+        Data("""
+        {
+          "id": "candidate-1",
+          "venue_id": "venue-1",
+          "original_rank": 1,
+          "base_score": 88.4,
+          "venue": \(String(data: venueFixtureJSON(), encoding: .utf8)!),
+          "recommendation": {
+            "rank": 1,
+            "score": 88.4,
+            "reason": "Expected tonight from source-backed hours.",
+            "confidence": "medium",
+            "liveness": {
+              "state": "opens_later",
+              "hours_state": "source_verified",
+              "confidence": "medium",
+              "opens_at": "10:00 PM",
+              "closes_at": null,
+              "expected_pulse_level": 3,
+              "live_signal_count": 0,
+              "live_unique_user_count": 0,
+              "copy": {
+                "label": "Opens later",
+                "supporting_text": "Source-backed hours say it opens at 10:00 PM.",
+                "provenance": "Hours source: Google Places"
+              },
+              "provenance": {
+                "source": "provider:google_places",
+                "verified_at": "2026-04-27T00:00:00.000Z",
+                "fetched_at": "2026-04-27T00:00:00.000Z"
+              }
+            },
+            "expected_pulse_basis": ["source-backed hours"],
+            "factors": {
+              "venue_quality": 86,
+              "preference_match": 74,
+              "live_signals": 0,
+              "event_relevance": 20,
+              "source_confidence": 88,
+              "hours_confidence": 90
+            }
+          },
+          "in_count": 1,
+          "skip_count": 0,
+          "viewer_vote": "in",
+          "group_fit_score": 76.5,
+          "group_fit_member_count": 2,
+          "group_fit_reason": "Group fit blends 2 joined friends' saved picks."
         }
         """.utf8)
     }

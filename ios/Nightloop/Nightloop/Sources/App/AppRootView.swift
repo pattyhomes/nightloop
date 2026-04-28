@@ -97,7 +97,12 @@ struct NightloopTabShell: View {
                 }
             case .decision:
                 NavigationStack {
-                    DecisionShellView()
+                    DecisionShellView(
+                        apiClient: apiClient,
+                        authStore: authStore,
+                        me: me,
+                        onAccountChanged: onAccountChanged
+                    )
                 }
             case .friends:
                 NavigationStack {
