@@ -559,6 +559,56 @@ final class NightloopTests: XCTestCase {
         XCTAssertLessThan(VenueDetailSignalPlacement.scrollBottomPadding, 150)
     }
 
+    func testDecisionSwipePresentationEmphasizesDirectionalAction() {
+        let neutral = DecisionSwipePresentation.state(for: .zero)
+        XCTAssertEqual(neutral.intent, .neutral)
+        XCTAssertEqual(neutral.skipScale, 1.0, accuracy: 0.001)
+        XCTAssertEqual(neutral.voteInScale, 1.0, accuracy: 0.001)
+
+        let voteIn = DecisionSwipePresentation.state(for: CGSize(width: 118, height: -12))
+        XCTAssertEqual(voteIn.intent, .voteIn)
+        XCTAssertGreaterThan(voteIn.voteInScale, neutral.voteInScale)
+        XCTAssertGreaterThan(voteIn.voteInGlow, voteIn.skipGlow)
+        XCTAssertGreaterThan(voteIn.rotationDegrees, 0)
+
+        let skip = DecisionSwipePresentation.state(for: CGSize(width: -118, height: 8))
+        XCTAssertEqual(skip.intent, .skip)
+        XCTAssertGreaterThan(skip.skipScale, neutral.skipScale)
+        XCTAssertGreaterThan(skip.skipGlow, skip.voteInGlow)
+        XCTAssertLessThan(skip.rotationDegrees, 0)
+    }
+
+    func testDecisionSwipeDeckSupportsCommittedSwipeAndSingleRewind() {
+        let initial = DecisionSwipeDeckState(visibleIDs: ["a", "b", "c"])
+        let afterVote = initial.committingVisible(.voteIn)
+
+        XCTAssertEqual(afterVote.visibleIDs, ["b", "c"])
+        XCTAssertEqual(afterVote.rewindCandidateID, "a")
+        XCTAssertEqual(afterVote.lastVote, .voteIn)
+
+        let afterSkip = afterVote.committingVisible(.skip)
+        XCTAssertEqual(afterSkip.visibleIDs, ["c"])
+        XCTAssertEqual(afterSkip.rewindCandidateID, "b")
+        XCTAssertEqual(afterSkip.lastVote, .skip)
+
+        let rewound = afterSkip.rewindingLast()
+        XCTAssertEqual(rewound.visibleIDs, ["b", "c"])
+        XCTAssertNil(rewound.rewindCandidateID)
+        XCTAssertNil(rewound.lastVote)
+    }
+
+    func testFriendsReactionOptionsAreCompactAndNightlifeRelevant() {
+        XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.label), ["Packed", "Walking", "Music"])
+        XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.signalKind), [.packed, .shortLine, .eventLive])
+    }
+
+    func testBottomNavMetricsKeepDecisionProminentButRefined() {
+        XCTAssertLessThan(NightloopBottomNavMetrics.decisionButtonDiameter, 54)
+        XCTAssertGreaterThan(NightloopBottomNavMetrics.decisionButtonDiameter, 44)
+        XCTAssertLessThanOrEqual(NightloopBottomNavMetrics.decisionLift, 16)
+        XCTAssertEqual(NightloopBottomNavMetrics.standardIconSize, 18)
+    }
+
     func testMapSheetDetentsSnapToNearestHeight() {
         let availableHeight: CGFloat = 760
 

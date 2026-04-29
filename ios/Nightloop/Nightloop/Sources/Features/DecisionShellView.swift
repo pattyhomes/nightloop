@@ -39,6 +39,8 @@ struct DecisionShellView: View {
     @State private var showingSuggestionSheet = false
     @State private var showingChatSheet = false
     @State private var showingProgressSheet = false
+    @State private var swipeTranslation: CGSize = .zero
+    @State private var rewindSnapshot: DecisionSessionResponse?
 
     private var activeMarketID: String {
         me.profile?.selectedMarketId ?? "san-francisco"
@@ -458,14 +460,43 @@ struct DecisionShellView: View {
             if let nextCandidate {
                 DecisionDeckCard(
                     candidate: nextCandidate,
+                    translation: swipeTranslation,
                     isPending: isMutating,
                     apiClient: apiClient,
                     authStore: authStore,
                     onAccountChanged: onAccountChanged,
+                    onDragChanged: { swipeTranslation = $0 },
+                    onDragEnded: { translation in
+                        let presentation = DecisionSwipePresentation.state(for: translation)
+                        switch presentation.intent {
+                        case .voteIn:
+                            vote(nextCandidate, .voteIn)
+                        case .skip:
+                            vote(nextCandidate, .skip)
+                        case .neutral:
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                                swipeTranslation = .zero
+                            }
+                        }
+                    },
                     skip: { vote(nextCandidate, .skip) },
                     voteIn: { vote(nextCandidate, .voteIn) },
                     coming: { setComing(nextCandidate.venue) }
                 )
+
+                if rewindSnapshot != nil {
+                    Button {
+                        rewindLastSwipe()
+                    } label: {
+                        Label("Rewind", systemImage: "arrow.uturn.backward")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.inkMuted)
+                    .disabled(isMutating)
+                }
             } else {
                 EmptyStateView(title: "Deck complete", message: "Open group progress to unlock the shortlist.")
             }
@@ -830,6 +861,8 @@ struct DecisionShellView: View {
             } else if let first = sessions.first {
                 activeSession = try await apiClient.decisionSession(id: first.id, bearerToken: token)
             }
+            rewindSnapshot = nil
+            swipeTranslation = .zero
         } catch {
             errorMessage = error.localizedDescription
             showToast(error.localizedDescription, isError: true)
@@ -893,6 +926,8 @@ struct DecisionShellView: View {
         Task {
             do {
                 activeSession = try await apiClient.decisionSession(id: id, bearerToken: token)
+                rewindSnapshot = nil
+                swipeTranslation = .zero
             } catch {
                 showToast(error.localizedDescription, isError: true)
             }
@@ -902,6 +937,10 @@ struct DecisionShellView: View {
     private func vote(_ candidate: DecisionCandidate, _ vote: DecisionVoteValue) {
         guard let token = authStore.accessToken, let session = activeSession?.session else { return }
         let previous = activeSession
+        rewindSnapshot = previous
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+            swipeTranslation = .zero
+        }
         applyOptimisticVote(candidateID: candidate.id, vote: vote)
         Task {
             isMutating = true
@@ -914,10 +953,21 @@ struct DecisionShellView: View {
                 )
             } catch {
                 activeSession = previous
+                rewindSnapshot = nil
                 showToast(error.localizedDescription, isError: true)
             }
             isMutating = false
         }
+    }
+
+    private func rewindLastSwipe() {
+        guard let snapshot = rewindSnapshot else { return }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            activeSession = snapshot
+            rewindSnapshot = nil
+            swipeTranslation = .zero
+        }
+        showToast("Last card restored")
     }
 
     private func advanceShortlist() {
@@ -1286,110 +1336,327 @@ private struct DecisionSessionRow: View {
     }
 }
 
-private enum DecisionUIState {
+enum DecisionSwipeIntent: Equatable {
+    case neutral
+    case skip
+    case voteIn
+}
+
+struct DecisionSwipePresentation: Equatable {
+    static let commitThreshold: CGFloat = 96
+
+    let intent: DecisionSwipeIntent
+    let skipScale: CGFloat
+    let voteInScale: CGFloat
+    let skipGlow: Double
+    let voteInGlow: Double
+    let rotationDegrees: Double
+
+    static func state(for translation: CGSize) -> DecisionSwipePresentation {
+        let horizontal = translation.width
+        let progress = min(abs(horizontal) / commitThreshold, 1)
+        let intent: DecisionSwipeIntent
+        if horizontal >= commitThreshold {
+            intent = .voteIn
+        } else if horizontal <= -commitThreshold {
+            intent = .skip
+        } else {
+            intent = .neutral
+        }
+
+        let emphasis = 1 + (progress * 0.12)
+        let rotation = Double(max(min(horizontal / 12, 10), -10))
+
+        return DecisionSwipePresentation(
+            intent: intent,
+            skipScale: horizontal < 0 ? emphasis : 1,
+            voteInScale: horizontal > 0 ? emphasis : 1,
+            skipGlow: horizontal < 0 ? Double(progress) : 0,
+            voteInGlow: horizontal > 0 ? Double(progress) : 0,
+            rotationDegrees: rotation
+        )
+    }
+}
+
+struct DecisionSwipeDeckState: Equatable {
+    let visibleIDs: [String]
+    let rewindCandidateID: String?
+    let lastVote: DecisionVoteValue?
+
+    init(visibleIDs: [String], rewindCandidateID: String? = nil, lastVote: DecisionVoteValue? = nil) {
+        self.visibleIDs = visibleIDs
+        self.rewindCandidateID = rewindCandidateID
+        self.lastVote = lastVote
+    }
+
+    func committingVisible(_ vote: DecisionVoteValue) -> DecisionSwipeDeckState {
+        guard let first = visibleIDs.first else { return self }
+        return DecisionSwipeDeckState(
+            visibleIDs: Array(visibleIDs.dropFirst()),
+            rewindCandidateID: first,
+            lastVote: vote
+        )
+    }
+
+    func rewindingLast() -> DecisionSwipeDeckState {
+        guard let rewindCandidateID else { return self }
+        return DecisionSwipeDeckState(
+            visibleIDs: [rewindCandidateID] + visibleIDs,
+            rewindCandidateID: nil,
+            lastVote: nil
+        )
+    }
+}
+
+enum DecisionUIState {
     static func optimisticVote(
         response: DecisionSessionResponse,
         candidateID: String,
         vote: DecisionVoteValue
     ) -> DecisionSessionResponse {
-        response
+        response.replacingCandidates { candidate in
+            guard candidate.id == candidateID else { return candidate }
+            return candidate.replacingVote(vote)
+        }
     }
 
     static func optimisticShortlistVote(
         response: DecisionSessionResponse,
         candidateID: String
     ) -> DecisionSessionResponse {
-        response
+        response.replacingCandidates { candidate in
+            candidate.replacingShortlistVote(candidate.id == candidateID)
+        }
+    }
+}
+
+private extension DecisionSessionResponse {
+    func replacingCandidates(_ transform: (DecisionCandidate) -> DecisionCandidate) -> DecisionSessionResponse {
+        let mappedCandidates = candidates.map(transform)
+        let mappedDeck = deckCandidates?.map(transform)
+        let mappedShortlist = shortlist?.map(transform)
+        return DecisionSessionResponse(
+            session: session,
+            candidates: mappedCandidates,
+            deckCandidates: mappedDeck,
+            shortlist: mappedShortlist,
+            recommendedFinalCandidate: recommendedFinalCandidate.map(transform),
+            leader: leader.map(transform),
+            messages: messages
+        )
+    }
+}
+
+private extension DecisionCandidate {
+    func replacingVote(_ vote: DecisionVoteValue) -> DecisionCandidate {
+        var nextInCount = inCount
+        var nextSkipCount = skipCount
+        if viewerVote == .voteIn {
+            nextInCount -= 1
+        } else if viewerVote == .skip {
+            nextSkipCount -= 1
+        }
+        if vote == .voteIn {
+            nextInCount += 1
+        } else {
+            nextSkipCount += 1
+        }
+        return copy(
+            inCount: max(0, nextInCount),
+            skipCount: max(0, nextSkipCount),
+            viewerVote: vote
+        )
+    }
+
+    func replacingShortlistVote(_ isSelected: Bool) -> DecisionCandidate {
+        let current = viewerShortlistVote == true
+        var nextCount = shortlistVoteCount ?? 0
+        if current && !isSelected {
+            nextCount -= 1
+        } else if !current && isSelected {
+            nextCount += 1
+        }
+        return copy(
+            shortlistVoteCount: max(0, nextCount),
+            viewerShortlistVote: isSelected
+        )
+    }
+
+    func copy(
+        inCount: Int? = nil,
+        skipCount: Int? = nil,
+        viewerVote: DecisionVoteValue? = nil,
+        shortlistVoteCount: Int? = nil,
+        viewerShortlistVote: Bool? = nil
+    ) -> DecisionCandidate {
+        DecisionCandidate(
+            id: id,
+            venueId: venueId,
+            originalRank: originalRank,
+            baseScore: baseScore,
+            source: source,
+            suggestedBy: suggestedBy,
+            suggestedAt: suggestedAt,
+            canRemove: canRemove,
+            venue: venue,
+            recommendation: recommendation,
+            inCount: inCount ?? self.inCount,
+            skipCount: skipCount ?? self.skipCount,
+            viewerVote: viewerVote ?? self.viewerVote,
+            shortlistVoteCount: shortlistVoteCount ?? self.shortlistVoteCount,
+            viewerShortlistVote: viewerShortlistVote ?? self.viewerShortlistVote,
+            groupFitScore: groupFitScore,
+            groupFitMemberCount: groupFitMemberCount,
+            groupFitReason: groupFitReason
+        )
     }
 }
 
 private struct DecisionDeckCard: View {
     let candidate: DecisionCandidate
+    let translation: CGSize
     let isPending: Bool
     let apiClient: NightloopAPIClient
     @ObservedObject var authStore: AuthStore
     let onAccountChanged: (MeResponse) -> Void
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: (CGSize) -> Void
     let skip: () -> Void
     let voteIn: () -> Void
     let coming: () -> Void
 
+    private var presentation: DecisionSwipePresentation {
+        DecisionSwipePresentation.state(for: translation)
+    }
+
     var body: some View {
-        NightloopCard(fill: Color.white.opacity(0.045)) {
-            VStack(alignment: .leading, spacing: 14) {
-                VenueArtView(venue: candidate.venue, height: 220, cornerRadius: 18)
-                    .overlay(alignment: .topLeading) {
-                        HStack(spacing: 8) {
-                            LivenessChip(liveness: candidate.venue.liveness, compact: true)
-                            ConfidencePips(confidence: candidate.venue.liveness?.confidence)
+        VStack(spacing: 14) {
+            NightloopCard(fill: Color.white.opacity(0.042)) {
+                VStack(alignment: .leading, spacing: 14) {
+                    VenueArtView(venue: candidate.venue, height: 245, cornerRadius: 18)
+                        .overlay(alignment: .topLeading) {
+                            HStack(spacing: 8) {
+                                LivenessChip(liveness: candidate.venue.liveness, compact: true)
+                                ConfidencePips(confidence: candidate.venue.liveness?.confidence)
+                            }
+                            .padding(12)
                         }
-                        .padding(12)
+                        .overlay(alignment: .topTrailing) {
+                            swipeBadge
+                                .padding(14)
+                        }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(candidate.venue.name)
+                            .font(.system(size: 28, weight: .black, design: .rounded))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(2)
+                        Text("\(candidate.venue.neighborhood) · \(candidate.venue.category)")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                        Text(candidate.groupFitReason)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(candidate.venue.name)
-                        .font(.system(size: 30, weight: .black, design: .rounded))
-                        .foregroundStyle(NightloopTheme.ink)
-                        .lineLimit(2)
-                    Text("\(candidate.venue.neighborhood) · \(candidate.venue.category)")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(NightloopTheme.inkMuted)
-                    Text(candidate.groupFitReason)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(NightloopTheme.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                HStack(spacing: 8) {
-                    DecisionCountPill(title: "In", value: candidate.inCount, isSelected: candidate.viewerVote == .voteIn)
-                    DecisionCountPill(title: "Skip", value: candidate.skipCount, isSelected: candidate.viewerVote == .skip)
-                    Spacer()
-                    Text("\(Int(candidate.groupFitScore))% fit")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(NightloopTheme.purple)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(NightloopTheme.purple.opacity(0.14))
-                        .clipShape(Capsule())
-                }
-
-                HStack(spacing: 10) {
-                    Button(action: skip) {
-                        Label("Skip", systemImage: "xmark")
+                    HStack(spacing: 8) {
+                        DecisionCountPill(title: "In", value: candidate.inCount, isSelected: candidate.viewerVote == .voteIn)
+                        DecisionCountPill(title: "Skip", value: candidate.skipCount, isSelected: candidate.viewerVote == .skip)
+                        Spacer()
+                        Text("\(Int(candidate.groupFitScore))% fit")
                             .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 42)
+                            .foregroundStyle(NightloopTheme.purple)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(NightloopTheme.purple.opacity(0.14))
+                            .clipShape(Capsule())
                     }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.inkMuted)
-
-                    NavigationLink {
-                        VenueDetailView(
-                            apiClient: apiClient,
-                            authStore: authStore,
-                            venueID: candidate.venue.id,
-                            initialVenue: candidate.venue,
-                            onAccountChanged: onAccountChanged
-                        )
-                    } label: {
-                        Label("Details", systemImage: "info.circle")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 42)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.ink)
-
-                    Button(action: voteIn) {
-                        Label("I'm in", systemImage: "checkmark")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 42)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.fab)
                 }
-                .disabled(isPending)
             }
+            .offset(translation)
+            .rotationEffect(.degrees(presentation.rotationDegrees))
+            .shadow(color: NightloopTheme.purple.opacity(0.16 + presentation.voteInGlow * 0.22), radius: 18 + presentation.voteInGlow * 8, x: 0, y: 10)
+            .shadow(color: NightloopTheme.rose.opacity(presentation.skipGlow * 0.22), radius: 18 + presentation.skipGlow * 8, x: 0, y: 10)
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        onDragChanged(value.translation)
+                    }
+                    .onEnded { value in
+                        onDragEnded(value.translation)
+                    }
+            )
+            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: translation)
+
+            HStack(spacing: 12) {
+                Button(action: skip) {
+                    Label("Skip", systemImage: "xmark")
+                        .font(.caption.weight(.black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(NightloopTheme.rose)
+                .scaleEffect(presentation.skipScale)
+                .shadow(color: NightloopTheme.rose.opacity(presentation.skipGlow * 0.36), radius: 14, x: 0, y: 7)
+
+                NavigationLink {
+                    VenueDetailView(
+                        apiClient: apiClient,
+                        authStore: authStore,
+                        venueID: candidate.venue.id,
+                        initialVenue: candidate.venue,
+                        onAccountChanged: onAccountChanged
+                    )
+                } label: {
+                    Label("Details", systemImage: "info.circle")
+                        .font(.caption.weight(.black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(NightloopTheme.ink)
+
+                Button(action: voteIn) {
+                    Label("I'm in", systemImage: "checkmark")
+                        .font(.caption.weight(.black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(NightloopTheme.fab)
+                .scaleEffect(presentation.voteInScale)
+                .shadow(color: NightloopTheme.fab.opacity(presentation.voteInGlow * 0.42), radius: 15, x: 0, y: 7)
+            }
+            .disabled(isPending)
+        }
+    }
+
+    @ViewBuilder
+    private var swipeBadge: some View {
+        if presentation.intent == .voteIn {
+            Label("I'm in", systemImage: "checkmark")
+                .font(.caption.weight(.black))
+                .foregroundStyle(NightloopTheme.good)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.52))
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule().stroke(NightloopTheme.good.opacity(0.65))
+                }
+        } else if presentation.intent == .skip {
+            Label("Skip", systemImage: "xmark")
+                .font(.caption.weight(.black))
+                .foregroundStyle(NightloopTheme.rose)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.52))
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule().stroke(NightloopTheme.rose.opacity(0.65))
+                }
         }
     }
 }

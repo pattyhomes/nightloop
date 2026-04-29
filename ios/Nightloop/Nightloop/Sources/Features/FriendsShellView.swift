@@ -431,6 +431,7 @@ struct FriendsShellView: View {
                             isPending: pendingActionIDs.contains(group.venue.id),
                             onComing: { setComing(for: group) },
                             onStartRoom: { startRoom(from: group) },
+                            onEmoji: { kind in emojiReply(to: group.latestActivity, kind: kind) },
                             onProfile: { profile in openProfile(profile, friendshipID: nil, isFriend: true) }
                         )
                     }
@@ -940,38 +941,59 @@ private struct FriendsTonightGroupCard: View {
     let isPending: Bool
     let onComing: () -> Void
     let onStartRoom: () -> Void
+    let onEmoji: (SignalKind) -> Void
     let onProfile: (FriendProfile) -> Void
+    @State private var showingReactions = false
 
     var body: some View {
-        NightloopCard(fill: Color.white.opacity(0.045)) {
+        NightloopCard(fill: Color.white.opacity(0.04)) {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
+                ZStack(alignment: .bottomLeading) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(LinearGradient(colors: [NightloopTheme.purple.opacity(0.32), NightloopTheme.rose.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                            .frame(width: 78, height: 78)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        NightloopTheme.background.opacity(0.82),
+                                        NightloopTheme.purple.opacity(0.3),
+                                        NightloopTheme.rose.opacity(0.18)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(height: 118)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(NightloopTheme.purple.opacity(0.26))
+                            }
+                            .shadow(color: NightloopTheme.purple.opacity(0.16), radius: 16, x: 0, y: 8)
                         Text(initials(for: group.venue.name))
-                            .font(.title3.weight(.black))
-                            .foregroundStyle(NightloopTheme.ink)
+                            .font(.system(size: 30, weight: .black, design: .rounded))
+                            .foregroundStyle(NightloopTheme.ink.opacity(0.82))
                     }
 
                     VStack(alignment: .leading, spacing: 5) {
+                        Text("\(friendLead) \(friendVerb) heading to")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .lineLimit(1)
                         Text(group.venue.name)
-                            .font(.headline.weight(.black))
+                            .font(.system(size: 24, weight: .black, design: .rounded))
                             .foregroundStyle(NightloopTheme.ink)
                             .lineLimit(1)
                         Text([group.venue.neighborhood, group.venue.category].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption.weight(.bold))
                             .foregroundStyle(NightloopTheme.inkMuted)
                             .lineLimit(1)
-                        Text(activitySummary(group.latestActivity, includeActor: true))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(NightloopTheme.inkMuted)
-                            .lineLimit(2)
                     }
-
-                    Spacer()
+                    .padding(14)
                 }
+
+                Text(activitySummary(group.latestActivity, includeActor: true))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(2)
 
                 HStack(spacing: -8) {
                     ForEach(group.friends.prefix(5)) { friend in
@@ -990,7 +1012,7 @@ private struct FriendsTonightGroupCard: View {
                         .foregroundStyle(NightloopTheme.good)
                 }
 
-                HStack(spacing: 10) {
+                HStack(alignment: .bottom, spacing: 10) {
                     Button(action: onComing) {
                         Label(group.viewerHasComing ? "You're coming" : "I'm Coming", systemImage: isGhostMode ? "eye.slash.fill" : "figure.walk")
                             .font(.caption.weight(.black))
@@ -1000,6 +1022,8 @@ private struct FriendsTonightGroupCard: View {
                     .buttonStyle(.borderedProminent)
                     .tint(isGhostMode ? NightloopTheme.amber : NightloopTheme.good)
                     .disabled(isPending)
+
+                    reactionCluster
 
                     Button(action: onStartRoom) {
                         Label("Pick a spot", systemImage: "person.3.sequence.fill")
@@ -1013,6 +1037,79 @@ private struct FriendsTonightGroupCard: View {
             }
         }
     }
+
+    private var friendLead: String {
+        guard let first = group.friends.first else { return "Friends" }
+        if group.friends.count == 1 {
+            return first.displayName
+        }
+        return "\(first.displayName) + \(group.friends.count - 1)"
+    }
+
+    private var friendVerb: String {
+        group.friends.count == 1 ? "is" : "are"
+    }
+
+    private var reactionCluster: some View {
+        VStack(spacing: 7) {
+            if showingReactions {
+                VStack(spacing: 6) {
+                    ForEach(FriendsReactionOption.defaultOptions) { option in
+                        Button {
+                            onEmoji(option.signalKind)
+                            withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+                                showingReactions = false
+                            }
+                        } label: {
+                            Image(systemName: option.systemImage)
+                                .font(.caption.weight(.black))
+                                .frame(width: 34, height: 30)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(option.tint)
+                        .disabled(isPending)
+                        .accessibilityLabel("\(option.label) reply")
+                    }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            Button {
+                withAnimation(.spring(response: 0.24, dampingFraction: 0.8)) {
+                    showingReactions.toggle()
+                }
+            } label: {
+                Image(systemName: showingReactions ? "xmark" : "face.smiling")
+                    .font(.caption.weight(.black))
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .tint(NightloopTheme.purple)
+            .disabled(isPending)
+            .accessibilityLabel("React")
+        }
+    }
+}
+
+struct FriendsReactionOption: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let systemImage: String
+    let signalKind: SignalKind
+    let tint: Color
+
+    static func == (lhs: FriendsReactionOption, rhs: FriendsReactionOption) -> Bool {
+        lhs.id == rhs.id
+            && lhs.label == rhs.label
+            && lhs.systemImage == rhs.systemImage
+            && lhs.signalKind == rhs.signalKind
+    }
+
+    static let defaultOptions: [FriendsReactionOption] = [
+        FriendsReactionOption(id: "packed", label: "Packed", systemImage: SignalKind.packed.symbol, signalKind: .packed, tint: NightloopTheme.rose),
+        FriendsReactionOption(id: "walking", label: "Walking", systemImage: SignalKind.shortLine.symbol, signalKind: .shortLine, tint: NightloopTheme.good),
+        FriendsReactionOption(id: "music", label: "Music", systemImage: SignalKind.eventLive.symbol, signalKind: .eventLive, tint: NightloopTheme.purple)
+    ]
 }
 
 private struct FriendActivityCard: View {

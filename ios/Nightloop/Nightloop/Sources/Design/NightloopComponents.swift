@@ -593,6 +593,13 @@ struct SignalButton: View {
     }
 }
 
+enum NightloopBottomNavMetrics {
+    static let decisionButtonDiameter: CGFloat = 50
+    static let decisionLift: CGFloat = 15
+    static let standardIconSize: CGFloat = 18
+    static let standardLabelSize: CGFloat = 10
+}
+
 struct NightloopBottomTabBar: View {
     @Binding var selectedTab: AppTab
 
@@ -607,9 +614,9 @@ struct NightloopBottomTabBar: View {
                     } else {
                         VStack(spacing: 4) {
                             Image(systemName: tab.symbol)
-                                .font(.system(size: 19, weight: .semibold))
+                                .font(.system(size: NightloopBottomNavMetrics.standardIconSize, weight: .semibold))
                             Text(tab.title)
-                                .font(.system(size: 10, weight: selectedTab == tab ? .bold : .medium))
+                                .font(.system(size: NightloopBottomNavMetrics.standardLabelSize, weight: selectedTab == tab ? .bold : .medium))
                         }
                         .foregroundStyle(selectedTab == tab ? NightloopTheme.ink : NightloopTheme.inkDim)
                         .frame(maxWidth: .infinity)
@@ -638,14 +645,27 @@ private struct DecisionHubButton: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(LinearGradient.nightloopBrand)
-                .frame(width: 54, height: 54)
-                .shadow(color: NightloopTheme.purple.opacity(isSelected ? 0.62 : 0.38), radius: 18, x: 0, y: 8)
+                .fill(
+                    LinearGradient(
+                        colors: [NightloopTheme.purple, NightloopTheme.fab, NightloopTheme.rose.opacity(0.86)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(
+                    width: NightloopBottomNavMetrics.decisionButtonDiameter,
+                    height: NightloopBottomNavMetrics.decisionButtonDiameter
+                )
+                .overlay {
+                    Circle()
+                        .stroke(Color.white.opacity(isSelected ? 0.36 : 0.22), lineWidth: 1)
+                }
+                .shadow(color: NightloopTheme.purple.opacity(isSelected ? 0.5 : 0.28), radius: isSelected ? 16 : 11, x: 0, y: 7)
             Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.white)
         }
         .frame(maxWidth: .infinity)
-        .offset(y: -22)
+        .offset(y: -NightloopBottomNavMetrics.decisionLift)
     }
 }
