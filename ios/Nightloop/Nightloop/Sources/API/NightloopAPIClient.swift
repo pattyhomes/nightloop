@@ -493,6 +493,15 @@ struct NightloopAPIClient {
             body: DevConfirmedAuthUserBody(email: email, password: password)
         )
     }
+
+    func resetDevSocialCrew(market: String = "san-francisco") async throws -> DevSocialCrewResetResponse {
+        try await send(
+            path: "dev/social-crew/reset",
+            method: "POST",
+            bearerToken: nil,
+            body: DevSocialCrewResetBody(market: market)
+        )
+    }
     #endif
 
     private func send<Response: Decodable>(
@@ -696,5 +705,9 @@ private struct DecisionMessageBody: Encodable {
 private struct DevConfirmedAuthUserBody: Encodable {
     let email: String
     let password: String
+}
+
+private struct DevSocialCrewResetBody: Encodable {
+    let market: String
 }
 #endif

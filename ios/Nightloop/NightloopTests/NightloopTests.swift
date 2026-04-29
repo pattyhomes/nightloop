@@ -1099,6 +1099,59 @@ final class NightloopTests: XCTestCase {
 
         XCTAssertEqual(response.message, "Confirmed local development auth user is ready.")
     }
+
+    func testDevSocialCrewResetRequestUsesLocalDevEndpointAndDecodesSafeUsers() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/dev/social-crew/reset")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+
+            let body = try XCTUnwrap(Self.bodyData(from: request))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(object["market"] as? String, "san-francisco")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "market": "san-francisco",
+              "market_id": "market-1",
+              "venue": "1015 Folsom",
+              "auth_users_created": true,
+              "users": [
+                {
+                  "key": "chuck",
+                  "id": "user-1",
+                  "auth_user_id": "auth-user-1",
+                  "email": "test@dev.com",
+                  "username": "chuck",
+                  "display_name": "Chuck",
+                  "role": "primary"
+                }
+              ],
+              "audit": { "ok": true, "failures": [] }
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let response = try await client.resetDevSocialCrew(market: "san-francisco")
+
+        XCTAssertEqual(response.users.first?.email, "test@dev.com")
+        XCTAssertEqual(response.users.first?.username, "chuck")
+        XCTAssertEqual(response.users.first?.role, "primary")
+        XCTAssertTrue(response.audit.ok)
+    }
     #endif
 
     func testPreferenceTunerBoostsPreferredNeighborhoods() {

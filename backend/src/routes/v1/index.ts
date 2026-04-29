@@ -22,6 +22,7 @@ import { getMarketConfig, listMarkets } from "../../services/v1/marketService";
 import { getVenue, listVenues } from "../../services/v1/venueService";
 import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
+import { seedDevSocialCrew } from "../../services/v1/devSocialCrewService";
 import {
   addDecisionSessionMessage,
   advanceDecisionSessionShortlist,
@@ -159,6 +160,12 @@ const DevConfirmedAuthUserSchema = z
   .object({
     email: z.string().trim().email(),
     password: z.string().min(8).max(128)
+  })
+  .strict();
+
+const DevSocialCrewResetSchema = z
+  .object({
+    market: z.string().trim().min(1).max(80).default("san-francisco")
   })
   .strict();
 
@@ -406,6 +413,28 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
         user,
         message: "Confirmed local development auth user is ready."
       });
+    })
+  );
+
+  router.post(
+    "/dev/social-crew/reset",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      if (config.env === "production") {
+        throw new ApiError(404, "NOT_FOUND", "Resource not found.");
+      }
+      if (!authAdmin.createConfirmedEmailUser) {
+        throw new ApiError(500, "AUTH_ADMIN_UNAVAILABLE", "Supabase auth admin user creation is unavailable.");
+      }
+
+      const body = parseBody(DevSocialCrewResetSchema, req.body);
+      res.json(
+        await seedDevSocialCrew({
+          market: body.market,
+          reset: true,
+          authAdmin
+        })
+      );
     })
   );
 

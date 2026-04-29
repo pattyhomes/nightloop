@@ -80,9 +80,20 @@ describe("Nightloop v1 social API", () => {
   let jwks: TestJwksServer;
   let pool: Pool;
   let app: ReturnType<typeof createApp>;
+  let productionApp: ReturnType<typeof createApp>;
+  const createdDevAuthUsers: Array<{ id: string; email?: string }> = [];
 
   const authAdmin: AuthAdminClient = {
-    async deleteUser(): Promise<void> {}
+    async deleteUser(): Promise<void> {},
+    async createConfirmedEmailUser(input): Promise<{ id: string; email?: string }> {
+      const suffix = input.email.includes("test@dev.com")
+        ? "00000000-0000-4000-8000-00000000d001"
+        : randomUUID();
+      const user = { id: suffix, email: input.email.toLowerCase() };
+      createdDevAuthUsers.push(user);
+      authUserIds.push(user.id);
+      return user;
+    }
   };
 
   async function tableExists(tableName: string): Promise<boolean> {
@@ -183,6 +194,7 @@ describe("Nightloop v1 social API", () => {
 
     pool = new Pool({ connectionString: config.databaseUrl });
     app = createApp({ config, authAdmin });
+    productionApp = createApp({ config: { ...config, env: "production" }, authAdmin });
   });
 
   afterAll(async () => {
@@ -275,6 +287,68 @@ describe("Nightloop v1 social API", () => {
       .set("Authorization", `Bearer ${bob.token}`)
       .send({ user_id: alice.userId })
       .expect(403);
+  });
+
+  it("resets a Supabase-backed dev social crew for simulator walkthroughs", async () => {
+    const reset = await request(app)
+      .post("/api/v1/dev/social-crew/reset")
+      .send({ market: "san-francisco" })
+      .expect(200);
+
+    expect(reset.body.users).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "chuck",
+          email: "test@dev.com",
+          username: "chuck",
+          display_name: "Chuck",
+          role: "primary"
+        }),
+        expect.objectContaining({
+          key: "alex",
+          email: "alex@dev.com",
+          username: "dev_social_alex"
+        })
+      ])
+    );
+    expect(JSON.stringify(reset.body)).not.toContain("Charlietest");
+    expect(JSON.stringify(reset.body)).not.toContain("DATABASE_URL");
+    expect(createdDevAuthUsers.map((user) => user.email)).toEqual(
+      expect.arrayContaining(["test@dev.com", "alex@dev.com", "maya@dev.com", "jules@dev.com", "blocked@dev.com"])
+    );
+
+    const chuck = await pool.query<{ id: string; auth_user_id: string }>(
+      `
+        select u.id, u.auth_user_id
+        from users u
+        join user_profiles up on up.user_id = u.id
+        where up.username = 'chuck'
+        limit 1
+      `
+    );
+    expect(chuck.rows[0]?.auth_user_id).toBe("00000000-0000-4000-8000-00000000d001");
+
+    const friends = await pool.query<{ accepted_count: string | number; pending_count: string | number }>(
+      `
+        select
+          count(*) filter (where f.status = 'accepted') as accepted_count,
+          count(*) filter (where f.status = 'pending') as pending_count
+        from friendships f
+        where f.requester_user_id = $1::uuid
+           or f.addressee_user_id = $1::uuid
+      `,
+      [chuck.rows[0]?.id]
+    );
+    expect(Number(friends.rows[0]?.accepted_count ?? 0)).toBeGreaterThanOrEqual(3);
+    expect(Number(friends.rows[0]?.pending_count ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(reset.body.audit.ok).toBe(true);
+  }, 120000);
+
+  it("does not expose the dev social crew reset in production", async () => {
+    await request(productionApp)
+      .post("/api/v1/dev/social-crew/reset")
+      .send({ market: "san-francisco" })
+      .expect(404);
   });
 
   it("creates revocable expiring invite codes that establish friendships", async () => {

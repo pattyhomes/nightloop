@@ -714,6 +714,30 @@ struct DecisionVenueSearchResponse: Decodable, Equatable {
 struct DevConfirmedAuthUserResponse: Decodable, Equatable {
     let message: String
 }
+
+struct DevSocialCrewUser: Decodable, Equatable, Identifiable {
+    let key: String
+    let id: String
+    let authUserId: String
+    let email: String
+    let username: String
+    let displayName: String
+    let role: String
+}
+
+struct DevSocialCrewAudit: Decodable, Equatable {
+    let ok: Bool
+    let failures: [String]?
+}
+
+struct DevSocialCrewResetResponse: Decodable, Equatable {
+    let market: String
+    let marketId: String
+    let venue: String
+    let authUsersCreated: Bool
+    let users: [DevSocialCrewUser]
+    let audit: DevSocialCrewAudit
+}
 #endif
 
 enum SignalKind: String, Codable, CaseIterable, Identifiable {
