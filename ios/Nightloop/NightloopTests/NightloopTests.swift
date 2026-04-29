@@ -630,7 +630,18 @@ final class NightloopTests: XCTestCase {
 
     func testFriendsReactionOptionsAreCompactAndNightlifeRelevant() {
         XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.label), ["Packed", "Walking", "Music"])
+        XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.emoji), ["🔥", "🚶", "🎧"])
         XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.signalKind), [.packed, .shortLine, .eventLive])
+        XCTAssertEqual(FriendsReactionAffordancePolicy.collapsedAlignment, .trailing)
+        XCTAssertFalse(FriendsReactionAffordancePolicy.usesCollapsedBackground)
+    }
+
+    func testSocialActionButtonMetricsAreCompactAndCentered() {
+        XCTAssertEqual(SocialActionButtonMetrics.height, 40)
+        XCTAssertEqual(SocialActionButtonMetrics.iconSize, 13)
+        XCTAssertEqual(SocialActionButtonMetrics.horizontalSpacing, 6)
+        XCTAssertTrue(SocialActionButtonMetrics.usesExplicitCenteredLayout)
+        XCTAssertLessThan(SocialActionButtonMetrics.cornerRadius, 16)
     }
 
     func testBottomNavMetricsKeepDecisionProminentButRefined() {

@@ -111,9 +111,11 @@ struct FriendsShellView: View {
                     .font(.caption2.weight(.black))
                     .tracking(1.6)
                     .foregroundStyle(NightloopTheme.inkMuted)
-                Text("Friends activity")
-                    .font(.system(size: 28, weight: .black, design: .rounded))
+                Text("See who's out tonight")
+                    .font(.system(size: 25, weight: .black))
                     .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
 
             Spacer()
@@ -946,49 +948,13 @@ private struct FriendsTonightGroupCard: View {
     @State private var showingReactions = false
 
     var body: some View {
-        NightloopCard(fill: Color.white.opacity(0.04)) {
-            VStack(alignment: .leading, spacing: 14) {
-                ZStack(alignment: .bottomLeading) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        NightloopTheme.background.opacity(0.82),
-                                        NightloopTheme.purple.opacity(0.3),
-                                        NightloopTheme.rose.opacity(0.18)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(height: 118)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(NightloopTheme.purple.opacity(0.26))
-                            }
-                            .shadow(color: NightloopTheme.purple.opacity(0.16), radius: 16, x: 0, y: 8)
-                        Text(initials(for: group.venue.name))
-                            .font(.system(size: 30, weight: .black, design: .rounded))
-                            .foregroundStyle(NightloopTheme.ink.opacity(0.82))
-                    }
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("\(friendLead) \(friendVerb) heading to")
-                            .font(.caption.weight(.black))
-                            .foregroundStyle(NightloopTheme.inkMuted)
-                            .lineLimit(1)
-                        Text(group.venue.name)
-                            .font(.system(size: 24, weight: .black, design: .rounded))
-                            .foregroundStyle(NightloopTheme.ink)
-                            .lineLimit(1)
-                        Text([group.venue.neighborhood, group.venue.category].compactMap { $0 }.joined(separator: " · "))
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(NightloopTheme.inkMuted)
-                            .lineLimit(1)
-                    }
-                    .padding(14)
-                }
+        NightloopCard(padding: 14, fill: NightloopTheme.surface.opacity(0.72)) {
+            VStack(alignment: .leading, spacing: 13) {
+                FriendsVenueHeroStrip(
+                    venueName: group.venue.name,
+                    subtitle: [group.venue.neighborhood, group.venue.category].compactMap { $0 }.joined(separator: " · "),
+                    kicker: "\(friendLead) \(friendVerb) heading to"
+                )
 
                 Text(activitySummary(group.latestActivity, includeActor: true))
                     .font(.caption.weight(.semibold))
@@ -1000,9 +966,7 @@ private struct FriendsTonightGroupCard: View {
                         Button {
                             onProfile(friend)
                         } label: {
-                            AvatarInitials(initials: initials(for: friend.displayName), color: NightloopTheme.purple)
-                                .frame(width: 34, height: 34)
-                                .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 2))
+                            FriendsCompactAvatar(name: friend.displayName)
                         }
                         .buttonStyle(.plain)
                     }
@@ -1013,26 +977,23 @@ private struct FriendsTonightGroupCard: View {
                 }
 
                 HStack(alignment: .bottom, spacing: 10) {
-                    Button(action: onComing) {
-                        Label(group.viewerHasComing ? "You're coming" : "I'm Coming", systemImage: isGhostMode ? "eye.slash.fill" : "figure.walk")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 38)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(isGhostMode ? NightloopTheme.amber : NightloopTheme.good)
-                    .disabled(isPending)
+                    SocialActionButton(
+                        title: group.viewerHasComing ? "You're coming" : "I'm Coming",
+                        systemImage: isGhostMode ? "eye.slash.fill" : "figure.walk",
+                        style: group.viewerHasComing ? .subtle(NightloopTheme.good) : .filled(isGhostMode ? NightloopTheme.amber : NightloopTheme.good),
+                        isEnabled: !isPending,
+                        action: onComing
+                    )
+
+                    SocialActionButton(
+                        title: "Pick a spot",
+                        systemImage: "person.3.sequence.fill",
+                        style: .subtle(NightloopTheme.purple),
+                        action: onStartRoom
+                    )
 
                     reactionCluster
-
-                    Button(action: onStartRoom) {
-                        Label("Pick a spot", systemImage: "person.3.sequence.fill")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 38)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.purple)
+                        .frame(width: 36)
                 }
             }
         }
@@ -1051,7 +1012,7 @@ private struct FriendsTonightGroupCard: View {
     }
 
     private var reactionCluster: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 8) {
             if showingReactions {
                 VStack(spacing: 6) {
                     ForEach(FriendsReactionOption.defaultOptions) { option in
@@ -1061,12 +1022,11 @@ private struct FriendsTonightGroupCard: View {
                                 showingReactions = false
                             }
                         } label: {
-                            Image(systemName: option.systemImage)
-                                .font(.caption.weight(.black))
+                            Text(option.emoji)
+                                .font(.system(size: 21))
                                 .frame(width: 34, height: 30)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(option.tint)
+                        .buttonStyle(.plain)
                         .disabled(isPending)
                         .accessibilityLabel("\(option.label) reply")
                     }
@@ -1079,12 +1039,12 @@ private struct FriendsTonightGroupCard: View {
                     showingReactions.toggle()
                 }
             } label: {
-                Image(systemName: showingReactions ? "xmark" : "face.smiling")
-                    .font(.caption.weight(.black))
-                    .frame(width: 38, height: 38)
+                Text(showingReactions ? "×" : "🙂")
+                    .font(.system(size: showingReactions ? 22 : 21, weight: .semibold))
+                    .foregroundStyle(NightloopTheme.ink.opacity(showingReactions ? 0.72 : 0.95))
+                    .frame(width: 34, height: SocialActionButtonMetrics.height)
             }
-            .buttonStyle(.bordered)
-            .tint(NightloopTheme.purple)
+            .buttonStyle(.plain)
             .disabled(isPending)
             .accessibilityLabel("React")
         }
@@ -1094,22 +1054,206 @@ private struct FriendsTonightGroupCard: View {
 struct FriendsReactionOption: Identifiable, Equatable {
     let id: String
     let label: String
-    let systemImage: String
+    let emoji: String
     let signalKind: SignalKind
     let tint: Color
 
     static func == (lhs: FriendsReactionOption, rhs: FriendsReactionOption) -> Bool {
         lhs.id == rhs.id
             && lhs.label == rhs.label
-            && lhs.systemImage == rhs.systemImage
+            && lhs.emoji == rhs.emoji
             && lhs.signalKind == rhs.signalKind
     }
 
     static let defaultOptions: [FriendsReactionOption] = [
-        FriendsReactionOption(id: "packed", label: "Packed", systemImage: SignalKind.packed.symbol, signalKind: .packed, tint: NightloopTheme.rose),
-        FriendsReactionOption(id: "walking", label: "Walking", systemImage: SignalKind.shortLine.symbol, signalKind: .shortLine, tint: NightloopTheme.good),
-        FriendsReactionOption(id: "music", label: "Music", systemImage: SignalKind.eventLive.symbol, signalKind: .eventLive, tint: NightloopTheme.purple)
+        FriendsReactionOption(id: "packed", label: "Packed", emoji: "🔥", signalKind: .packed, tint: NightloopTheme.rose),
+        FriendsReactionOption(id: "walking", label: "Walking", emoji: "🚶", signalKind: .shortLine, tint: NightloopTheme.good),
+        FriendsReactionOption(id: "music", label: "Music", emoji: "🎧", signalKind: .eventLive, tint: NightloopTheme.purple)
     ]
+}
+
+enum FriendsReactionAffordanceAlignment: Equatable {
+    case trailing
+}
+
+enum FriendsReactionAffordancePolicy {
+    static let collapsedAlignment: FriendsReactionAffordanceAlignment = .trailing
+    static let usesCollapsedBackground = false
+}
+
+enum SocialActionButtonMetrics {
+    static let height: CGFloat = 40
+    static let iconSize: CGFloat = 13
+    static let horizontalSpacing: CGFloat = 6
+    static let cornerRadius: CGFloat = 12
+    static let usesExplicitCenteredLayout = true
+}
+
+enum SocialActionButtonStyle {
+    case filled(Color)
+    case subtle(Color)
+    case neutral
+
+    var foreground: Color {
+        switch self {
+        case .filled:
+            return .white
+        case .subtle(let color):
+            return color
+        case .neutral:
+            return NightloopTheme.ink
+        }
+    }
+
+    var fill: AnyShapeStyle {
+        switch self {
+        case .filled(let color):
+            return AnyShapeStyle(
+                LinearGradient(
+                    colors: [color.opacity(0.82), color.opacity(0.58)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+        case .subtle(let color):
+            return AnyShapeStyle(color.opacity(0.11))
+        case .neutral:
+            return AnyShapeStyle(Color.white.opacity(0.06))
+        }
+    }
+
+    var stroke: Color {
+        switch self {
+        case .filled(let color), .subtle(let color):
+            return color.opacity(0.28)
+        case .neutral:
+            return NightloopTheme.hairline
+        }
+    }
+}
+
+struct SocialActionButton: View {
+    let title: String
+    let systemImage: String
+    var style: SocialActionButtonStyle = .neutral
+    var isEnabled = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: SocialActionButtonMetrics.horizontalSpacing) {
+                Image(systemName: systemImage)
+                    .font(.system(size: SocialActionButtonMetrics.iconSize, weight: .bold))
+                    .frame(width: SocialActionButtonMetrics.iconSize + 4, height: SocialActionButtonMetrics.iconSize + 4)
+
+                Text(title)
+                    .font(.system(size: 12.5, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.74)
+            }
+            .foregroundStyle(isEnabled ? style.foreground : NightloopTheme.inkDim)
+            .frame(maxWidth: .infinity)
+            .frame(height: SocialActionButtonMetrics.height)
+            .background {
+                RoundedRectangle(cornerRadius: SocialActionButtonMetrics.cornerRadius, style: .continuous)
+                    .fill(style.fill)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: SocialActionButtonMetrics.cornerRadius, style: .continuous)
+                    .stroke(style.stroke, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+    }
+}
+
+private struct FriendsCompactAvatar: View {
+    let name: String
+
+    var body: some View {
+        Text(initials(for: name))
+            .font(.system(size: 9.5, weight: .bold))
+            .tracking(0.2)
+            .foregroundStyle(NightloopTheme.ink.opacity(0.78))
+            .frame(width: 28, height: 28)
+            .background {
+                Circle()
+                    .fill(NightloopTheme.surfaceElevated.opacity(0.96))
+            }
+            .overlay {
+                Circle()
+                    .stroke(NightloopTheme.purple.opacity(0.34), lineWidth: 1)
+            }
+            .shadow(color: NightloopTheme.purple.opacity(0.16), radius: 6, y: 2)
+    }
+}
+
+private struct FriendsVenueHeroStrip: View {
+    let venueName: String
+    let subtitle: String
+    let kicker: String
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            NightloopTheme.surfaceElevated.opacity(0.92),
+                            NightloopTheme.purple.opacity(0.24),
+                            NightloopTheme.rose.opacity(0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(height: 120)
+                .overlay {
+                    DiagonalStripeOverlay()
+                        .opacity(0.32)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(NightloopTheme.purple.opacity(0.24))
+                }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(kicker)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                Text(venueName)
+                    .font(.system(size: 24, weight: .black))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(subtitle)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(1)
+            }
+            .padding(14)
+        }
+    }
+}
+
+private struct DiagonalStripeOverlay: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            let spacing: CGFloat = 20
+            var x = -size.height
+            while x < size.width + size.height {
+                path.move(to: CGPoint(x: x, y: size.height))
+                path.addLine(to: CGPoint(x: x + size.height, y: 0))
+                x += spacing
+            }
+            context.stroke(path, with: .color(Color.white.opacity(0.12)), lineWidth: 7)
+        }
+    }
 }
 
 private struct FriendActivityCard: View {
@@ -1206,30 +1350,28 @@ private struct FriendActivityCard: View {
     private var activityActions: some View {
         HStack(spacing: 8) {
             if activity.venue != nil {
-                Button {
-                    onComing()
-                } label: {
-                    Label(activity.viewerHasComing ? "You're going" : "I'm Coming", systemImage: activity.viewerHasComing ? "checkmark.circle.fill" : "sparkles")
-                        .font(.caption.weight(.black))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(activity.viewerHasComing ? NightloopTheme.good : NightloopTheme.purple)
-                .disabled(isPending)
+                SocialActionButton(
+                    title: activity.viewerHasComing ? "You're going" : "I'm Coming",
+                    systemImage: activity.viewerHasComing ? "checkmark.circle.fill" : "figure.walk",
+                    style: activity.viewerHasComing ? .subtle(NightloopTheme.good) : .filled(NightloopTheme.purple),
+                    isEnabled: !isPending,
+                    action: onComing
+                )
             }
 
-            ForEach([SignalKind.packed, .shortLine, .eventLive], id: \.self) { kind in
+            Spacer(minLength: 4)
+
+            ForEach(FriendsReactionOption.defaultOptions) { option in
                 Button {
-                    onEmoji(kind)
+                    onEmoji(option.signalKind)
                 } label: {
-                    Image(systemName: kind.symbol)
-                        .font(.caption.weight(.black))
-                        .frame(width: 34, height: 30)
+                    Text(option.emoji)
+                        .font(.system(size: 19))
+                        .frame(width: 30, height: SocialActionButtonMetrics.height)
                 }
-                .buttonStyle(.bordered)
-                .tint(kind.tint)
+                .buttonStyle(.plain)
                 .disabled(isPending)
-                .accessibilityLabel("\(kind.label) reply")
+                .accessibilityLabel("\(option.label) reply")
             }
         }
     }
@@ -1302,14 +1444,7 @@ private struct VenueMiniStrip: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            VenueFallbackArt(
-                title: venue.name,
-                subtitle: venue.neighborhood ?? "SF",
-                score: 72,
-                height: 74,
-                cornerRadius: 12,
-                symbol: "music.note"
-            )
+            FriendsMiniVenueArt(title: venue.name, subtitle: venue.neighborhood ?? "SF")
             .frame(width: 112)
 
             VStack(alignment: .leading, spacing: 5) {
@@ -1337,6 +1472,51 @@ private struct VenueMiniStrip: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(NightloopTheme.hairline)
         }
+    }
+}
+
+private struct FriendsMiniVenueArt: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            NightloopTheme.surfaceElevated.opacity(0.86),
+                            NightloopTheme.purple.opacity(0.24),
+                            NightloopTheme.amber.opacity(0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay {
+                    DiagonalStripeOverlay()
+                        .opacity(0.22)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(NightloopTheme.hairline)
+                }
+
+            VStack(spacing: 5) {
+                Text(subtitle.uppercased())
+                    .font(.system(size: 9, weight: .black, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(1)
+                Image(systemName: "music.note")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.amber)
+            }
+            .padding(8)
+        }
+        .frame(height: 74)
+        .accessibilityLabel(title)
     }
 }
 

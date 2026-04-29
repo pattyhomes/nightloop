@@ -435,16 +435,19 @@ struct DecisionShellView: View {
                 }
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.caption.weight(.black))
-                    .frame(width: 38, height: 38)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.07))
+                    .clipShape(Circle())
+                    .overlay { Circle().stroke(NightloopTheme.hairline) }
             }
-            .buttonStyle(.bordered)
-            .tint(NightloopTheme.inkMuted)
+            .buttonStyle(.plain)
             .accessibilityLabel("Open room lobby")
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(response.session.roomTitle ?? "Tonight room")
-                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .font(.system(size: 22, weight: .black))
                     .foregroundStyle(NightloopTheme.ink)
                     .lineLimit(1)
                 Text("\(response.session.memberCounts.joined) joined · \(focusedSwipeStatus(response))")
@@ -459,22 +462,28 @@ struct DecisionShellView: View {
                 showingProgressSheet = true
             } label: {
                 Image(systemName: "chart.bar.fill")
-                    .font(.caption.weight(.black))
-                    .frame(width: 38, height: 38)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(NightloopTheme.purple)
+                    .frame(width: 36, height: 36)
+                    .background(NightloopTheme.purple.opacity(0.14))
+                    .clipShape(Circle())
+                    .overlay { Circle().stroke(NightloopTheme.purple.opacity(0.28)) }
             }
-            .buttonStyle(.bordered)
-            .tint(NightloopTheme.purple)
+            .buttonStyle(.plain)
             .accessibilityLabel("Group progress")
 
             Button {
                 showingRoomActionsSheet = true
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.caption.weight(.black))
-                    .frame(width: 38, height: 38)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.07))
+                    .clipShape(Circle())
+                    .overlay { Circle().stroke(NightloopTheme.hairline) }
             }
-            .buttonStyle(.bordered)
-            .tint(NightloopTheme.inkMuted)
+            .buttonStyle(.plain)
             .accessibilityLabel("Room actions")
         }
     }
@@ -1735,10 +1744,10 @@ private struct DecisionDeckCard: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            NightloopCard(fill: Color.white.opacity(0.042)) {
-                VStack(alignment: .leading, spacing: 14) {
-                    VenueArtView(venue: candidate.venue, height: 245, cornerRadius: 18)
+        VStack(spacing: 13) {
+            NightloopCard(padding: 12, radius: 20, fill: NightloopTheme.surface.opacity(0.74)) {
+                VStack(alignment: .leading, spacing: 13) {
+                    VenueArtView(venue: candidate.venue, height: 232, cornerRadius: 17)
                         .overlay(alignment: .topLeading) {
                             HStack(spacing: 8) {
                                 LivenessChip(liveness: candidate.venue.liveness, compact: true)
@@ -1753,11 +1762,11 @@ private struct DecisionDeckCard: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text(candidate.venue.name)
-                            .font(.system(size: 28, weight: .black, design: .rounded))
+                            .font(.system(size: 27, weight: .black))
                             .foregroundStyle(NightloopTheme.ink)
                             .lineLimit(2)
                         Text("\(candidate.venue.neighborhood) · \(candidate.venue.category)")
-                            .font(.subheadline.weight(.bold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(NightloopTheme.inkMuted)
                         Text(candidate.groupFitReason)
                             .font(.caption.weight(.semibold))
@@ -1770,7 +1779,7 @@ private struct DecisionDeckCard: View {
                         DecisionCountPill(title: "Skip", value: candidate.skipCount, isSelected: candidate.viewerVote == .skip)
                         Spacer()
                         Text("\(Int(candidate.groupFitScore))% fit")
-                            .font(.caption.weight(.black))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(NightloopTheme.purple)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
@@ -1795,14 +1804,12 @@ private struct DecisionDeckCard: View {
             .animation(.spring(response: 0.32, dampingFraction: 0.82), value: translation)
 
             HStack(spacing: 12) {
-                Button(action: skip) {
-                    Label("Skip", systemImage: "xmark")
-                        .font(.caption.weight(.black))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                }
-                .buttonStyle(.bordered)
-                .tint(NightloopTheme.rose)
+                SocialActionButton(
+                    title: "Skip",
+                    systemImage: "xmark",
+                    style: .subtle(NightloopTheme.rose),
+                    action: skip
+                )
                 .scaleEffect(presentation.skipScale)
                 .shadow(color: NightloopTheme.rose.opacity(presentation.skipGlow * 0.36), radius: 14, x: 0, y: 7)
 
@@ -1815,22 +1822,32 @@ private struct DecisionDeckCard: View {
                         onAccountChanged: onAccountChanged
                     )
                 } label: {
-                    Label("Details", systemImage: "info.circle")
-                        .font(.caption.weight(.black))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
+                    HStack(alignment: .center, spacing: SocialActionButtonMetrics.horizontalSpacing) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: SocialActionButtonMetrics.iconSize, weight: .bold))
+                            .frame(width: SocialActionButtonMetrics.iconSize + 4, height: SocialActionButtonMetrics.iconSize + 4)
+                        Text("Details")
+                            .font(.system(size: 13, weight: .black))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(NightloopTheme.ink)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: SocialActionButtonMetrics.height)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: SocialActionButtonMetrics.cornerRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: SocialActionButtonMetrics.cornerRadius, style: .continuous)
+                            .stroke(NightloopTheme.hairline)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .tint(NightloopTheme.ink)
+                .buttonStyle(.plain)
 
-                Button(action: voteIn) {
-                    Label("I'm in", systemImage: "checkmark")
-                        .font(.caption.weight(.black))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(NightloopTheme.fab)
+                SocialActionButton(
+                    title: "I'm in",
+                    systemImage: "checkmark",
+                    style: .filled(NightloopTheme.fab),
+                    action: voteIn
+                )
                 .scaleEffect(presentation.voteInScale)
                 .shadow(color: NightloopTheme.fab.opacity(presentation.voteInGlow * 0.42), radius: 15, x: 0, y: 7)
             }
@@ -1841,27 +1858,33 @@ private struct DecisionDeckCard: View {
     @ViewBuilder
     private var swipeBadge: some View {
         if presentation.intent == .voteIn {
-            Label("Release: I'm in", systemImage: "checkmark")
-                .font(.caption.weight(.black))
+            Text("I'M IN")
+                .font(.system(size: 18, weight: .black))
+                .tracking(1.8)
                 .foregroundStyle(NightloopTheme.good)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(Color.black.opacity(0.52))
-                .clipShape(Capsule())
+                .background(Color.black.opacity(0.46))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay {
-                    Capsule().stroke(NightloopTheme.good.opacity(0.65))
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(NightloopTheme.good.opacity(0.75), lineWidth: 2)
                 }
+                .rotationEffect(.degrees(-10))
         } else if presentation.intent == .skip {
-            Label("Release: Skip", systemImage: "xmark")
-                .font(.caption.weight(.black))
+            Text("SKIP")
+                .font(.system(size: 18, weight: .black))
+                .tracking(1.8)
                 .foregroundStyle(NightloopTheme.rose)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(Color.black.opacity(0.52))
-                .clipShape(Capsule())
+                .background(Color.black.opacity(0.46))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay {
-                    Capsule().stroke(NightloopTheme.rose.opacity(0.65))
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(NightloopTheme.rose.opacity(0.75), lineWidth: 2)
                 }
+                .rotationEffect(.degrees(10))
         }
     }
 }
@@ -1892,22 +1915,20 @@ private struct DecisionShortlistCard: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button(action: vote) {
-                        Label(candidate.viewerShortlistVote == true ? "Your pick" : "Pick winner", systemImage: "checkmark.seal.fill")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.purple)
-                    .disabled(isPending)
+                    SocialActionButton(
+                        title: candidate.viewerShortlistVote == true ? "Your pick" : "Pick winner",
+                        systemImage: "checkmark.seal.fill",
+                        style: .filled(NightloopTheme.purple),
+                        isEnabled: !isPending,
+                        action: vote
+                    )
 
-                    Button(action: details) {
-                        Label("I'm Coming", systemImage: "figure.walk")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.good)
+                    SocialActionButton(
+                        title: "I'm Coming",
+                        systemImage: "figure.walk",
+                        style: .subtle(NightloopTheme.good),
+                        action: details
+                    )
 
                     if canFinalize {
                         Button(action: finalize) {
@@ -2026,22 +2047,20 @@ private struct DecisionCandidateCard: View {
                             .clipShape(Capsule())
                     }
 
-                    Button(action: coming) {
-                        Label("I'm Coming", systemImage: "figure.walk")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.good)
+                    SocialActionButton(
+                        title: "I'm Coming",
+                        systemImage: "figure.walk",
+                        style: .subtle(NightloopTheme.good),
+                        action: coming
+                    )
 
-                    Button(action: canVote ? voteIn : finalize) {
-                        Label(canVote ? "Vote In" : "Details", systemImage: canVote ? "checkmark" : "info.circle")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.fab)
-                    .disabled(!canVote && !canFinalize)
+                    SocialActionButton(
+                        title: canVote ? "Vote In" : "Details",
+                        systemImage: canVote ? "checkmark" : "info.circle",
+                        style: .filled(NightloopTheme.fab),
+                        isEnabled: canVote || canFinalize,
+                        action: canVote ? voteIn : finalize
+                    )
                 }
                 .disabled(isPending)
 
