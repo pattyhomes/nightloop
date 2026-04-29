@@ -194,8 +194,9 @@ struct DevSignInView: View {
             )
             devMessage = response.message
             await authStore.signIn(email: normalizedEmail, password: password)
+            updateDevMessageAfterSignIn(successMessage: response.message)
         } catch {
-            devMessage = error.localizedDescription
+            devMessage = "Dev account sign-in failed: \(error.localizedDescription)"
         }
 
         isCreatingAccount = false
@@ -208,10 +209,12 @@ struct DevSignInView: View {
         do {
             let client = NightloopAPIClient(baseURL: authStore.config.apiBaseURL)
             let response = try await client.resetDevSocialCrew()
-            devMessage = response.audit.ok ? "Dev crew reset. \(response.users.count) users ready around \(response.venue)." : "Dev crew reset, but audit needs attention."
+            let resetMessage = response.audit.ok ? "Dev crew reset. \(response.users.count) users ready around \(response.venue)." : "Dev crew reset, but audit needs attention."
+            devMessage = resetMessage
             await authStore.signIn(email: preset.email, password: preset.password)
+            updateDevMessageAfterSignIn(successMessage: resetMessage)
         } catch {
-            devMessage = error.localizedDescription
+            devMessage = "Dev crew reset failed: \(error.localizedDescription)"
         }
 
         isResettingCrew = false
@@ -224,13 +227,25 @@ struct DevSignInView: View {
         do {
             let client = NightloopAPIClient(baseURL: authStore.config.apiBaseURL)
             _ = try await client.createConfirmedDevAuthUser(email: preset.email, password: preset.password)
-            devMessage = "Signed in as \(preset.displayName)."
+            let successMessage = "Signed in as \(preset.displayName)."
+            devMessage = successMessage
             await authStore.signIn(email: preset.email, password: preset.password)
+            updateDevMessageAfterSignIn(successMessage: successMessage)
         } catch {
-            devMessage = error.localizedDescription
+            devMessage = "Dev preset sign-in failed: \(error.localizedDescription)"
         }
 
         isCreatingAccount = false
+    }
+
+    private func updateDevMessageAfterSignIn(successMessage: String) {
+        if case .failed(let message) = authStore.phase {
+            devMessage = "Supabase sign-in failed: \(message)"
+        } else if case .unconfigured(let message) = authStore.phase {
+            devMessage = message
+        } else {
+            devMessage = successMessage
+        }
     }
     #endif
 }
@@ -255,7 +270,7 @@ private enum DevCrewPreset: String, CaseIterable, Identifiable {
         }
     }
 
-    var password: String { "Charlietest" }
+    var password: String { "NightloopDev1!" }
 
     var displayName: String {
         switch self {

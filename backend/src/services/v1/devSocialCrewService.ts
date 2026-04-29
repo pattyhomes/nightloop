@@ -17,7 +17,7 @@ import {
   validatePhase6SocialSmokeSnapshot
 } from "./socialSmokeAudit";
 
-const DEV_PASSWORD = "Charlietest";
+const DEV_PASSWORD = "NightloopDev1!";
 
 export type DevCrewUserKey = "chuck" | "alex" | "maya" | "jules" | "blocked" | "nia" | "theo";
 

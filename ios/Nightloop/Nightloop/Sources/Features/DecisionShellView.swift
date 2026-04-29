@@ -39,8 +39,10 @@ struct DecisionShellView: View {
     @State private var showingSuggestionSheet = false
     @State private var showingChatSheet = false
     @State private var showingProgressSheet = false
+    @State private var showingRoomActionsSheet = false
     @State private var swipeTranslation: CGSize = .zero
     @State private var rewindSnapshot: DecisionSessionResponse?
+    @State private var isRoomLobbyOpen = false
 
     private var activeMarketID: String {
         me.profile?.selectedMarketId ?? "san-francisco"
@@ -51,29 +53,10 @@ struct DecisionShellView: View {
             OrchidBackground(animated: true, gridOpacity: 0.035)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
-                    if activeSession != nil {
-                        statusStrip
-                    }
-
-                    if isLoading && sessions.isEmpty && activeSession == nil {
-                        LoadingStateView(title: "Loading decision")
-                    } else if let errorMessage, sessions.isEmpty && activeSession == nil {
-                        ErrorStateView(title: "Decision unavailable", message: errorMessage) {
-                            Task { await loadDecision() }
-                        }
-                    } else {
-                        if let activeSession {
-                            sessionDetail(activeSession)
-                        } else {
-                            noActiveRoomView
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 22)
+                mainContent
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+                    .padding(.bottom, 22)
             }
             .refreshable { await loadDecision() }
 
@@ -145,6 +128,60 @@ struct DecisionShellView: View {
                     .presentationDetents([.fraction(0.38), .medium])
                     .presentationDragIndicator(.visible)
             }
+        }
+        .sheet(isPresented: $showingRoomActionsSheet) {
+            if let activeSession {
+                ScrollView {
+                    roomManagementActions(activeSession)
+                        .padding(20)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if isLoading && sessions.isEmpty && activeSession == nil {
+                header
+                LoadingStateView(title: "Loading decision")
+            } else if let errorMessage, sessions.isEmpty && activeSession == nil {
+                header
+                ErrorStateView(title: "Decision unavailable", message: errorMessage) {
+                    Task { await loadDecision() }
+                }
+            } else if let activeSession {
+                activeRoomContent(activeSession)
+            } else {
+                header
+                noActiveRoomView
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activeRoomContent(_ response: DecisionSessionResponse) -> some View {
+        let mode = DecisionRoomSurfacePolicy.mode(
+            hasActiveRoom: true,
+            stage: response.session.stage,
+            hasFinalPlan: response.session.finalPlan != nil,
+            isLobbyOpen: isRoomLobbyOpen
+        )
+
+        switch mode {
+        case .swipeRoom:
+            focusedSwipeRoom(response)
+        case .lobby:
+            roomLobby(response)
+        case .shortlist, .finalPlan:
+            header
+            statusStrip
+            sessionDetail(response)
+        case .noRoom:
+            header
+            noActiveRoomView
         }
     }
 
@@ -367,7 +404,7 @@ struct DecisionShellView: View {
     private var sessionsSection: some View {
         if !sessions.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                NightloopSectionHeader(title: "Rooms", trailing: "\(sessions.count)")
+                NightloopSectionHeader(title: "Switch rooms", trailing: "\(sessions.count)")
                 ForEach(sessions) { session in
                     Button {
                         openSession(session.id)
@@ -380,6 +417,110 @@ struct DecisionShellView: View {
                     .buttonStyle(.plain)
                 }
             }
+        }
+    }
+
+    private func focusedSwipeRoom(_ response: DecisionSessionResponse) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            focusedSwipeHeader(response)
+            deckSection(response, showsProgressControls: false)
+        }
+    }
+
+    private func focusedSwipeHeader(_ response: DecisionSessionResponse) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Button {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                    isRoomLobbyOpen = true
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.black))
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .tint(NightloopTheme.inkMuted)
+            .accessibilityLabel("Open room lobby")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(response.session.roomTitle ?? "Tonight room")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                Text("\(response.session.memberCounts.joined) joined · \(focusedSwipeStatus(response))")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                showingProgressSheet = true
+            } label: {
+                Image(systemName: "chart.bar.fill")
+                    .font(.caption.weight(.black))
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .tint(NightloopTheme.purple)
+            .accessibilityLabel("Group progress")
+
+            Button {
+                showingRoomActionsSheet = true
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.caption.weight(.black))
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .tint(NightloopTheme.inkMuted)
+            .accessibilityLabel("Room actions")
+        }
+    }
+
+    private func focusedSwipeStatus(_ response: DecisionSessionResponse) -> String {
+        if response.session.progress?.readyForShortlist == true {
+            return "shortlist ready"
+        }
+        let deck = response.deckCandidates ?? Array(response.candidates.prefix(8))
+        let remaining = deck.filter { $0.viewerVote == nil }.count
+        return remaining == 1 ? "1 card left" : "\(remaining) cards left"
+    }
+
+    private func roomLobby(_ response: DecisionSessionResponse) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            NightloopCard(fill: NightloopTheme.purpleSoft) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Room lobby", systemImage: "person.3.sequence.fill")
+                        .font(.caption.weight(.black))
+                        .tracking(1.0)
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                    Text(response.session.roomTitle ?? "Tonight room")
+                        .font(.system(size: 24, weight: .black, design: .rounded))
+                        .foregroundStyle(NightloopTheme.ink)
+                        .lineLimit(1)
+                    Text("Manage code, chat, suggestions, and room switching here. Swipe progress is saved.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                            isRoomLobbyOpen = false
+                        }
+                    } label: {
+                        Label("Back to swiping", systemImage: "rectangle.stack.person.crop.fill")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NightloopTheme.fab)
+                }
+            }
+
+            roomManagementActions(response)
         }
     }
 
@@ -399,61 +540,38 @@ struct DecisionShellView: View {
                 deckSection(response)
             }
 
-            roomActionTray(response)
+            roomManagementActions(response)
+        }
+    }
 
-            if response.session.viewerRole == "creator" && response.session.status == "active" {
-                HStack(spacing: 8) {
+    private func deckSection(_ response: DecisionSessionResponse, showsProgressControls: Bool = true) -> some View {
+        let deck = response.deckCandidates ?? Array(response.candidates.prefix(8))
+        let nextCandidate = deck.first { $0.viewerVote == nil } ?? deck.first
+        return VStack(alignment: .leading, spacing: 12) {
+            if showsProgressControls {
+                HStack(spacing: 10) {
                     Button {
-                        revokeCode(response.session)
+                        showingProgressSheet = true
                     } label: {
-                        Label("Revoke code", systemImage: "qrcode.viewfinder")
+                        Label("Group progress", systemImage: "chart.bar.fill")
                             .font(.caption.weight(.black))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .tint(NightloopTheme.inkMuted)
+                    .tint(NightloopTheme.purple)
 
-                    Button {
-                        endSession(response.session)
-                    } label: {
-                        Label("End room", systemImage: "checkmark.circle")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
+                    if response.session.capabilities?.canForceShortlist == true {
+                        Button {
+                            advanceShortlist()
+                        } label: {
+                            Text("See results")
+                                .font(.caption.weight(.black))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NightloopTheme.fab)
+                        .disabled(isMutating)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.rose)
-                }
-                .disabled(isMutating)
-            }
-        }
-    }
-
-    private func deckSection(_ response: DecisionSessionResponse) -> some View {
-        let deck = response.deckCandidates ?? Array(response.candidates.prefix(8))
-        let nextCandidate = deck.first { $0.viewerVote == nil } ?? deck.first
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Button {
-                    showingProgressSheet = true
-                } label: {
-                    Label("Group progress", systemImage: "chart.bar.fill")
-                        .font(.caption.weight(.black))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(NightloopTheme.purple)
-
-                if response.session.capabilities?.canForceShortlist == true {
-                    Button {
-                        advanceShortlist()
-                    } label: {
-                        Text("See results")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.fab)
-                    .disabled(isMutating)
                 }
             }
 
@@ -467,13 +585,12 @@ struct DecisionShellView: View {
                     onAccountChanged: onAccountChanged,
                     onDragChanged: { swipeTranslation = $0 },
                     onDragEnded: { translation in
-                        let presentation = DecisionSwipePresentation.state(for: translation)
-                        switch presentation.intent {
+                        switch DecisionSwipeReleasePolicy.commitIntent(for: translation, phase: .ended) {
                         case .voteIn:
                             vote(nextCandidate, .voteIn)
                         case .skip:
                             vote(nextCandidate, .skip)
-                        case .neutral:
+                        case .neutral, .none:
                             withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
                                 swipeTranslation = .zero
                             }
@@ -498,7 +615,7 @@ struct DecisionShellView: View {
                     .disabled(isMutating)
                 }
             } else {
-                EmptyStateView(title: "Deck complete", message: "Open group progress to unlock the shortlist.")
+                EmptyStateView(title: "Deck complete", message: "Open group progress when the room is ready for the shortlist.")
             }
         }
     }
@@ -576,6 +693,41 @@ struct DecisionShellView: View {
                         .font(.caption2.weight(.black))
                         .foregroundStyle(NightloopTheme.inkMuted)
                 }
+            }
+        }
+    }
+
+    private func roomManagementActions(_ response: DecisionSessionResponse) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            roomActionTray(response)
+
+            if sessions.count > 1 {
+                sessionsSection
+            }
+
+            if response.session.viewerRole == "creator" && response.session.status == "active" {
+                HStack(spacing: 8) {
+                    Button {
+                        revokeCode(response.session)
+                    } label: {
+                        Label("Revoke code", systemImage: "qrcode.viewfinder")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.inkMuted)
+
+                    Button {
+                        endSession(response.session)
+                    } label: {
+                        Label("End room", systemImage: "checkmark.circle")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NightloopTheme.rose)
+                }
+                .disabled(isMutating)
             }
         }
     }
@@ -860,6 +1012,7 @@ struct DecisionShellView: View {
                 activeSession = try await apiClient.decisionSession(id: activeID, bearerToken: token)
             } else if let first = sessions.first {
                 activeSession = try await apiClient.decisionSession(id: first.id, bearerToken: token)
+                isRoomLobbyOpen = false
             }
             rewindSnapshot = nil
             swipeTranslation = .zero
@@ -888,6 +1041,8 @@ struct DecisionShellView: View {
                     bearerToken: token
                 )
                 selectedInviteIDs.removeAll()
+                showingCreateSheet = false
+                isRoomLobbyOpen = false
                 showToast("Room created")
                 await loadDecision()
             } catch {
@@ -905,6 +1060,7 @@ struct DecisionShellView: View {
             do {
                 activeSession = try await apiClient.joinDecisionSession(code: code, bearerToken: token)
                 joinCode = ""
+                isRoomLobbyOpen = false
                 showToast("Joined")
                 await loadDecision()
             } catch {
@@ -926,6 +1082,7 @@ struct DecisionShellView: View {
         Task {
             do {
                 activeSession = try await apiClient.decisionSession(id: id, bearerToken: token)
+                isRoomLobbyOpen = false
                 rewindSnapshot = nil
                 swipeTranslation = .zero
             } catch {
@@ -1310,11 +1467,11 @@ private struct DecisionSessionRow: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.leader?.venueName ?? "Decision room")
+                Text(session.roomTitle ?? "Tonight room")
                     .font(.subheadline.weight(.black))
                     .foregroundStyle(NightloopTheme.ink)
                     .lineLimit(1)
-                Text("\(session.memberCounts.joined) joined · expires \(relativeTime(session.expiresAt))")
+                Text(sessionSubtitle)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(NightloopTheme.inkMuted)
                     .lineLimit(1)
@@ -1334,12 +1491,60 @@ private struct DecisionSessionRow: View {
                 .stroke(isSelected ? NightloopTheme.purpleEdge : NightloopTheme.hairline)
         }
     }
+
+    private var sessionSubtitle: String {
+        let leader = session.leader.map { "Leading: \($0.venueName)" }
+        let fallback = "\(session.memberCounts.joined) joined"
+        return "\(leader ?? fallback) · expires \(relativeTime(session.expiresAt))"
+    }
 }
 
 enum DecisionSwipeIntent: Equatable {
     case neutral
     case skip
     case voteIn
+}
+
+enum DecisionSwipePhase: Equatable {
+    case dragging
+    case ended
+}
+
+enum DecisionSwipeReleasePolicy {
+    static func commitIntent(for translation: CGSize, phase: DecisionSwipePhase) -> DecisionSwipeIntent? {
+        guard phase == .ended else { return nil }
+        let intent = DecisionSwipePresentation.state(for: translation).intent
+        return intent == .neutral ? nil : intent
+    }
+}
+
+enum DecisionRoomSurfaceMode: Equatable {
+    case noRoom
+    case swipeRoom
+    case lobby
+    case shortlist
+    case finalPlan
+}
+
+enum DecisionRoomSurfacePolicy {
+    static func mode(
+        hasActiveRoom: Bool,
+        stage: DecisionStage?,
+        hasFinalPlan: Bool,
+        isLobbyOpen: Bool
+    ) -> DecisionRoomSurfaceMode {
+        guard hasActiveRoom else { return .noRoom }
+        if hasFinalPlan {
+            return .finalPlan
+        }
+        if stage == .shortlistVoting {
+            return .shortlist
+        }
+        if isLobbyOpen {
+            return .lobby
+        }
+        return .swipeRoom
+    }
 }
 
 struct DecisionSwipePresentation: Equatable {
@@ -1636,7 +1841,7 @@ private struct DecisionDeckCard: View {
     @ViewBuilder
     private var swipeBadge: some View {
         if presentation.intent == .voteIn {
-            Label("I'm in", systemImage: "checkmark")
+            Label("Release: I'm in", systemImage: "checkmark")
                 .font(.caption.weight(.black))
                 .foregroundStyle(NightloopTheme.good)
                 .padding(.horizontal, 12)
@@ -1647,7 +1852,7 @@ private struct DecisionDeckCard: View {
                     Capsule().stroke(NightloopTheme.good.opacity(0.65))
                 }
         } else if presentation.intent == .skip {
-            Label("Skip", systemImage: "xmark")
+            Label("Release: Skip", systemImage: "xmark")
                 .font(.caption.weight(.black))
                 .foregroundStyle(NightloopTheme.rose)
                 .padding(.horizontal, 12)

@@ -428,13 +428,18 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
       }
 
       const body = parseBody(DevSocialCrewResetSchema, req.body);
-      res.json(
-        await seedDevSocialCrew({
-          market: body.market,
-          reset: true,
-          authAdmin
-        })
-      );
+      try {
+        res.json(
+          await seedDevSocialCrew({
+            market: body.market,
+            reset: true,
+            authAdmin
+          })
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown reset failure.";
+        throw new ApiError(500, "DEV_SOCIAL_CREW_RESET_FAILED", `Dev social crew reset failed: ${message}`);
+      }
     })
   );
 

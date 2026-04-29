@@ -81,6 +81,7 @@ describe("Nightloop v1 social API", () => {
   let pool: Pool;
   let app: ReturnType<typeof createApp>;
   let productionApp: ReturnType<typeof createApp>;
+  let failingDevResetApp: ReturnType<typeof createApp>;
   const createdDevAuthUsers: Array<{ id: string; email?: string }> = [];
 
   const authAdmin: AuthAdminClient = {
@@ -195,6 +196,15 @@ describe("Nightloop v1 social API", () => {
     pool = new Pool({ connectionString: config.databaseUrl });
     app = createApp({ config, authAdmin });
     productionApp = createApp({ config: { ...config, env: "production" }, authAdmin });
+    failingDevResetApp = createApp({
+      config,
+      authAdmin: {
+        async deleteUser(): Promise<void> {},
+        async createConfirmedEmailUser(): Promise<{ id: string; email?: string }> {
+          throw new Error("Supabase Auth admin failed in local dev.");
+        }
+      }
+    });
   });
 
   afterAll(async () => {
@@ -311,7 +321,7 @@ describe("Nightloop v1 social API", () => {
         })
       ])
     );
-    expect(JSON.stringify(reset.body)).not.toContain("Charlietest");
+    expect(JSON.stringify(reset.body)).not.toContain("NightloopDev1!");
     expect(JSON.stringify(reset.body)).not.toContain("DATABASE_URL");
     expect(createdDevAuthUsers.map((user) => user.email)).toEqual(
       expect.arrayContaining(["test@dev.com", "alex@dev.com", "maya@dev.com", "jules@dev.com", "blocked@dev.com"])
@@ -349,6 +359,17 @@ describe("Nightloop v1 social API", () => {
       .post("/api/v1/dev/social-crew/reset")
       .send({ market: "san-francisco" })
       .expect(404);
+  });
+
+  it("returns a specific dev reset failure envelope for simulator sign-in debugging", async () => {
+    const reset = await request(failingDevResetApp)
+      .post("/api/v1/dev/social-crew/reset")
+      .send({ market: "san-francisco" })
+      .expect(500);
+
+    expect(reset.body.error.code).toBe("DEV_SOCIAL_CREW_RESET_FAILED");
+    expect(reset.body.error.message).toContain("Supabase Auth admin failed in local dev.");
+    expect(JSON.stringify(reset.body)).not.toContain("DATABASE_URL");
   });
 
   it("creates revocable expiring invite codes that establish friendships", async () => {

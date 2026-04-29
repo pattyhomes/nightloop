@@ -597,6 +597,37 @@ final class NightloopTests: XCTestCase {
         XCTAssertNil(rewound.lastVote)
     }
 
+    func testDecisionSwipeCommitRequiresRelease() {
+        let overThreshold = CGSize(width: 130, height: -4)
+
+        XCTAssertNil(DecisionSwipeReleasePolicy.commitIntent(for: overThreshold, phase: .dragging))
+        XCTAssertEqual(DecisionSwipeReleasePolicy.commitIntent(for: overThreshold, phase: .ended), .voteIn)
+        XCTAssertNil(DecisionSwipeReleasePolicy.commitIntent(for: CGSize(width: 42, height: 0), phase: .ended))
+    }
+
+    func testDecisionRoomSurfaceDefaultsToFocusedSwipeWhenActive() {
+        XCTAssertEqual(
+            DecisionRoomSurfacePolicy.mode(hasActiveRoom: true, stage: .swiping, hasFinalPlan: false, isLobbyOpen: false),
+            .swipeRoom
+        )
+        XCTAssertEqual(
+            DecisionRoomSurfacePolicy.mode(hasActiveRoom: true, stage: .swiping, hasFinalPlan: false, isLobbyOpen: true),
+            .lobby
+        )
+        XCTAssertEqual(
+            DecisionRoomSurfacePolicy.mode(hasActiveRoom: true, stage: .shortlistVoting, hasFinalPlan: false, isLobbyOpen: false),
+            .shortlist
+        )
+        XCTAssertEqual(
+            DecisionRoomSurfacePolicy.mode(hasActiveRoom: true, stage: .swiping, hasFinalPlan: true, isLobbyOpen: false),
+            .finalPlan
+        )
+        XCTAssertEqual(
+            DecisionRoomSurfacePolicy.mode(hasActiveRoom: false, stage: nil, hasFinalPlan: false, isLobbyOpen: false),
+            .noRoom
+        )
+    }
+
     func testFriendsReactionOptionsAreCompactAndNightlifeRelevant() {
         XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.label), ["Packed", "Walking", "Music"])
         XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.signalKind), [.packed, .shortLine, .eventLive])
