@@ -24,18 +24,21 @@ import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
 import {
   addDecisionSessionMessage,
+  advanceDecisionSessionShortlist,
   createDecisionSession,
   endDecisionSession,
   finalizeDecisionSession,
   getDecisionSession,
   joinDecisionSession,
+  joinDecisionSessionByCode,
   listDecisionSessions,
   removeDecisionCandidate,
   reportDecisionSessionMessage,
   revokeDecisionSessionCode,
   searchDecisionSessionVenues,
   suggestDecisionCandidate,
-  voteDecisionSession
+  voteDecisionSession,
+  voteDecisionSessionShortlist
 } from "../../services/v1/decisionService";
 import {
   acceptFriendInvite,
@@ -47,6 +50,7 @@ import {
   declineFriendRequest,
   listBlocks,
   listFriendActivity,
+  listFriendsTonight,
   listFriends,
   reportActivity,
   reportProfile,
@@ -243,6 +247,12 @@ const DecisionJoinSchema = z
   })
   .strict();
 
+const DecisionJoinByCodeSchema = z
+  .object({
+    code: z.string().trim().min(6).max(40)
+  })
+  .strict();
+
 const DecisionVoteSchema = z
   .object({
     candidate_id: z.string().uuid().optional(),
@@ -259,6 +269,12 @@ const DecisionVoteSchema = z
       });
     }
   });
+
+const DecisionShortlistVoteSchema = z
+  .object({
+    candidate_id: z.string().uuid()
+  })
+  .strict();
 
 const DecisionVenueSearchQuerySchema = z.object({
   q: z.string().trim().min(1).max(80),
@@ -614,6 +630,15 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     })
   );
 
+  router.get(
+    "/friends/tonight",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(FriendActivityQuerySchema, req.query);
+      res.json(await listFriendsTonight({ account: accountFromRequest(req), limit: query.limit }));
+    })
+  );
+
   router.post(
     "/friends/venues/:venueId/coming",
     requireEligibleMiddleware,
@@ -732,6 +757,21 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
   );
 
   router.post(
+    "/decision-sessions/join",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionJoinByCodeSchema, req.body);
+      res.json(
+        await joinDecisionSessionByCode({
+          account: accountFromRequest(req),
+          code: body.code
+        })
+      );
+    })
+  );
+
+  router.post(
     "/decision-sessions/:id/join",
     requireEligibleMiddleware,
     accountWriteLimiter,
@@ -760,6 +800,36 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
           candidateId: body.candidate_id,
           venueId: body.venue_id,
           vote: body.vote
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/advance-shortlist",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(
+        await advanceDecisionSessionShortlist({
+          account: accountFromRequest(req),
+          sessionId: req.params.id
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/shortlist-votes",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionShortlistVoteSchema, req.body);
+      res.json(
+        await voteDecisionSessionShortlist({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: body.candidate_id
         })
       );
     })

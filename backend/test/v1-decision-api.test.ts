@@ -311,7 +311,7 @@ describe("Nightloop v1 decision sessions API", () => {
     expect(invitedJoin.body.candidates[0].group_fit_member_count).toBe(2);
 
     await request(app)
-      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .post("/api/v1/decision-sessions/join")
       .set("Authorization", `Bearer ${codeFriend.token}`)
       .send({ code })
       .expect(200);
@@ -476,6 +476,12 @@ describe("Nightloop v1 decision sessions API", () => {
       .send({ type: "text", text: "x".repeat(141) })
       .expect(400);
 
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/advance-shortlist`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(200);
+
     const finalized = await request(app)
       .post(`/api/v1/decision-sessions/${sessionId}/finalize`)
       .set("Authorization", `Bearer ${host.token}`)
@@ -514,6 +520,89 @@ describe("Nightloop v1 decision sessions API", () => {
       .set("Authorization", `Bearer ${friend.token}`)
       .send({ type: "emoji", emoji: "eyes" })
       .expect(201);
+  }, 120000);
+
+  it("runs decision rooms through swipe, shortlist, and creator-locked final stages", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Stage Host", "stage_host");
+    const friend = await createEligibleProfile("Stage Friend", "stage_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    expect(created.body.session.stage).toBe("swiping");
+    expect(created.body.session.room_title).toContain("tonight");
+    expect(created.body.session.id).toBeDefined();
+    expect(JSON.stringify(created.body.session.room_title)).not.toContain(sessionId);
+    expect(created.body.deck_candidates).toHaveLength(8);
+    expect(created.body.shortlist).toEqual([]);
+    expect(created.body.session.progress.ready_for_shortlist).toBe(false);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({})
+      .expect(200);
+
+    for (const candidate of created.body.deck_candidates.slice(0, 4)) {
+      await request(app)
+        .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+        .set("Authorization", `Bearer ${host.token}`)
+        .send({ candidate_id: candidate.id, vote: "in" })
+        .expect(200);
+      await request(app)
+        .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+        .set("Authorization", `Bearer ${friend.token}`)
+        .send({ candidate_id: candidate.id, vote: "in" })
+        .expect(200);
+    }
+
+    const advanced = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/advance-shortlist`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(200);
+    expect(advanced.body.session.stage).toBe("shortlist_voting");
+    expect(advanced.body.shortlist).toHaveLength(5);
+    expect(advanced.body.recommended_final_candidate.id).toBe(advanced.body.shortlist[0].id);
+    expect(advanced.body.session.capabilities.can_force_shortlist).toBe(false);
+    expect(advanced.body.session.capabilities.can_vote).toBe(false);
+    expect(advanced.body.session.capabilities.can_vote_shortlist).toBe(true);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: advanced.body.shortlist[0].id, vote: "skip" })
+      .expect(409);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/shortlist-votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: advanced.body.shortlist[0].id })
+      .expect(200);
+    const shortlistVoted = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/shortlist-votes`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ candidate_id: advanced.body.shortlist[1].id })
+      .expect(200);
+    expect(shortlistVoted.body.shortlist[0].shortlist_vote_count).toBe(1);
+    expect(shortlistVoted.body.shortlist[0].viewer_shortlist_vote).toBeNull();
+    expect(shortlistVoted.body.shortlist[1].viewer_shortlist_vote).toBe(true);
+
+    const finalized = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/finalize`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: shortlistVoted.body.recommended_final_candidate.id })
+      .expect(200);
+    expect(finalized.body.session.stage).toBe("finalized");
+    expect(finalized.body.session.final_plan.candidate_id).toBe(shortlistVoted.body.recommended_final_candidate.id);
+    expect(finalized.body.session.capabilities.can_vote_shortlist).toBe(false);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/shortlist-votes`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ candidate_id: advanced.body.shortlist[2].id })
+      .expect(409);
   }, 120000);
 
   it("enforces candidate suggestion cap, removal permissions, and initial candidate protection", async () => {

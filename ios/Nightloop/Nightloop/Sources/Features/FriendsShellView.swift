@@ -6,8 +6,10 @@ struct FriendsShellView: View {
     let apiClient: NightloopAPIClient
     @ObservedObject var authStore: AuthStore
     let me: MeResponse
+    let onStartDecisionRoom: ([String]) -> Void
 
     @State private var friendsResponse: FriendsResponse?
+    @State private var tonightResponse: FriendsTonightResponse?
     @State private var activityItems: [FriendActivityItem] = []
     @State private var searchText = ""
     @State private var searchResults: [FriendSearchItem] = []
@@ -21,6 +23,7 @@ struct FriendsShellView: View {
     @State private var toastIsError = false
     @State private var pendingActionIDs: Set<String> = []
     @State private var selectedProfile: SocialProfileContext?
+    @State private var showingManageSheet = false
 
     private var ghostModeEnabled: Bool {
         me.settings?.ghostMode ?? false
@@ -39,7 +42,7 @@ struct FriendsShellView: View {
     }
 
     private var friendsGoingCount: Int {
-        activityItems.filter(\.viewerHasComing).count
+        tonightResponse?.groups.filter(\.viewerHasComing).count ?? activityItems.filter(\.viewerHasComing).count
     }
 
     var body: some View {
@@ -50,7 +53,6 @@ struct FriendsShellView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     header
                     socialStatusStrip
-                    statsRow
 
                     if isLoading && friendsResponse == nil {
                         LoadingStateView(title: "Loading friends")
@@ -59,10 +61,7 @@ struct FriendsShellView: View {
                             Task { await loadSocial() }
                         }
                     } else {
-                        requestsSection
-                        inviteSection
-                        searchSection
-                        friendsStrip
+                        friendsTonightGroupsSection
                         activitySection
                     }
                 }
@@ -89,21 +88,58 @@ struct FriendsShellView: View {
             )
             .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showingManageSheet) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    statsRow
+                    requestsSection
+                    inviteSection
+                    searchSection
+                    friendsStrip
+                }
+                .padding(20)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     private var header: some View {
         HStack(alignment: .bottom, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("YOUR CREW")
+                Text("FRIENDS ACTIVITY")
                     .font(.caption2.weight(.black))
                     .tracking(1.6)
                     .foregroundStyle(NightloopTheme.inkMuted)
-                Text("Friends")
+                Text("Friends activity")
                     .font(.system(size: 28, weight: .black, design: .rounded))
                     .foregroundStyle(NightloopTheme.ink)
             }
 
             Spacer()
+
+            Button {
+                showingManageSheet = true
+            } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 42, height: 42)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(Circle())
+                    if !incomingRequests.isEmpty {
+                        Text("\(incomingRequests.count)")
+                            .font(.caption2.weight(.black))
+                            .foregroundStyle(.white)
+                            .frame(minWidth: 18, minHeight: 18)
+                            .background(NightloopTheme.rose)
+                            .clipShape(Circle())
+                            .offset(x: 3, y: -3)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Manage friends")
 
             GlassIconButton(systemName: "arrow.clockwise") {
                 Task { await loadSocial() }
@@ -156,7 +192,7 @@ struct FriendsShellView: View {
             return "Your activity is hidden tonight."
         }
 
-        if let first = activityItems.first {
+        if let first = tonightResponse?.groups.first?.latestActivity ?? activityItems.first {
             return activitySummary(first, includeActor: true)
         }
 
@@ -164,7 +200,7 @@ struct FriendsShellView: View {
             return "Add friends to see tonight plans here."
         }
 
-        return "No friend activity yet tonight."
+        return "Quiet so far. Invite friends or start a room."
     }
 
     private var statsRow: some View {
@@ -379,6 +415,35 @@ struct FriendsShellView: View {
         }
     }
 
+    private var friendsTonightGroupsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            NightloopSectionHeader(
+                title: "Who's out tonight",
+                trailing: (tonightResponse?.groups.isEmpty == false) ? "\(tonightResponse?.groups.count ?? 0)" : nil
+            )
+
+            if let groups = tonightResponse?.groups, !groups.isEmpty {
+                VStack(spacing: 12) {
+                    ForEach(groups) { group in
+                        FriendsTonightGroupCard(
+                            group: group,
+                            isGhostMode: ghostModeEnabled,
+                            isPending: pendingActionIDs.contains(group.venue.id),
+                            onComing: { setComing(for: group) },
+                            onStartRoom: { startRoom(from: group) },
+                            onProfile: { profile in openProfile(profile, friendshipID: nil, isFriend: true) }
+                        )
+                    }
+                }
+            } else {
+                EmptyStateView(
+                    title: tonightResponse?.emptyState?.title ?? "Quiet so far",
+                    message: tonightResponse?.emptyState?.message ?? "Invite friends or start a room when the night takes shape."
+                )
+            }
+        }
+    }
+
     private var activitySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             NightloopSectionHeader(title: "Tonight activity", trailing: activityItems.isEmpty ? nil : "\(activityItems.count)")
@@ -418,9 +483,11 @@ struct FriendsShellView: View {
 
         do {
             async let friendsTask = apiClient.friends(bearerToken: token)
+            async let tonightTask = apiClient.friendsTonight(bearerToken: token)
             async let activityTask = apiClient.friendActivity(bearerToken: token)
-            let (friends, activity) = try await (friendsTask, activityTask)
+            let (friends, tonight, activity) = try await (friendsTask, tonightTask, activityTask)
             friendsResponse = friends
+            tonightResponse = tonight
             activityItems = activity.items
         } catch {
             errorMessage = error.localizedDescription
@@ -578,6 +645,40 @@ struct FriendsShellView: View {
             }
             pendingActionIDs.remove(activity.id)
         }
+    }
+
+    private func setComing(for group: FriendsTonightGroup) {
+        guard let token = authStore.accessToken else { return }
+        if ghostModeEnabled {
+            showToast("Turn off Ghost Mode to share that you're coming.", isError: true)
+            return
+        }
+
+        Task {
+            pendingActionIDs.insert(group.venue.id)
+            do {
+                if group.viewerHasComing {
+                    _ = try await apiClient.cancelComing(venueID: group.venue.id, bearerToken: token)
+                    showToast("Plan removed")
+                } else {
+                    _ = try await apiClient.toggleComing(venueID: group.venue.id, isComing: true, bearerToken: token)
+                    showToast("You're coming")
+                }
+                await loadSocial()
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            pendingActionIDs.remove(group.venue.id)
+        }
+    }
+
+    private func startRoom(from group: FriendsTonightGroup) {
+        if ghostModeEnabled {
+            showToast("Turn Ghost Mode off to start social plans.", isError: true)
+            return
+        }
+
+        onStartDecisionRoom(group.friends.map(\.id))
     }
 
     private func reply(to activity: FriendActivityItem, text: String) {
@@ -830,6 +931,87 @@ private struct FriendBubble: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct FriendsTonightGroupCard: View {
+    let group: FriendsTonightGroup
+    let isGhostMode: Bool
+    let isPending: Bool
+    let onComing: () -> Void
+    let onStartRoom: () -> Void
+    let onProfile: (FriendProfile) -> Void
+
+    var body: some View {
+        NightloopCard(fill: Color.white.opacity(0.045)) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(LinearGradient(colors: [NightloopTheme.purple.opacity(0.32), NightloopTheme.rose.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .frame(width: 78, height: 78)
+                        Text(initials(for: group.venue.name))
+                            .font(.title3.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(group.venue.name)
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(1)
+                        Text([group.venue.neighborhood, group.venue.category].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .lineLimit(1)
+                        Text(activitySummary(group.latestActivity, includeActor: true))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+                }
+
+                HStack(spacing: -8) {
+                    ForEach(group.friends.prefix(5)) { friend in
+                        Button {
+                            onProfile(friend)
+                        } label: {
+                            AvatarInitials(initials: initials(for: friend.displayName), color: NightloopTheme.purple)
+                                .frame(width: 34, height: 34)
+                                .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 2))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                    Text("\(group.comingCount) going")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.good)
+                }
+
+                HStack(spacing: 10) {
+                    Button(action: onComing) {
+                        Label(group.viewerHasComing ? "You're coming" : "I'm Coming", systemImage: isGhostMode ? "eye.slash.fill" : "figure.walk")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(isGhostMode ? NightloopTheme.amber : NightloopTheme.good)
+                    .disabled(isPending)
+
+                    Button(action: onStartRoom) {
+                        Label("Pick a spot", systemImage: "person.3.sequence.fill")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.purple)
+                }
+            }
+        }
     }
 }
 

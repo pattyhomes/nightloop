@@ -899,6 +899,74 @@ export async function listFriendActivity(input: { account: AccountState; limit?:
   return { items: result.rows.map(formatActivity) };
 }
 
+export async function listFriendsTonight(input: { account: AccountState; limit?: number }) {
+  requireEligible(input.account);
+  const activity = await listFriendActivity({ account: input.account, limit: Math.max(input.limit ?? 30, 30) });
+  const groupsByVenue = new Map<string, {
+    venue: NonNullable<ReturnType<typeof formatActivity>["venue"]>;
+    friends: Array<ReturnType<typeof formatActivity>["actor"]>;
+    latest_activity: ReturnType<typeof formatActivity>;
+    viewer_has_coming: boolean;
+    coming_count: number;
+  }>();
+
+  for (const item of activity.items) {
+    if (!item.venue) continue;
+    const existing = groupsByVenue.get(item.venue.id);
+    if (!existing) {
+      groupsByVenue.set(item.venue.id, {
+        venue: item.venue,
+        friends: item.actor.id === input.account.user.id ? [] : [item.actor],
+        latest_activity: item,
+        viewer_has_coming: item.viewer_has_coming,
+        coming_count: item.coming_count
+      });
+      continue;
+    }
+    if (Date.parse(item.created_at) > Date.parse(existing.latest_activity.created_at)) {
+      existing.latest_activity = item;
+    }
+    if (item.actor.id !== input.account.user.id && !existing.friends.some((friend) => friend.id === item.actor.id)) {
+      existing.friends.push(item.actor);
+    }
+    existing.viewer_has_coming = existing.viewer_has_coming || item.viewer_has_coming;
+    existing.coming_count = Math.max(existing.coming_count, item.coming_count);
+  }
+
+  const groups = [...groupsByVenue.values()]
+    .filter((group) => group.friends.length > 0 || group.viewer_has_coming)
+    .sort((left, right) => Date.parse(right.latest_activity.created_at) - Date.parse(left.latest_activity.created_at))
+    .slice(0, Math.max(1, Math.min(20, input.limit ?? 10)))
+    .map((group) => ({
+      venue: group.venue,
+      friends: group.friends,
+      latest_activity: group.latest_activity,
+      viewer_has_coming: group.viewer_has_coming,
+      coming_count: group.coming_count,
+      cta: {
+        primary: group.viewer_has_coming ? "You're coming" : "I'm Coming",
+        can_come: !group.viewer_has_coming,
+        secondary: "Pick a spot"
+      }
+    }));
+
+  return {
+    generated_at: new Date().toISOString(),
+    groups,
+    timeline: activity.items,
+    counts: {
+      groups: groups.length,
+      timeline: activity.items.length
+    },
+    empty_state: groups.length === 0
+      ? {
+          title: "Quiet so far",
+          message: "Invite friends or start a room when the night takes shape."
+        }
+      : null
+  };
+}
+
 export async function toggleComing(input: { account: AccountState; venueId: string; isComing: boolean }) {
   requireEligible(input.account);
   if (!input.isComing) {

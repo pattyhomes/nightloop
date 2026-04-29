@@ -140,6 +140,14 @@ struct NightloopAPIClient {
         )
     }
 
+    func friendsTonight(bearerToken: String, limit: Int = 10) async throws -> FriendsTonightResponse {
+        try await send(
+            path: "friends/tonight",
+            queryItems: [URLQueryItem(name: "limit", value: String(limit))],
+            bearerToken: bearerToken
+        )
+    }
+
     func sendFriendRequest(userID: String, bearerToken: String) async throws -> FriendRequestResponse {
         try await send(path: "friends/requests", method: "POST", bearerToken: bearerToken, body: UserIDBody(userID: userID))
     }
@@ -274,6 +282,15 @@ struct NightloopAPIClient {
         )
     }
 
+    func joinDecisionSession(code: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/join",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionJoinBody(code: code)
+        )
+    }
+
     func voteDecisionSession(
         id: String,
         candidateID: String,
@@ -285,6 +302,28 @@ struct NightloopAPIClient {
             method: "POST",
             bearerToken: bearerToken,
             body: DecisionVoteBody(candidateID: candidateID, venueID: nil, vote: vote)
+        )
+    }
+
+    func advanceDecisionShortlist(sessionID: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/advance-shortlist",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: EmptyBody()
+        )
+    }
+
+    func voteDecisionShortlist(
+        sessionID: String,
+        candidateID: String,
+        bearerToken: String
+    ) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(sessionID)/shortlist-votes",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DecisionShortlistVoteBody(candidateID: candidateID)
         )
     }
 
@@ -616,6 +655,14 @@ private struct DecisionVoteBody: Encodable {
         case candidateID = "candidate_id"
         case venueID = "venue_id"
         case vote
+    }
+}
+
+private struct DecisionShortlistVoteBody: Encodable {
+    let candidateID: String
+
+    enum CodingKeys: String, CodingKey {
+        case candidateID = "candidate_id"
     }
 }
 

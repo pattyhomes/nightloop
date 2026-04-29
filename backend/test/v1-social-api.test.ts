@@ -438,6 +438,72 @@ describe("Nightloop v1 social API", () => {
     expect(Number(report.rows[0]?.count ?? 0)).toBe(1);
   });
 
+  it("returns privacy-filtered venue-first friends tonight groups with timeline fallback", async () => {
+    const alice = await createEligibleProfile("Tonight Alice", `tonightalice_${testRunId.slice(0, 6)}`);
+    const bob = await createEligibleProfile("Tonight Bob", `tonightbob_${testRunId.slice(0, 6)}`);
+    const ghost = await createEligibleProfile("Tonight Ghost", `tonightghost_${testRunId.slice(0, 6)}`);
+    const blocked = await createEligibleProfile("Tonight Blocked", `tonightblocked_${testRunId.slice(0, 6)}`);
+    await requestAndAccept(alice, bob);
+    await requestAndAccept(alice, ghost);
+    await requestAndAccept(alice, blocked);
+    const [venue] = await getSfVenues();
+
+    await request(app)
+      .patch("/api/v1/me/settings")
+      .set("Authorization", `Bearer ${ghost.token}`)
+      .send({ ghost_mode: true })
+      .expect(200);
+    await request(app)
+      .post("/api/v1/friends/blocks")
+      .set("Authorization", `Bearer ${alice.token}`)
+      .send({ user_id: blocked.userId })
+      .expect(201);
+
+    const bobComing = await request(app)
+      .post(`/api/v1/friends/venues/${venue.id}/coming`)
+      .set("Authorization", `Bearer ${bob.token}`)
+      .send({ is_coming: true })
+      .expect(201);
+    await request(app)
+      .post(`/api/v1/friends/activity/${bobComing.body.activity.id}/replies`)
+      .set("Authorization", `Bearer ${alice.token}`)
+      .send({ kind: "comment", text: "I am in.", details: { test_run_id: testRunId } })
+      .expect(201);
+    await request(app)
+      .post(`/api/v1/friends/venues/${venue.id}/coming`)
+      .set("Authorization", `Bearer ${ghost.token}`)
+      .send({ is_coming: true })
+      .expect(201);
+    await request(app)
+      .post(`/api/v1/friends/venues/${venue.id}/coming`)
+      .set("Authorization", `Bearer ${blocked.token}`)
+      .send({ is_coming: true })
+      .expect(201);
+
+    const tonight = await request(app)
+      .get("/api/v1/friends/tonight?limit=10")
+      .set("Authorization", `Bearer ${alice.token}`)
+      .expect(200);
+
+    expect(tonight.body.groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          venue: expect.objectContaining({ id: venue.id }),
+          viewer_has_coming: false,
+          cta: expect.objectContaining({ primary: "I'm Coming", can_come: true })
+        })
+      ])
+    );
+    const group = tonight.body.groups.find((item: { venue: { id: string } }) => item.venue.id === venue.id);
+    expect(group.friends.map((friend: { id: string }) => friend.id)).toContain(bob.userId);
+    expect(group.friends.map((friend: { id: string }) => friend.id)).not.toContain(ghost.userId);
+    expect(group.friends.map((friend: { id: string }) => friend.id)).not.toContain(blocked.userId);
+    expect(group.latest_activity.replies[0].text).toBe("I am in.");
+    expect(tonight.body.timeline[0].venue.id).toBe(venue.id);
+    expect(JSON.stringify(tonight.body)).not.toContain("latitude");
+    expect(JSON.stringify(tonight.body)).not.toContain("raw_payload");
+  }, 120000);
+
   it("includes accepted visible friend summaries in venue payloads", async () => {
     const alice = await createEligibleProfile("Venue Alice", `venuealice_${testRunId.slice(0, 6)}`);
     const bob = await createEligibleProfile("Venue Bob", `venuebob_${testRunId.slice(0, 6)}`);

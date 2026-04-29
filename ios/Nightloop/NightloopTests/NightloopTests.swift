@@ -763,6 +763,13 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(activity.items.first?.venue?.name, "Halcyon")
         XCTAssertEqual(activity.items.first?.replies.first?.type, .comment)
         XCTAssertEqual(activity.items.first?.replies.first?.text, "got a booth")
+
+        let tonight = try decoder.decode(FriendsTonightResponse.self, from: Self.friendsTonightFixtureData())
+        XCTAssertEqual(tonight.groups.first?.venue.name, "Halcyon")
+        XCTAssertEqual(tonight.groups.first?.friends.first?.displayName, "Maya")
+        XCTAssertEqual(tonight.groups.first?.cta.primary, "I'm Coming")
+        XCTAssertEqual(tonight.groups.first?.latestActivity.replies.first?.text, "got a booth")
+        XCTAssertEqual(tonight.emptyState?.title, "Quiet so far")
     }
 
     func testDecisionPayloadsDecodeSessionAndCandidates() throws {
@@ -772,15 +779,25 @@ final class NightloopTests: XCTestCase {
         let response = try decoder.decode(DecisionSessionResponse.self, from: Self.decisionSessionFixtureData())
 
         XCTAssertEqual(response.session.status, "active")
+        XCTAssertEqual(response.session.stage, .swiping)
+        XCTAssertEqual(response.session.roomTitle, "Alex + 1 tonight")
         XCTAssertEqual(response.session.code, "ND-ABCD-2345")
         XCTAssertEqual(response.session.memberCounts.joined, 2)
         XCTAssertEqual(response.session.capabilities?.canVote, true)
+        XCTAssertEqual(response.session.capabilities?.canForceShortlist, true)
+        XCTAssertEqual(response.session.progress?.confidence, 50)
+        XCTAssertEqual(response.session.progress?.members.first?.swipedCount, 2)
         XCTAssertEqual(response.session.finalPlan?.note, "Meet by the entrance.")
         XCTAssertEqual(response.candidates.first?.venue.name, "Halcyon")
+        XCTAssertEqual(response.deckCandidates?.first?.id, "candidate-1")
+        XCTAssertEqual(response.shortlist?.first?.id, "candidate-1")
+        XCTAssertEqual(response.recommendedFinalCandidate?.id, "candidate-1")
         XCTAssertEqual(response.candidates.first?.source, "suggested")
         XCTAssertEqual(response.candidates.first?.suggestedBy?.displayName, "Maya")
         XCTAssertEqual(response.candidates.first?.canRemove, true)
         XCTAssertEqual(response.candidates.first?.viewerVote, .voteIn)
+        XCTAssertEqual(response.candidates.first?.shortlistVoteCount, 1)
+        XCTAssertEqual(response.candidates.first?.viewerShortlistVote, true)
         XCTAssertEqual(response.candidates.first?.recommendation.expectedPulseBasis?.first, "source-backed hours")
         XCTAssertEqual(response.messages.first?.text, "Meet by the side door?")
         XCTAssertEqual(response.messages.last?.emoji, .fire)
@@ -823,6 +840,8 @@ final class NightloopTests: XCTestCase {
                 return (response, Data(#"{"friendship":{"id":"friendship-1","status":"accepted","direction":"incoming","requester_user_id":"user-1","addressee_user_id":"user-2","responded_at":"2026-04-28T00:00:00Z","created_at":"2026-04-28T00:00:00Z","updated_at":"2026-04-28T00:00:00Z"}}"#.utf8))
             case "/api/v1/friends/activity":
                 return (response, Self.friendActivityFixtureData())
+            case "/api/v1/friends/tonight":
+                return (response, Self.friendsTonightFixtureData())
             case "/api/v1/friends/venues/venue-1/coming":
                 let body = try XCTUnwrap(Self.bodyData(from: request))
                 let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -866,13 +885,14 @@ final class NightloopTests: XCTestCase {
         _ = try await client.createFriendInvite(bearerToken: "test-token")
         _ = try await client.acceptFriendInvite(code: "NL-ABCD-2345", bearerToken: "test-token")
         _ = try await client.friendActivity(bearerToken: "test-token")
+        _ = try await client.friendsTonight(bearerToken: "test-token")
         _ = try await client.toggleComing(venueID: "venue-1", isComing: true, bearerToken: "test-token")
         _ = try await client.cancelComing(venueID: "venue-1", bearerToken: "test-token")
         _ = try await client.replyToActivity(activityID: "activity-1", kind: .comment, text: "got a booth", bearerToken: "test-token")
         _ = try await client.reportActivity(activityID: "activity-1", reason: "spam", bearerToken: "test-token")
         _ = try await client.reportProfile(userID: "user-2", reason: "inappropriate", bearerToken: "test-token")
 
-        XCTAssertEqual(seen.count, 12)
+        XCTAssertEqual(seen.count, 13)
     }
 
     func testDecisionClientBuildsProtectedRequests() async throws {
@@ -911,11 +931,23 @@ final class NightloopTests: XCTestCase {
                 let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(object["code"] as? String, "ND-ABCD-2345")
                 return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/join"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["code"] as? String, "ND-ABCD-2345")
+                return (response, Self.decisionSessionFixtureData())
             case ("POST", "/api/v1/decision-sessions/session-1/votes"):
                 let body = try XCTUnwrap(Self.bodyData(from: request))
                 let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(object["candidate_id"] as? String, "candidate-1")
                 XCTAssertEqual(object["vote"] as? String, "in")
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/advance-shortlist"):
+                return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/shortlist-votes"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["candidate_id"] as? String, "candidate-1")
                 return (response, Self.decisionSessionFixtureData())
             case ("POST", "/api/v1/decision-sessions/session-1/candidates"):
                 let body = try XCTUnwrap(Self.bodyData(from: request))
@@ -966,7 +998,10 @@ final class NightloopTests: XCTestCase {
         _ = try await client.decisionSession(id: "session-1", bearerToken: "test-token")
         _ = try await client.searchDecisionVenues(sessionID: "session-1", query: "audio", bearerToken: "test-token")
         _ = try await client.joinDecisionSession(id: "session-1", code: "ND-ABCD-2345", bearerToken: "test-token")
+        _ = try await client.joinDecisionSession(code: "ND-ABCD-2345", bearerToken: "test-token")
         _ = try await client.voteDecisionSession(id: "session-1", candidateID: "candidate-1", vote: .voteIn, bearerToken: "test-token")
+        _ = try await client.advanceDecisionShortlist(sessionID: "session-1", bearerToken: "test-token")
+        _ = try await client.voteDecisionShortlist(sessionID: "session-1", candidateID: "candidate-1", bearerToken: "test-token")
         _ = try await client.suggestDecisionCandidate(sessionID: "session-1", venueID: "venue-2", bearerToken: "test-token")
         _ = try await client.removeDecisionCandidate(sessionID: "session-1", candidateID: "candidate-2", bearerToken: "test-token")
         _ = try await client.finalizeDecisionSession(
@@ -986,7 +1021,7 @@ final class NightloopTests: XCTestCase {
         _ = try await client.revokeDecisionSessionCode(id: "session-1", bearerToken: "test-token")
         _ = try await client.endDecisionSession(id: "session-1", bearerToken: "test-token")
 
-        XCTAssertEqual(seen.count, 13)
+        XCTAssertEqual(seen.count, 16)
     }
 
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {
@@ -1232,6 +1267,53 @@ final class NightloopTests: XCTestCase {
         """.utf8)
     }
 
+    private static func friendsTonightFixtureData() -> Data {
+        Data("""
+        {
+          "generated_at": "2026-04-28T00:10:00Z",
+          "groups": [
+            {
+              "venue": { "id": "venue-1", "name": "Halcyon", "neighborhood": "SoMa", "category": "club" },
+              "friends": [
+                { "id": "user-2", "display_name": "Maya", "username": "maya", "avatar_kind": "initials", "bio": null }
+              ],
+              "latest_activity": {
+                "id": "activity-1",
+                "type": "signal",
+                "signal_kind": "packed",
+                "text": null,
+                "actor": { "id": "user-2", "display_name": "Maya", "username": "maya", "avatar_kind": "initials", "bio": null },
+                "venue": { "id": "venue-1", "name": "Halcyon", "neighborhood": "SoMa", "category": "club" },
+                "viewer_has_coming": false,
+                "coming_count": 1,
+                "replies": [
+                  {
+                    "id": "reply-1",
+                    "type": "comment",
+                    "text": "got a booth",
+                    "signal_kind": null,
+                    "created_at": "2026-04-28T00:05:00Z",
+                    "actor": { "id": "user-3", "display_name": "Rosa", "username": "rosa", "avatar_kind": "initials" }
+                  }
+                ],
+                "expires_at": "2026-04-29T11:00:00Z",
+                "created_at": "2026-04-28T00:00:00Z"
+              },
+              "viewer_has_coming": false,
+              "coming_count": 1,
+              "cta": { "primary": "I'm Coming", "can_come": true, "secondary": "Pick a spot" }
+            }
+          ],
+          "timeline": [],
+          "counts": { "groups": 1, "timeline": 0 },
+          "empty_state": {
+            "title": "Quiet so far",
+            "message": "Invite friends or start a room when the night takes shape."
+          }
+        }
+        """.utf8)
+    }
+
     private static func decisionSessionListFixtureData() -> Data {
         Data("""
         {
@@ -1239,6 +1321,8 @@ final class NightloopTests: XCTestCase {
             {
               "id": "session-1",
               "status": "active",
+              "stage": "swiping",
+              "room_title": "Alex + 1 tonight",
               "market": { "id": "market-1", "slug": "san-francisco", "short_label": "SF" },
               "expires_at": "2026-04-29T11:00:00Z",
               "code_hint": "2345",
@@ -1266,6 +1350,8 @@ final class NightloopTests: XCTestCase {
           "session": {
             "id": "session-1",
             "status": "active",
+            "stage": "swiping",
+            "room_title": "Alex + 1 tonight",
             "market": { "id": "market-1", "slug": "san-francisco", "short_label": "SF" },
               "filters": { "pulse": "active" },
               "final_plan": {
@@ -1292,9 +1378,30 @@ final class NightloopTests: XCTestCase {
               "viewer_status": "joined",
               "capabilities": {
                 "can_vote": true,
+                "can_vote_shortlist": false,
+                "can_force_shortlist": true,
                 "can_suggest_candidates": true,
                 "can_message": true,
                 "can_finalize": true
+              },
+              "progress": {
+                "ready_for_shortlist": false,
+                "confidence": 50,
+                "required_swipes_per_member": 4,
+                "members": [
+                  {
+                    "user": {
+                      "id": null,
+                      "display_name": "Alex",
+                      "username": "alex",
+                      "avatar_kind": "initials"
+                    },
+                    "role": "creator",
+                    "swiped_count": 2,
+                    "required_swipes": 4,
+                    "is_complete": false
+                  }
+                ]
               },
               "created_at": "2026-04-28T00:00:00Z",
               "updated_at": "2026-04-28T00:05:00Z"
@@ -1302,6 +1409,13 @@ final class NightloopTests: XCTestCase {
           "candidates": [
             \(candidate)
           ],
+          "deck_candidates": [
+            \(candidate)
+          ],
+          "shortlist": [
+            \(candidate)
+          ],
+          "recommended_final_candidate": \(candidate),
           "leader": \(candidate),
           "messages": [
             {
@@ -1396,6 +1510,8 @@ final class NightloopTests: XCTestCase {
           "in_count": 1,
           "skip_count": 0,
           "viewer_vote": "in",
+          "shortlist_vote_count": 1,
+          "viewer_shortlist_vote": true,
           "group_fit_score": 76.5,
           "group_fit_member_count": 2,
           "group_fit_reason": "Group fit blends 2 joined friends' saved picks."

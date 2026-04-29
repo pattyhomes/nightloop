@@ -8,6 +8,7 @@ import { listRecommendations } from "./recommendationService";
 import { getVenue, listVenues } from "./venueService";
 
 type DecisionStatus = "active" | "ended" | "expired";
+type DecisionStage = "swiping" | "shortlist_voting" | "finalized";
 type MemberRole = "creator" | "member";
 type MemberStatus = "invited" | "joined";
 type VoteValue = "in" | "skip";
@@ -33,6 +34,7 @@ type SessionRow = {
   market_slug: string;
   market_short_label: string;
   status: DecisionStatus;
+  stage: DecisionStage;
   code_hint: string | null;
   code_revoked_at: string | null;
   filters: DecisionFilters | null;
@@ -92,6 +94,17 @@ type CandidateRow = {
   in_count: string | number;
   skip_count: string | number;
   viewer_vote: VoteValue | null;
+  shortlist_vote_count: string | number;
+  viewer_shortlist_vote: boolean | null;
+};
+
+type MemberProgressRow = {
+  user_id: string;
+  display_name: string;
+  username: string;
+  avatar_kind: string;
+  role: MemberRole;
+  swiped_count: string | number;
 };
 
 type DecisionMessageRow = {
@@ -116,6 +129,9 @@ type JoinedPreferenceRow = {
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const SESSION_SIZE = 12;
+const DECK_SIZE = 8;
+const SHORTLIST_SIZE = 5;
+const MIN_SWIPES_FOR_SHORTLIST = 4;
 const MAX_SUGGESTED_CANDIDATES = 6;
 const MAX_ROOM_MESSAGES = 50;
 
@@ -246,6 +262,11 @@ function groupFitForCandidate(candidate: CandidateRow, joinedPreferences: Joined
   };
 }
 
+function effectiveStage(session: SessionRow): DecisionStage {
+  if (session.finalized_at) return "finalized";
+  return session.stage ?? "swiping";
+}
+
 function profilePayload(input: {
   id: string | null;
   displayName: string | null;
@@ -302,10 +323,34 @@ function formatCandidate(
     in_count: Number(candidate.in_count ?? 0),
     skip_count: Number(candidate.skip_count ?? 0),
     viewer_vote: candidate.viewer_vote,
+    shortlist_vote_count: Number(candidate.shortlist_vote_count ?? 0),
+    viewer_shortlist_vote: candidate.viewer_shortlist_vote === true ? true : null,
     group_fit_score: groupFit.score,
     group_fit_member_count: groupFit.memberCount,
     group_fit_reason: groupFit.reason
   };
+}
+
+function sortForShortlist(candidates: ReturnType<typeof formatCandidate>[]) {
+  return [...candidates].sort((left, right) => {
+    if (left.in_count !== right.in_count) return right.in_count - left.in_count;
+    if (left.group_fit_score !== right.group_fit_score) return right.group_fit_score - left.group_fit_score;
+    if (left.base_score !== right.base_score) return right.base_score - left.base_score;
+    return left.original_rank - right.original_rank;
+  });
+}
+
+function chooseFinalRecommendation(candidates: ReturnType<typeof formatCandidate>[]) {
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, candidate) => {
+    if (candidate.shortlist_vote_count !== best.shortlist_vote_count) {
+      return candidate.shortlist_vote_count > best.shortlist_vote_count ? candidate : best;
+    }
+    if (candidate.group_fit_score !== best.group_fit_score) {
+      return candidate.group_fit_score > best.group_fit_score ? candidate : best;
+    }
+    return candidate.original_rank < best.original_rank ? candidate : best;
+  }, candidates[0]);
 }
 
 function formatMessage(message: DecisionMessageRow) {
@@ -365,6 +410,7 @@ async function readSession(client: DBClient, sessionId: string): Promise<Session
         m.slug AS market_slug,
         m.short_label AS market_short_label,
         ds.status,
+        ds.stage,
         ds.code_hint,
         ds.code_revoked_at,
         ds.filters,
@@ -617,7 +663,9 @@ async function readCandidates(
         dsc.suggested_at,
         COALESCE(vote_counts.in_count, 0) AS in_count,
         COALESCE(vote_counts.skip_count, 0) AS skip_count,
-        viewer_vote.vote AS viewer_vote
+        viewer_vote.vote AS viewer_vote,
+        COALESCE(shortlist_counts.vote_count, 0) AS shortlist_vote_count,
+        (viewer_shortlist_vote.user_id IS NOT NULL) AS viewer_shortlist_vote
       FROM decision_session_candidates dsc
       LEFT JOIN user_profiles suggester_profile ON suggester_profile.user_id = dsc.suggested_by_user_id
       LEFT JOIN LATERAL (
@@ -636,6 +684,20 @@ async function readCandidates(
           AND dv.user_id = $2::uuid
         LIMIT 1
       ) viewer_vote ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS vote_count
+        FROM decision_shortlist_votes dsv
+        WHERE dsv.session_id = dsc.session_id
+          AND dsv.candidate_id = dsc.id
+      ) shortlist_counts ON true
+      LEFT JOIN LATERAL (
+        SELECT user_id
+        FROM decision_shortlist_votes dsv
+        WHERE dsv.session_id = dsc.session_id
+          AND dsv.candidate_id = dsc.id
+          AND dsv.user_id = $2::uuid
+        LIMIT 1
+      ) viewer_shortlist_vote ON true
       WHERE dsc.session_id = $1::uuid
       ORDER BY dsc.original_rank ASC
     `,
@@ -690,6 +752,69 @@ async function countMembers(client: DBClient, sessionId: string) {
   };
 }
 
+async function readMemberProgress(client: DBClient, sessionId: string, deckCandidateIds: string[]): Promise<MemberProgressRow[]> {
+  const result = await client.query<MemberProgressRow>(
+    `
+      SELECT
+        dsm.user_id,
+        p.display_name,
+        p.username,
+        p.avatar_kind,
+        dsm.role,
+        COUNT(DISTINCT dv.candidate_id)::int AS swiped_count
+      FROM decision_session_members dsm
+      JOIN user_profiles p ON p.user_id = dsm.user_id
+      LEFT JOIN decision_votes dv
+        ON dv.session_id = dsm.session_id
+       AND dv.user_id = dsm.user_id
+       AND dv.candidate_id = ANY($2::uuid[])
+      WHERE dsm.session_id = $1::uuid
+        AND dsm.status = 'joined'
+      GROUP BY dsm.user_id, p.display_name, p.username, p.avatar_kind, dsm.role, dsm.joined_at, dsm.created_at
+      ORDER BY dsm.role = 'creator' DESC, dsm.joined_at ASC NULLS LAST, dsm.created_at ASC
+    `,
+    [sessionId, deckCandidateIds]
+  );
+  return result.rows;
+}
+
+function roomTitle(progressRows: MemberProgressRow[]): string {
+  const first = progressRows[0]?.display_name ?? "Your group";
+  const extraCount = Math.max(0, progressRows.length - 1);
+  return extraCount > 0 ? `${first} + ${extraCount} tonight` : `${first}'s room tonight`;
+}
+
+function formatProgress(progressRows: MemberProgressRow[], deckCandidateCount: number, forcedReady: boolean) {
+  const required = Math.min(MIN_SWIPES_FOR_SHORTLIST, deckCandidateCount);
+  const members = progressRows.map((row) => {
+    const swipedCount = Math.min(Number(row.swiped_count ?? 0), deckCandidateCount);
+    return {
+      user: {
+        id: null,
+        display_name: row.display_name,
+        username: row.username,
+        avatar_kind: row.avatar_kind
+      },
+      role: row.role,
+      swiped_count: swipedCount,
+      required_swipes: required,
+      is_complete: required === 0 || swipedCount >= required
+    };
+  });
+  const readyBySwipes = members.length > 0 && members.every((member) => member.is_complete);
+  const completion =
+    members.length === 0 || required === 0
+      ? 0
+      : members.reduce((sum, member) => sum + Math.min(1, member.swiped_count / required), 0) / members.length;
+  const confidence = Math.round(Math.max(0, Math.min(100, completion * 100)));
+  return {
+    ready_for_shortlist: forcedReady || readyBySwipes,
+    confidence,
+    required_swipes_per_member: required,
+    members
+  };
+}
+
 async function countSuggestedCandidates(client: DBClient, sessionId: string): Promise<number> {
   const result = await client.query<{ count: string | number }>(
     `
@@ -733,6 +858,12 @@ async function formatSessionResponse(
   const candidates = (await readCandidates(client, sessionId, account.user.id)).map((candidate) =>
     formatCandidate(candidate, joinedPreferences, session, account.user.id)
   );
+  const stage = effectiveStage(session);
+  const deckCandidates = candidates.slice(0, DECK_SIZE);
+  const shortlist = stage === "swiping" ? [] : sortForShortlist(candidates).slice(0, SHORTLIST_SIZE);
+  const recommendedFinalCandidate = stage === "swiping" ? null : chooseFinalRecommendation(shortlist);
+  const progressRows = await readMemberProgress(client, sessionId, deckCandidates.map((candidate) => candidate.id));
+  const progress = formatProgress(progressRows, deckCandidates.length, stage !== "swiping");
   const leader = chooseLeader(candidates);
   const memberCounts = await countMembers(client, sessionId);
   const messages = (await readMessages(client, sessionId)).map(formatMessage);
@@ -747,6 +878,8 @@ async function formatSessionResponse(
     session: {
       id: session.id,
       status: session.status,
+      stage,
+      room_title: roomTitle(progressRows),
       market: {
         id: session.market_id,
         slug: session.market_slug,
@@ -778,15 +911,21 @@ async function formatSessionResponse(
       viewer_role: membership.role,
       viewer_status: membership.status,
       capabilities: {
-        can_vote: isActive && isJoined && isUnfinalized,
-        can_suggest_candidates: isActive && isJoined && isUnfinalized,
+        can_vote: isActive && isJoined && isUnfinalized && stage === "swiping",
+        can_vote_shortlist: isActive && isJoined && isUnfinalized && stage === "shortlist_voting",
+        can_force_shortlist: isActive && isJoined && isUnfinalized && stage === "swiping" && membership.role === "creator",
+        can_suggest_candidates: isActive && isJoined && isUnfinalized && stage === "swiping",
         can_message: isActive && isJoined,
         can_finalize: isActive && isUnfinalized && membership.role === "creator"
       },
+      progress,
       created_at: session.created_at,
       updated_at: session.updated_at
     },
     candidates,
+    deck_candidates: deckCandidates,
+    shortlist,
+    recommended_final_candidate: recommendedFinalCandidate,
     leader,
     messages
   };
@@ -797,6 +936,8 @@ async function formatSessionSummary(client: DBClient, sessionId: string, account
   return {
     id: detail.session.id,
     status: detail.session.status,
+    stage: detail.session.stage,
+    room_title: detail.session.room_title,
     market: detail.session.market,
     expires_at: detail.session.expires_at,
     code_hint: detail.session.code_hint,
@@ -804,6 +945,7 @@ async function formatSessionSummary(client: DBClient, sessionId: string, account
     member_counts: detail.session.member_counts,
     viewer_role: detail.session.viewer_role,
     viewer_status: detail.session.viewer_status,
+    progress: detail.session.progress,
     final_plan: detail.session.final_plan,
     leader: detail.leader
       ? {
@@ -1032,6 +1174,71 @@ export async function joinDecisionSession(input: {
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
 
+export async function joinDecisionSessionByCode(input: {
+  account: AccountState;
+  code: string;
+}) {
+  requireEligible(input.account);
+
+  const sessionId = await dbTransaction(async (client) => {
+    const codeResult = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM decision_sessions
+        WHERE status = 'active'
+          AND expires_at > NOW()
+          AND code_revoked_at IS NULL
+          AND token_hash = $1
+        ORDER BY expires_at DESC
+        LIMIT 1
+      `,
+      [hashCode(input.code)]
+    );
+    const session = codeResult.rows[0];
+    if (!session) {
+      throw new ApiError(403, "SESSION_CODE_INVALID", "This room code is no longer available.");
+    }
+
+    await assertNoBlocksWithJoinedMembers(client, session.id, input.account.user.id);
+    const membership = await readMembership(client, session.id, input.account.user.id);
+
+    if (membership?.status === "joined") {
+      return session.id;
+    }
+
+    if (membership?.status === "invited") {
+      await client.query(
+        `
+          UPDATE decision_session_members
+          SET status = 'joined',
+              joined_at = NOW()
+          WHERE id = $1::uuid
+        `,
+        [membership.id]
+      );
+      return session.id;
+    }
+
+    await assertCodeFriendshipWithJoinedMember(client, session.id, input.account.user.id);
+    await client.query(
+      `
+        INSERT INTO decision_session_members (session_id, user_id, role, status, source, joined_at)
+        VALUES ($1::uuid, $2::uuid, 'member', 'joined', 'code', NOW())
+        ON CONFLICT (session_id, user_id) DO UPDATE SET
+          status = 'joined',
+          source = 'code',
+          joined_at = COALESCE(decision_session_members.joined_at, NOW()),
+          updated_at = NOW()
+      `,
+      [session.id, input.account.user.id]
+    );
+
+    return session.id;
+  });
+
+  return formatSessionResponse({ query: dbQuery }, sessionId, input.account);
+}
+
 export async function voteDecisionSession(input: {
   account: AccountState;
   sessionId: string;
@@ -1048,6 +1255,9 @@ export async function voteDecisionSession(input: {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
     assertUnfinalizedSession(session);
+    if (effectiveStage(session) !== "swiping") {
+      throw new ApiError(409, "DECISION_STAGE_LOCKED", "Swipe voting is closed for this room.");
+    }
     const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
     assertJoinedMember(membership);
 
@@ -1084,6 +1294,78 @@ export async function voteDecisionSession(input: {
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
 
+export async function advanceDecisionSessionShortlist(input: {
+  account: AccountState;
+  sessionId: string;
+}) {
+  requireEligible(input.account);
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, input.sessionId);
+    assertActiveSession(session);
+    assertUnfinalizedSession(session);
+    assertCreator(session, input.account);
+    if (effectiveStage(session) !== "swiping") {
+      return;
+    }
+    const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
+    assertJoinedMember(membership);
+    await client.query(
+      `
+        UPDATE decision_sessions
+        SET stage = 'shortlist_voting',
+            shortlist_unlocked_at = COALESCE(shortlist_unlocked_at, NOW()),
+            shortlist_unlocked_by_user_id = $2::uuid,
+            shortlist_unlock_reason = 'creator_or_smart_minimum',
+            updated_at = NOW()
+        WHERE id = $1::uuid
+      `,
+      [input.sessionId, input.account.user.id]
+    );
+  });
+
+  return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
+}
+
+export async function voteDecisionSessionShortlist(input: {
+  account: AccountState;
+  sessionId: string;
+  candidateId: string;
+}) {
+  requireEligible(input.account);
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, input.sessionId);
+    assertActiveSession(session);
+    assertUnfinalizedSession(session);
+    if (effectiveStage(session) !== "shortlist_voting") {
+      throw new ApiError(409, "SHORTLIST_NOT_OPEN", "Shortlist voting is not open for this room.");
+    }
+    const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
+    assertJoinedMember(membership);
+
+    const joinedPreferences = await readJoinedPreferences(client, input.sessionId);
+    const candidates = (await readCandidates(client, input.sessionId, input.account.user.id)).map((candidate) =>
+      formatCandidate(candidate, joinedPreferences, session, input.account.user.id)
+    );
+    const shortlistIds = new Set(sortForShortlist(candidates).slice(0, SHORTLIST_SIZE).map((candidate) => candidate.id));
+    if (!shortlistIds.has(input.candidateId)) {
+      throw new ApiError(409, "CANDIDATE_NOT_SHORTLISTED", "Vote for one of the shortlisted venues.");
+    }
+
+    await client.query(
+      `
+        INSERT INTO decision_shortlist_votes (session_id, candidate_id, user_id)
+        VALUES ($1::uuid, $2::uuid, $3::uuid)
+        ON CONFLICT (session_id, user_id) DO UPDATE SET
+          candidate_id = EXCLUDED.candidate_id,
+          updated_at = NOW()
+      `,
+      [input.sessionId, input.candidateId, input.account.user.id]
+    );
+  });
+
+  return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
+}
+
 export async function searchDecisionSessionVenues(input: {
   account: AccountState;
   sessionId: string;
@@ -1094,6 +1376,9 @@ export async function searchDecisionSessionVenues(input: {
   const session = await readSession({ query: dbQuery }, input.sessionId);
   assertActiveSession(session);
   assertUnfinalizedSession(session);
+  if (effectiveStage(session) !== "swiping") {
+    throw new ApiError(409, "DECISION_STAGE_LOCKED", "Suggestions are closed for this room.");
+  }
   const membership = await assertVisibleMember({ query: dbQuery }, input.sessionId, input.account.user.id);
   assertJoinedMember(membership);
   const existing = await dbQuery<{ venue_id: string }>(
@@ -1129,6 +1414,9 @@ export async function suggestDecisionCandidate(input: {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
     assertUnfinalizedSession(session);
+    if (effectiveStage(session) !== "swiping") {
+      throw new ApiError(409, "DECISION_STAGE_LOCKED", "Suggestions are closed for this room.");
+    }
     const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
     assertJoinedMember(membership);
 
@@ -1208,6 +1496,9 @@ export async function removeDecisionCandidate(input: {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
     assertUnfinalizedSession(session);
+    if (effectiveStage(session) !== "swiping") {
+      throw new ApiError(409, "DECISION_STAGE_LOCKED", "Candidate changes are closed for this room.");
+    }
     const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
     assertJoinedMember(membership);
 
@@ -1261,6 +1552,9 @@ export async function finalizeDecisionSession(input: {
     assertActiveSession(session);
     assertUnfinalizedSession(session);
     assertCreator(session, input.account);
+    if (effectiveStage(session) !== "shortlist_voting") {
+      throw new ApiError(409, "SHORTLIST_REQUIRED", "Create the shortlist before locking a final pick.");
+    }
 
     const candidate = await client.query<{ id: string; venue_id: string }>(
       `
@@ -1283,6 +1577,7 @@ export async function finalizeDecisionSession(input: {
         SET final_candidate_id = $2::uuid,
             final_venue_id = $3::uuid,
             final_locked_by_user_id = $4::uuid,
+            stage = 'finalized',
             finalized_at = NOW(),
             final_meetup_at = $5::timestamptz,
             final_note = $6,

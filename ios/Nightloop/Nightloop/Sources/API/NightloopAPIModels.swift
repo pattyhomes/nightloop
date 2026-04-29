@@ -459,6 +459,41 @@ struct FriendActivityResponse: Decodable, Equatable {
     let items: [FriendActivityItem]
 }
 
+struct FriendsTonightCTA: Decodable, Equatable {
+    let primary: String
+    let canCome: Bool
+    let secondary: String?
+}
+
+struct FriendsTonightGroup: Decodable, Identifiable, Equatable {
+    let venue: FriendActivityVenue
+    let friends: [FriendProfile]
+    let latestActivity: FriendActivityItem
+    let viewerHasComing: Bool
+    let comingCount: Int
+    let cta: FriendsTonightCTA
+
+    var id: String { venue.id }
+}
+
+struct FriendsTonightCounts: Decodable, Equatable {
+    let groups: Int
+    let timeline: Int
+}
+
+struct FriendsTonightEmptyState: Decodable, Equatable {
+    let title: String
+    let message: String
+}
+
+struct FriendsTonightResponse: Decodable, Equatable {
+    let generatedAt: String
+    let groups: [FriendsTonightGroup]
+    let timeline: [FriendActivityItem]
+    let counts: FriendsTonightCounts
+    let emptyState: FriendsTonightEmptyState?
+}
+
 struct FriendActivityMutationResponse: Decodable, Equatable {
     let activity: FriendActivityItem
 }
@@ -502,9 +537,32 @@ struct DecisionUserSummary: Decodable, Equatable {
 
 struct DecisionCapabilities: Decodable, Equatable {
     let canVote: Bool
+    let canVoteShortlist: Bool?
+    let canForceShortlist: Bool?
     let canSuggestCandidates: Bool
     let canMessage: Bool
     let canFinalize: Bool
+}
+
+enum DecisionStage: String, Codable, Equatable {
+    case swiping
+    case shortlistVoting = "shortlist_voting"
+    case finalized
+}
+
+struct DecisionMemberProgress: Decodable, Equatable {
+    let user: DecisionUserSummary
+    let role: String
+    let swipedCount: Int
+    let requiredSwipes: Int
+    let isComplete: Bool
+}
+
+struct DecisionProgress: Decodable, Equatable {
+    let readyForShortlist: Bool
+    let confidence: Int
+    let requiredSwipesPerMember: Int
+    let members: [DecisionMemberProgress]
 }
 
 struct DecisionFinalPlan: Decodable, Equatable {
@@ -520,6 +578,8 @@ struct DecisionFinalPlan: Decodable, Equatable {
 struct DecisionSession: Decodable, Identifiable, Equatable {
     let id: String
     let status: String
+    let stage: DecisionStage?
+    let roomTitle: String?
     let market: DecisionSessionMarket
     let filters: DecisionFilters?
     let finalPlan: DecisionFinalPlan?
@@ -532,6 +592,7 @@ struct DecisionSession: Decodable, Identifiable, Equatable {
     let viewerRole: String
     let viewerStatus: String
     let capabilities: DecisionCapabilities?
+    let progress: DecisionProgress?
     let createdAt: String?
     let updatedAt: String?
 }
@@ -565,6 +626,8 @@ struct DecisionCandidate: Decodable, Identifiable, Equatable {
     let inCount: Int
     let skipCount: Int
     let viewerVote: DecisionVoteValue?
+    let shortlistVoteCount: Int?
+    let viewerShortlistVote: Bool?
     let groupFitScore: Double
     let groupFitMemberCount: Int
     let groupFitReason: String
@@ -608,6 +671,9 @@ struct DecisionMessage: Decodable, Identifiable, Equatable {
 struct DecisionSessionResponse: Decodable, Equatable {
     let session: DecisionSession
     let candidates: [DecisionCandidate]
+    let deckCandidates: [DecisionCandidate]?
+    let shortlist: [DecisionCandidate]?
+    let recommendedFinalCandidate: DecisionCandidate?
     let leader: DecisionCandidate?
     let messages: [DecisionMessage]
 }
@@ -623,6 +689,8 @@ struct DecisionSessionSummaryLeader: Decodable, Equatable {
 struct DecisionSessionSummary: Decodable, Identifiable, Equatable {
     let id: String
     let status: String
+    let stage: DecisionStage?
+    let roomTitle: String?
     let market: DecisionSessionMarket
     let expiresAt: String
     let codeHint: String?
@@ -630,6 +698,7 @@ struct DecisionSessionSummary: Decodable, Identifiable, Equatable {
     let memberCounts: DecisionMemberCounts
     let viewerRole: String
     let viewerStatus: String
+    let progress: DecisionProgress?
     let leader: DecisionSessionSummaryLeader?
 }
 

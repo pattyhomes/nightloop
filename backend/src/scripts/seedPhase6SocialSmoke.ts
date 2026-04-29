@@ -4,6 +4,7 @@ import { dbQuery, dbTransaction, getDBClient, type DBClient } from "../lib/db";
 import type { AccountState } from "../services/v1/accountService";
 import {
   addDecisionSessionMessage,
+  advanceDecisionSessionShortlist,
   createDecisionSession,
   finalizeDecisionSession,
   joinDecisionSession,
@@ -438,6 +439,10 @@ async function seedDecisionRooms(users: SeededUser[], marketId: string): Promise
   });
   await markSeededDecisionRoom(finalizedRoom.session.id, "finalized_group_pick");
   await joinDecisionSession({ account: mayaAccount, sessionId: finalizedRoom.session.id });
+  await advanceDecisionSessionShortlist({
+    account: alexAccount,
+    sessionId: finalizedRoom.session.id
+  });
   const meetupAt = new Date(Date.parse(finalizedRoom.session.expires_at) - 2 * 60 * 60 * 1000).toISOString();
   await finalizeDecisionSession({
     account: alexAccount,

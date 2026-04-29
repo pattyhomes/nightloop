@@ -75,6 +75,7 @@ struct NightloopTabShell: View {
     let onAccountChanged: (MeResponse) -> Void
 
     @State private var selectedTab: AppTab = .debugInitialTab
+    @State private var decisionStartSeed: DecisionStartSeed?
 
     var body: some View {
         ZStack {
@@ -101,12 +102,16 @@ struct NightloopTabShell: View {
                         apiClient: apiClient,
                         authStore: authStore,
                         me: me,
-                        onAccountChanged: onAccountChanged
+                        onAccountChanged: onAccountChanged,
+                        startSeed: decisionStartSeed
                     )
                 }
             case .friends:
                 NavigationStack {
-                    FriendsShellView(apiClient: apiClient, authStore: authStore, me: me)
+                    FriendsShellView(apiClient: apiClient, authStore: authStore, me: me) { friendIDs in
+                        decisionStartSeed = DecisionStartSeed(id: UUID(), friendIDs: friendIDs)
+                        selectedTab = .decision
+                    }
                 }
             case .profile:
                 NavigationStack {
