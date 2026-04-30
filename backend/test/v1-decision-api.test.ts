@@ -605,6 +605,224 @@ describe("Nightloop v1 decision sessions API", () => {
       .expect(409);
   }, 120000);
 
+  it("returns server-authoritative deck progress after each swipe", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Deck Host", "deck_host");
+    const friend = await createEligibleProfile("Deck Friend", "deck_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    const first = created.body.deck_candidates[0];
+    const second = created.body.deck_candidates[1];
+
+    expect(created.body.session.deck_state).toEqual({
+      deck_size: 8,
+      cards_total: 8,
+      cards_remaining: 8,
+      next_candidate_id: first.id,
+      last_swiped_candidate_id: null,
+      can_rewind: false
+    });
+
+    const voted = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: first.id, vote: "in" })
+      .expect(200);
+
+    expect(voted.body.session.deck_state.cards_remaining).toBe(7);
+    expect(voted.body.session.deck_state.last_swiped_candidate_id).toBe(first.id);
+    expect(voted.body.session.deck_state.next_candidate_id).toBe(second.id);
+    expect(voted.body.deck_candidates[0].id).toBe(second.id);
+    expect(voted.body.deck_candidates.some((candidate: { id: string }) => candidate.id === first.id)).toBe(false);
+    expect(
+      voted.body.session.progress.members.find((member: { role: string }) => member.role === "creator").swiped_count
+    ).toBe(1);
+  }, 120000);
+
+  it("rewinds only the viewer's latest swiping vote and restores deck progress", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Rewind Host", "rewind_host");
+    const friend = await createEligibleProfile("Rewind Friend", "rewind_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    const first = created.body.deck_candidates[0];
+    const second = created.body.deck_candidates[1];
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({})
+      .expect(200);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({ candidate_id: second.id, vote: "in" })
+      .expect(200);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: first.id, vote: "in" })
+      .expect(200);
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: second.id, vote: "skip" })
+      .expect(200);
+
+    const rewound = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/rewind`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(200);
+
+    expect(rewound.body.session.deck_state.last_swiped_candidate_id).toBe(first.id);
+    expect(rewound.body.session.deck_state.next_candidate_id).toBe(second.id);
+    expect(rewound.body.session.deck_state.can_rewind).toBe(true);
+    expect(rewound.body.deck_candidates[0].id).toBe(second.id);
+    const rewoundSecond = rewound.body.candidates.find((candidate: { id: string }) => candidate.id === second.id);
+    expect(rewoundSecond).toEqual(
+      expect.objectContaining({
+        in_count: 1,
+        skip_count: 0,
+        viewer_vote: null
+      })
+    );
+    expect(
+      rewound.body.session.progress.members.find((member: { role: string }) => member.role === "creator").swiped_count
+    ).toBe(1);
+    expect(
+      rewound.body.session.progress.members.find((member: { role: string }) => member.role === "member").swiped_count
+    ).toBe(1);
+
+    const friendView = await request(app)
+      .get(`/api/v1/decision-sessions/${sessionId}`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .expect(200);
+    const friendSecond = friendView.body.candidates.find((candidate: { id: string }) => candidate.id === second.id);
+    expect(friendSecond).toEqual(
+      expect.objectContaining({
+        in_count: 1,
+        skip_count: 0,
+        viewer_vote: "in"
+      })
+    );
+  }, 120000);
+
+  it("rewinds fixed-deck swipes without deleting suggested candidate support", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Suggest Rewind Host", "sug_rw_host");
+    const friend = await createEligibleProfile("Suggest Rewind Friend", "sug_rw_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    const first = created.body.deck_candidates[0];
+    const suggestedVenueId = await findVenueOutsideSession(
+      marketId,
+      created.body.candidates.map((candidate: { venue_id: string }) => candidate.venue_id)
+    );
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: first.id, vote: "in" })
+      .expect(200);
+
+    const suggested = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/candidates`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ venue_id: suggestedVenueId })
+      .expect(201);
+    const suggestedCandidate = suggested.body.candidates.find(
+      (candidate: { venue_id: string }) => candidate.venue_id === suggestedVenueId
+    );
+    expect(suggested.body.session.deck_state.last_swiped_candidate_id).toBe(first.id);
+    expect(suggestedCandidate).toEqual(
+      expect.objectContaining({
+        viewer_vote: "in",
+        in_count: 1
+      })
+    );
+
+    const rewound = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/rewind`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(200);
+
+    expect(rewound.body.session.deck_state.last_swiped_candidate_id).toBeNull();
+    expect(rewound.body.session.deck_state.next_candidate_id).toBe(first.id);
+    expect(rewound.body.session.deck_state.can_rewind).toBe(false);
+    expect(rewound.body.deck_candidates[0].id).toBe(first.id);
+    const rewoundFirst = rewound.body.candidates.find((candidate: { id: string }) => candidate.id === first.id);
+    expect(rewoundFirst.viewer_vote).toBeNull();
+    const rewoundSuggested = rewound.body.candidates.find(
+      (candidate: { id: string }) => candidate.id === suggestedCandidate.id
+    );
+    expect(rewoundSuggested).toEqual(
+      expect.objectContaining({
+        viewer_vote: "in",
+        in_count: 1
+      })
+    );
+  }, 120000);
+
+  it("rejects rewind after shortlist voting begins", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("No Rewind Host", "no_rw_host");
+    const friend = await createEligibleProfile("No Rewind Friend", "no_rw_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+
+    for (const candidate of created.body.deck_candidates.slice(0, 4)) {
+      await request(app)
+        .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+        .set("Authorization", `Bearer ${host.token}`)
+        .send({ candidate_id: candidate.id, vote: "in" })
+        .expect(200);
+    }
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/advance-shortlist`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(200);
+
+    const rejected = await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/rewind`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(409);
+
+    expect(rejected.body.error.code).toBe("DECISION_STAGE_LOCKED");
+  }, 120000);
+
+  it("returns NO_REWIND_AVAILABLE when the viewer has no swipe to rewind", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Empty Rewind Host", "empty_rw_host");
+    const friend = await createEligibleProfile("Empty Rewind Friend", "empty_rw_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+
+    const rejected = await request(app)
+      .post(`/api/v1/decision-sessions/${created.body.session.id}/rewind`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(409);
+
+    expect(rejected.body.error.code).toBe("NO_REWIND_AVAILABLE");
+  }, 120000);
+
   it("enforces candidate suggestion cap, removal permissions, and initial candidate protection", async () => {
     const marketId = await getSfMarketId();
     const host = await createEligibleProfile("Suggest Host", "suggest_host");

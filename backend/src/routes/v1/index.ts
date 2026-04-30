@@ -35,6 +35,7 @@ import {
   listDecisionSessions,
   removeDecisionCandidate,
   reportDecisionSessionMessage,
+  rewindDecisionSession,
   revokeDecisionSessionCode,
   searchDecisionSessionVenues,
   suggestDecisionCandidate,
@@ -834,6 +835,20 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
           candidateId: body.candidate_id,
           venueId: body.venue_id,
           vote: body.vote
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/rewind",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(
+        await rewindDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id
         })
       );
     })

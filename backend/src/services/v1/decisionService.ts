@@ -107,6 +107,15 @@ type MemberProgressRow = {
   swiped_count: string | number;
 };
 
+type DeckState = {
+  deck_size: number;
+  cards_total: number;
+  cards_remaining: number;
+  next_candidate_id: string | null;
+  last_swiped_candidate_id: string | null;
+  can_rewind: boolean;
+};
+
 type DecisionMessageRow = {
   id: string;
   session_id: string;
@@ -815,6 +824,71 @@ function formatProgress(progressRows: MemberProgressRow[], deckCandidateCount: n
   };
 }
 
+function baseDeckCandidates(candidates: ReturnType<typeof formatCandidate>[]) {
+  return candidates
+    .filter((candidate) => candidate.source === "initial")
+    .sort((left, right) => left.original_rank - right.original_rank)
+    .slice(0, DECK_SIZE);
+}
+
+function unswipedDeckCandidates(candidates: ReturnType<typeof formatCandidate>[]) {
+  return candidates
+    .filter((candidate) => candidate.viewer_vote === null)
+    .sort((left, right) => left.original_rank - right.original_rank);
+}
+
+async function readLatestSwipingVote(
+  client: DBClient,
+  sessionId: string,
+  userId: string
+): Promise<{ id: string; candidate_id: string; created_at: string; updated_at: string } | null> {
+  const result = await client.query<{ id: string; candidate_id: string; created_at: string; updated_at: string }>(
+    `
+      SELECT id, candidate_id, created_at, updated_at
+      FROM decision_votes
+      WHERE session_id = $1::uuid
+        AND user_id = $2::uuid
+        AND candidate_id IN (
+          SELECT id
+          FROM decision_session_candidates
+          WHERE session_id = $1::uuid
+            AND source = 'initial'
+          ORDER BY original_rank ASC
+          LIMIT ${DECK_SIZE}
+        )
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+      LIMIT 1
+    `,
+    [sessionId, userId]
+  );
+  return result.rows[0] ?? null;
+}
+
+function formatDeckState(input: {
+  session: SessionRow;
+  stage: DecisionStage;
+  membership: MembershipRow;
+  baseDeck: ReturnType<typeof formatCandidate>[];
+  activeDeck: ReturnType<typeof formatCandidate>[];
+  latestVote: { candidate_id: string } | null;
+}): DeckState {
+  const canRewind =
+    input.session.status === "active" &&
+    !input.session.finalized_at &&
+    input.stage === "swiping" &&
+    input.membership.status === "joined" &&
+    input.latestVote !== null;
+
+  return {
+    deck_size: DECK_SIZE,
+    cards_total: input.baseDeck.length,
+    cards_remaining: input.activeDeck.length,
+    next_candidate_id: input.stage === "swiping" ? input.activeDeck[0]?.id ?? null : null,
+    last_swiped_candidate_id: input.latestVote?.candidate_id ?? null,
+    can_rewind: canRewind
+  };
+}
+
 async function countSuggestedCandidates(client: DBClient, sessionId: string): Promise<number> {
   const result = await client.query<{ count: string | number }>(
     `
@@ -859,14 +933,17 @@ async function formatSessionResponse(
     formatCandidate(candidate, joinedPreferences, session, account.user.id)
   );
   const stage = effectiveStage(session);
-  const deckCandidates = candidates.slice(0, DECK_SIZE);
+  const baseDeck = baseDeckCandidates(candidates);
+  const activeDeck = unswipedDeckCandidates(baseDeck);
+  const deckCandidates = stage === "swiping" ? activeDeck : baseDeck;
   const shortlist = stage === "swiping" ? [] : sortForShortlist(candidates).slice(0, SHORTLIST_SIZE);
   const recommendedFinalCandidate = stage === "swiping" ? null : chooseFinalRecommendation(shortlist);
-  const progressRows = await readMemberProgress(client, sessionId, deckCandidates.map((candidate) => candidate.id));
-  const progress = formatProgress(progressRows, deckCandidates.length, stage !== "swiping");
+  const progressRows = await readMemberProgress(client, sessionId, baseDeck.map((candidate) => candidate.id));
+  const progress = formatProgress(progressRows, baseDeck.length, stage !== "swiping");
   const leader = chooseLeader(candidates);
   const memberCounts = await countMembers(client, sessionId);
   const messages = (await readMessages(client, sessionId)).map(formatMessage);
+  const latestVote = await readLatestSwipingVote(client, sessionId, account.user.id);
   const isJoined = membership.status === "joined";
   const isActive = session.status === "active";
   const isUnfinalized = !session.finalized_at;
@@ -910,6 +987,14 @@ async function formatSessionResponse(
       member_counts: memberCounts,
       viewer_role: membership.role,
       viewer_status: membership.status,
+      deck_state: formatDeckState({
+        session,
+        stage,
+        membership,
+        baseDeck,
+        activeDeck,
+        latestVote
+      }),
       capabilities: {
         can_vote: isActive && isJoined && isUnfinalized && stage === "swiping",
         can_vote_shortlist: isActive && isJoined && isUnfinalized && stage === "shortlist_voting",
@@ -1288,6 +1373,41 @@ export async function voteDecisionSession(input: {
           updated_at = NOW()
       `,
       [input.sessionId, candidateId, input.account.user.id, input.vote]
+    );
+  });
+
+  return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
+}
+
+export async function rewindDecisionSession(input: {
+  account: AccountState;
+  sessionId: string;
+}) {
+  requireEligible(input.account);
+
+  await dbTransaction(async (client) => {
+    const session = await readSession(client, input.sessionId);
+    assertActiveSession(session);
+    assertUnfinalizedSession(session);
+    if (effectiveStage(session) !== "swiping") {
+      throw new ApiError(409, "DECISION_STAGE_LOCKED", "Rewind is closed for this room.");
+    }
+    const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
+    assertJoinedMember(membership);
+
+    const latestVote = await readLatestSwipingVote(client, input.sessionId, input.account.user.id);
+    if (!latestVote) {
+      throw new ApiError(409, "NO_REWIND_AVAILABLE", "There is no swipe to rewind.");
+    }
+
+    await client.query(
+      `
+        DELETE FROM decision_votes
+        WHERE id = $1::uuid
+          AND session_id = $2::uuid
+          AND user_id = $3::uuid
+      `,
+      [latestVote.id, input.sessionId, input.account.user.id]
     );
   });
 
