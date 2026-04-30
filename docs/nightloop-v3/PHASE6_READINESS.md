@@ -82,9 +82,9 @@ richer group planning polish or another focused social UI pass.
 
 For TestFlight readiness, use:
 
-- `docs/nightloop-v3/TESTFLIGHT_READINESS.md`
-- `docs/superpowers/specs/2026-04-30-testflight-readiness-design.md`
-- `docs/superpowers/plans/2026-04-30-testflight-readiness.md`
+- [TESTFLIGHT_READINESS.md](TESTFLIGHT_READINESS.md)
+- [2026-04-30-testflight-readiness-design.md](../superpowers/specs/2026-04-30-testflight-readiness-design.md)
+- [2026-04-30-testflight-readiness.md](../superpowers/plans/2026-04-30-testflight-readiness.md)
 
 ## Verification
 
