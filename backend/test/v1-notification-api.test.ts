@@ -10,6 +10,7 @@ import { config as loadDotenv } from "dotenv";
 import { createApp, type AuthAdminClient } from "../src/app";
 import { loadConfig } from "../src/lib/config";
 import {
+  type ApnsRequest,
   ApnsNotificationSender,
   enqueueRoomNotification,
   roomNotificationCopy
@@ -312,30 +313,73 @@ describe("Nightloop v1 notification API", () => {
     );
   }, 120000);
 
-  it("fails closed when direct APNs delivery is selected before implementation", async () => {
+  it("builds direct APNs requests without exposing credentials", async () => {
+    const requests: ApnsRequest[] = [];
     const sender = new ApnsNotificationSender({
       ...loadConfig(),
       notificationDeliveryMode: "apns",
       apnsTeamId: "TEAMID1234",
       apnsKeyId: "KEYID1234",
-      apnsPrivateKey: "test-private-key",
-      apnsBundleId: "com.nightloop.test"
+      apnsPrivateKey: "-----BEGIN PRIVATE KEY-----\nPRIVATE KEY TEST MATERIAL\n-----END PRIVATE KEY-----",
+      apnsBundleId: "com.nightloop.app",
+      apnsEnvironment: "sandbox"
+    }, async (request) => {
+      requests.push(request);
+      return { status: 200, body: "{\"reason\":\"Success\"}" };
+    }, async () => "test.apns.jwt");
+    const sessionId = randomUUID();
+    const token = "d".repeat(64);
+
+    const result = await sender.send({
+      tokens: [{
+        id: randomUUID(),
+        user_id: randomUUID(),
+        platform: "ios",
+        token_hash: "not-returned",
+        token_value: token,
+        apns_environment: "sandbox",
+        app_version: "1.0",
+        build_number: "42",
+        last_seen_at: new Date().toISOString(),
+        revoked_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }],
+      copy: "your shortlist is ready",
+      route: {
+        type: "decision_session",
+        session_id: sessionId
+      },
+      category: "shortlist_ready"
     });
 
-    await expect(
-      sender.send({
-        tokens: [],
-        copy: "your shortlist is ready",
-        route: {
-          type: "decision_session",
-          session_id: randomUUID()
-        },
-        category: "shortlist_ready"
+    expect(result).toEqual({ delivered_count: 1, delivery_mode: "apns" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toEqual(
+      expect.objectContaining({
+        authority: "api.sandbox.push.apple.com",
+        path: `/3/device/${token}`,
+        headers: expect.objectContaining({
+          "apns-topic": "com.nightloop.app",
+          "apns-push-type": "alert",
+          "apns-priority": "10",
+          authorization: "bearer test.apns.jwt"
+        })
       })
-    ).rejects.toMatchObject({
-      status: 501,
-      code: "APNS_DELIVERY_NOT_IMPLEMENTED"
+    );
+    expect(JSON.parse(requests[0].body)).toEqual({
+      aps: {
+        alert: { title: "nightloop", body: "your shortlist is ready" },
+        sound: "default",
+        category: "shortlist_ready"
+      },
+      route: {
+        type: "decision_session",
+        session_id: sessionId
+      },
+      session_id: sessionId
     });
+    expect(JSON.stringify(requests)).not.toContain("PRIVATE KEY");
   });
 
   it("returns default notification preferences and updates room toggles", async () => {

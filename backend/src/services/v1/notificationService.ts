@@ -1,4 +1,6 @@
 import { createHash } from "crypto";
+import http2 from "http2";
+import { importPKCS8, SignJWT } from "jose";
 import type { AppConfig } from "../../lib/config";
 import { loadConfig } from "../../lib/config";
 import { ApiError, validationError } from "../../lib/apiError";
@@ -65,6 +67,17 @@ type NotificationSendResult = {
   delivered_count: number;
   delivery_mode: NotificationDeliveryMode;
 };
+
+export type ApnsRequest = {
+  authority: string;
+  path: string;
+  headers: Record<string, string>;
+  body: string;
+};
+
+export type ApnsTransport = (request: ApnsRequest) => Promise<{ status: number; body: string }>;
+
+type ApnsJwtSigner = () => Promise<string>;
 
 const TOKEN_PATTERN = /^[a-f0-9]{32,512}$/;
 
@@ -155,8 +168,55 @@ export class MockNotificationSender {
   }
 }
 
+export const defaultApnsTransport: ApnsTransport = async (request) => {
+  const client = http2.connect(`https://${request.authority}`);
+
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      client.close();
+      callback();
+    };
+
+    client.once("error", (error) => {
+      settle(() => reject(error));
+    });
+
+    const stream = client.request({
+      ":method": "POST",
+      ":path": request.path,
+      ...request.headers
+    });
+
+    const chunks: Buffer[] = [];
+    let status = 0;
+
+    stream.setEncoding("utf8");
+    stream.on("response", (headers) => {
+      const responseStatus = headers[":status"];
+      status = typeof responseStatus === "number" ? responseStatus : Number(responseStatus ?? 0);
+    });
+    stream.on("data", (chunk) => {
+      chunks.push(Buffer.from(chunk));
+    });
+    stream.once("error", (error) => {
+      settle(() => reject(error));
+    });
+    stream.once("end", () => {
+      settle(() => resolve({ status, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    stream.end(request.body);
+  });
+};
+
 export class ApnsNotificationSender {
-  constructor(private readonly config: AppConfig) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly transport: ApnsTransport = defaultApnsTransport,
+    private readonly jwtSigner?: ApnsJwtSigner
+  ) {}
 
   async send(input: NotificationSendInput): Promise<NotificationSendResult> {
     if (
@@ -168,7 +228,70 @@ export class ApnsNotificationSender {
       throw new ApiError(500, "APNS_CONFIG_MISSING", "APNs delivery is not configured.");
     }
 
-    throw new ApiError(501, "APNS_DELIVERY_NOT_IMPLEMENTED", "Direct APNs delivery is not implemented yet.");
+    const jwt = await this.signJwt();
+    const authority =
+      this.config.apnsEnvironment === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
+    let deliveredCount = 0;
+
+    for (const token of input.tokens) {
+      const response = await this.sendToken(authority, jwt, token, input);
+      if (response && response.status >= 200 && response.status < 300) {
+        deliveredCount += 1;
+      }
+    }
+
+    return {
+      delivered_count: deliveredCount,
+      delivery_mode: "apns"
+    };
+  }
+
+  private async signJwt(): Promise<string> {
+    if (this.jwtSigner) {
+      return this.jwtSigner();
+    }
+
+    const privateKey = await importPKCS8(this.config.apnsPrivateKey!, "ES256");
+    const issuedAt = Math.floor(Date.now() / 1000);
+    return new SignJWT({})
+      .setProtectedHeader({ alg: "ES256", kid: this.config.apnsKeyId! })
+      .setIssuer(this.config.apnsTeamId!)
+      .setIssuedAt(issuedAt)
+      .setExpirationTime(issuedAt + 50 * 60)
+      .sign(privateKey);
+  }
+
+  private async sendToken(
+    authority: string,
+    jwt: string,
+    token: DeviceTokenRow,
+    input: NotificationSendInput
+  ): Promise<{ status: number; body: string } | null> {
+    const body = JSON.stringify({
+      aps: {
+        alert: { title: "nightloop", body: input.copy },
+        sound: "default",
+        category: input.category
+      },
+      route: input.route,
+      session_id: input.route.session_id
+    });
+
+    try {
+      return await this.transport({
+        authority,
+        path: `/3/device/${token.token_value}`,
+        headers: {
+          authorization: `bearer ${jwt}`,
+          "apns-topic": this.config.apnsBundleId!,
+          "apns-push-type": "alert",
+          "apns-priority": "10"
+        },
+        body
+      });
+    } catch {
+      return null;
+    }
   }
 }
 
