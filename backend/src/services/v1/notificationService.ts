@@ -250,11 +250,10 @@ export class ApnsNotificationSender {
     }
 
     const jwt = await this.signJwt();
-    const authority =
-      this.config.apnsEnvironment === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
     let deliveredCount = 0;
 
     for (const token of input.tokens) {
+      const authority = this.authorityForToken(token);
       const response = await this.sendToken(authority, jwt, token, input);
       if (response && response.status >= 200 && response.status < 300) {
         deliveredCount += 1;
@@ -280,6 +279,10 @@ export class ApnsNotificationSender {
       .setIssuedAt(issuedAt)
       .setExpirationTime(issuedAt + 50 * 60)
       .sign(privateKey);
+  }
+
+  private authorityForToken(token: DeviceTokenRow): string {
+    return token.apns_environment === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
   }
 
   private async sendToken(

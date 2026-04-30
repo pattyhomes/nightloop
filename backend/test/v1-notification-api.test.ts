@@ -31,14 +31,14 @@ type TestProfile = TestUser & {
   username: string;
 };
 
-function testDeviceToken(tokenValue: string) {
+function testDeviceToken(tokenValue: string, apnsEnvironment: "sandbox" | "production" = "sandbox") {
   return {
     id: randomUUID(),
     user_id: randomUUID(),
     platform: "ios" as const,
     token_hash: "not-returned",
     token_value: tokenValue,
-    apns_environment: "sandbox" as const,
+    apns_environment: apnsEnvironment,
     app_version: "1.0",
     build_number: "42",
     last_seen_at: new Date().toISOString(),
@@ -453,7 +453,10 @@ describe("Nightloop v1 notification API", () => {
     }, async () => "test.apns.jwt");
 
     const result = await sender.send({
-      tokens: [testDeviceToken("1".repeat(64)), testDeviceToken("2".repeat(64))],
+      tokens: [
+        testDeviceToken("1".repeat(64), "production"),
+        testDeviceToken("2".repeat(64), "production")
+      ],
       copy: "the plan is locked",
       route: {
         type: "decision_session",
@@ -467,6 +470,44 @@ describe("Nightloop v1 notification API", () => {
       "api.push.apple.com",
       "api.push.apple.com"
     ]);
+  });
+
+  it("routes mixed APNs token environments to their matching authorities", async () => {
+    const requests: ApnsRequest[] = [];
+    const sandboxToken = "4".repeat(64);
+    const productionToken = "5".repeat(64);
+    const sender = new ApnsNotificationSender({
+      ...loadConfig(),
+      notificationDeliveryMode: "apns",
+      apnsTeamId: "TEAMID1234",
+      apnsKeyId: "KEYID1234",
+      apnsPrivateKey: "-----BEGIN PRIVATE KEY-----\nPRIVATE KEY TEST MATERIAL\n-----END PRIVATE KEY-----",
+      apnsBundleId: "com.nightloop.app",
+      apnsEnvironment: "sandbox"
+    }, async (request) => {
+      requests.push(request);
+      return { status: 200, body: "{}" };
+    }, async () => "test.apns.jwt");
+
+    const result = await sender.send({
+      tokens: [
+        testDeviceToken(sandboxToken, "sandbox"),
+        testDeviceToken(productionToken, "production")
+      ],
+      copy: "your shortlist is ready",
+      route: {
+        type: "decision_session",
+        session_id: randomUUID()
+      },
+      category: "shortlist_ready"
+    });
+
+    expect(result).toEqual({ delivered_count: 2, delivery_mode: "apns" });
+    expect(requests.map((request) => [request.authority, request.path])).toEqual([
+      ["api.sandbox.push.apple.com", `/3/device/${sandboxToken}`],
+      ["api.push.apple.com", `/3/device/${productionToken}`]
+    ]);
+    expect(JSON.stringify(requests)).not.toContain("PRIVATE KEY");
   });
 
   it("fails APNs transport timeouts soft per token", async () => {
