@@ -49,6 +49,14 @@ import {
   writeSseEvent
 } from "../../services/v1/decisionRoomEvents";
 import {
+  enqueueRoomNotification,
+  getNotificationPreferences,
+  registerDeviceToken,
+  revokeDeviceToken,
+  roomNotificationCopy,
+  updateNotificationPreferences
+} from "../../services/v1/notificationService";
+import {
   acceptFriendInvite,
   acceptFriendRequest,
   addActivityReply,
@@ -179,6 +187,45 @@ const DevSocialCrewResetSchema = z
 const RecentSignalsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).optional()
 });
+
+const DeviceTokenSchema = z
+  .object({
+    token: z.string().trim().min(32).max(512),
+    apns_environment: z.enum(["sandbox", "production"]).optional(),
+    app_version: z.string().trim().min(1).max(40).optional(),
+    build_number: z.string().trim().min(1).max(40).optional()
+  })
+  .strict();
+
+const DeviceTokenDeleteSchema = z
+  .object({
+    token: z.string().trim().min(32).max(512)
+  })
+  .strict();
+
+const NotificationPreferencesPatchSchema = z
+  .object({
+    room_invites_enabled: z.boolean().optional(),
+    shortlist_ready_enabled: z.boolean().optional(),
+    final_plan_locked_enabled: z.boolean().optional(),
+    room_messages_enabled: z.boolean().optional()
+  })
+  .strict();
+
+const RoomNotificationCategorySchema = z.enum([
+  "room_invite",
+  "shortlist_ready",
+  "final_plan_locked",
+  "room_message"
+]);
+
+const DevRoomNotificationSchema = z
+  .object({
+    session_id: z.string().uuid(),
+    category: RoomNotificationCategorySchema,
+    actor_display_name: z.string().trim().min(1).max(40).optional()
+  })
+  .strict();
 
 const FriendSearchQuerySchema = z.object({
   q: z.string().trim().min(2).max(80),
@@ -530,6 +577,52 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     })
   );
 
+  router.post(
+    "/me/device-tokens",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DeviceTokenSchema, req.body);
+      res.status(201).json({
+        device_token: await registerDeviceToken(
+          accountFromRequest(req),
+          body.token,
+          body.apns_environment ?? config.apnsEnvironment,
+          body.app_version,
+          body.build_number
+        )
+      });
+    })
+  );
+
+  router.delete(
+    "/me/device-tokens",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DeviceTokenDeleteSchema, req.body);
+      res.json(await revokeDeviceToken(accountFromRequest(req), body.token));
+    })
+  );
+
+  router.get(
+    "/me/notification-preferences",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json({ preferences: await getNotificationPreferences(accountFromRequest(req)) });
+    })
+  );
+
+  router.patch(
+    "/me/notification-preferences",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(NotificationPreferencesPatchSchema, req.body);
+      res.json({ preferences: await updateNotificationPreferences(accountFromRequest(req), body) });
+    })
+  );
+
   router.delete(
     "/me/account",
     accountWriteLimiter,
@@ -538,6 +631,39 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
       res.status(202).json({
         status: "accepted",
         message: "Account deletion has started."
+      });
+    })
+  );
+
+  router.post(
+    "/dev/notifications/room-test",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      if (config.env === "production") {
+        throw new ApiError(404, "NOT_FOUND", "Resource not found.");
+      }
+      const body = parseBody(DevRoomNotificationSchema, req.body);
+      await getDecisionSession(accountFromRequest(req), body.session_id);
+      const copy = roomNotificationCopy(body.category, body.actor_display_name ?? accountFromRequest(req).profile.display_name);
+      const enqueue = await enqueueRoomNotification(
+        body.session_id,
+        accountFromRequest(req).user.id,
+        body.category,
+        body.actor_display_name ?? accountFromRequest(req).profile.display_name,
+        { ...config, notificationDeliveryMode: "mock" }
+      );
+      res.json({
+        notification: {
+          category: body.category,
+          copy,
+          route: {
+            type: "decision_session",
+            session_id: body.session_id
+          },
+          queued_count: enqueue.queued_count,
+          delivery_mode: "mock"
+        }
       });
     })
   );

@@ -8,6 +8,10 @@ import {
   type DecisionRoomEventInput,
   type DecisionRoomEventType
 } from "./decisionRoomEvents";
+import {
+  enqueueRoomNotification,
+  type RoomNotificationCategory
+} from "./notificationService";
 import { findMarketByIdOrSlug } from "./marketService";
 import { listRecommendations } from "./recommendationService";
 import { getVenue, listVenues } from "./venueService";
@@ -330,6 +334,65 @@ function publishDecisionRoomEvent(input: {
     ...(input.stage ? { stage: input.stage } : {})
   };
   decisionRoomEventBus.publish(event);
+}
+
+function enqueueRoomNotificationFailSoft(input: {
+  sessionId: string;
+  recipientUserId: string;
+  category: RoomNotificationCategory;
+  actorDisplayName?: string;
+}): void {
+  void enqueueRoomNotification(
+    input.sessionId,
+    input.recipientUserId,
+    input.category,
+    input.actorDisplayName
+  ).catch((error) => {
+    logRoomNotificationEnqueueFailure(input.category, error);
+  });
+}
+
+function enqueueJoinedRoomNotificationsFailSoft(input: {
+  sessionId: string;
+  actorUserId: string;
+  category: RoomNotificationCategory;
+  actorDisplayName?: string;
+}): void {
+  void (async () => {
+    const recipients = await dbQuery<{ user_id: string }>(
+      `
+        SELECT user_id
+        FROM decision_session_members
+        WHERE session_id = $1::uuid
+          AND status = 'joined'
+          AND user_id <> $2::uuid
+        ORDER BY joined_at ASC NULLS LAST, created_at ASC
+      `,
+      [input.sessionId, input.actorUserId]
+    );
+    await Promise.all(
+      recipients.rows.map((recipient) =>
+        enqueueRoomNotification(
+          input.sessionId,
+          recipient.user_id,
+          input.category,
+          input.actorDisplayName
+        )
+      )
+    );
+  })().catch((error) => {
+    logRoomNotificationEnqueueFailure(input.category, error);
+  });
+}
+
+function logRoomNotificationEnqueueFailure(category: RoomNotificationCategory, error: unknown): void {
+  const apiCode = error instanceof ApiError ? error.code : undefined;
+  const message = error instanceof Error ? error.message : "Unknown notification enqueue failure.";
+  console.warn("[notifications] room enqueue failed", {
+    category,
+    ...(apiCode ? { code: apiCode } : {}),
+    message
+  });
 }
 
 function formatCandidate(
@@ -1217,6 +1280,15 @@ export async function createDecisionSession(input: {
     return id;
   });
 
+  for (const invitedUserId of invitedUserIds) {
+    enqueueRoomNotificationFailSoft({
+      sessionId,
+      recipientUserId: invitedUserId,
+      category: "room_invite",
+      actorDisplayName: input.account.profile.display_name
+    });
+  }
+
   return formatSessionResponse({ query: dbQuery }, sessionId, input.account, code);
 }
 
@@ -1538,6 +1610,12 @@ export async function advanceDecisionSessionShortlist(input: {
       type: "shortlist_ready",
       stage: "shortlist_voting"
     });
+    enqueueJoinedRoomNotificationsFailSoft({
+      sessionId: input.sessionId,
+      actorUserId: input.account.user.id,
+      category: "shortlist_ready",
+      actorDisplayName: input.account.profile.display_name
+    });
   }
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
@@ -1845,6 +1923,12 @@ export async function finalizeDecisionSession(input: {
     candidateId: input.candidateId,
     stage: "finalized"
   });
+  enqueueJoinedRoomNotificationsFailSoft({
+    sessionId: input.sessionId,
+    actorUserId: input.account.user.id,
+    category: "final_plan_locked",
+    actorDisplayName: input.account.profile.display_name
+  });
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
@@ -1897,6 +1981,12 @@ export async function addDecisionSessionMessage(input: {
     type: "message_created",
     messageId,
     stage: messageStage
+  });
+  enqueueJoinedRoomNotificationsFailSoft({
+    sessionId: input.sessionId,
+    actorUserId: input.account.user.id,
+    category: "room_message",
+    actorDisplayName: input.account.profile.display_name
   });
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);

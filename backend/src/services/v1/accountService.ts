@@ -531,6 +531,8 @@ export async function deleteAccount(
       [account.user.id]
     );
     await client.query("DELETE FROM user_preferences WHERE user_id = $1::uuid", [account.user.id]);
+    await client.query("DELETE FROM user_device_tokens WHERE user_id = $1::uuid", [account.user.id]);
+    await client.query("DELETE FROM user_notification_preferences WHERE user_id = $1::uuid", [account.user.id]);
     await client.query("DELETE FROM user_settings WHERE user_id = $1::uuid", [account.user.id]);
     await client.query(
       `

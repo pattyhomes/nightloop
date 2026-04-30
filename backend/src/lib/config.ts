@@ -20,6 +20,12 @@ export type AppConfig = {
   foursquareApiKey?: string;
   googlePlacesApiKey?: string;
   reviewerAuthUserId?: string;
+  apnsTeamId?: string;
+  apnsKeyId?: string;
+  apnsPrivateKey?: string;
+  apnsBundleId?: string;
+  apnsEnvironment: "sandbox" | "production";
+  notificationDeliveryMode: "mock" | "apns";
 };
 
 const EnvSchema = z.object({
@@ -38,7 +44,13 @@ const EnvSchema = z.object({
   ACCOUNT_WRITE_LIMIT: z.coerce.number().int().positive().default(30),
   FOURSQUARE_API_KEY: z.string().min(1).optional(),
   GOOGLE_PLACES_API_KEY: z.string().min(1).optional(),
-  REVIEWER_AUTH_USER_ID: z.string().uuid().optional()
+  REVIEWER_AUTH_USER_ID: z.string().uuid().optional(),
+  APNS_TEAM_ID: z.string().min(1).optional(),
+  APNS_KEY_ID: z.string().min(1).optional(),
+  APNS_PRIVATE_KEY: z.string().min(1).optional(),
+  APNS_BUNDLE_ID: z.string().min(1).optional(),
+  APNS_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
+  NOTIFICATION_DELIVERY_MODE: z.enum(["mock", "apns"]).default("mock")
 });
 
 let envLoaded = false;
@@ -98,6 +110,12 @@ export function loadConfig(): AppConfig {
     accountWriteLimit: parsed.ACCOUNT_WRITE_LIMIT,
     foursquareApiKey: parsed.FOURSQUARE_API_KEY,
     googlePlacesApiKey: parsed.GOOGLE_PLACES_API_KEY,
-    reviewerAuthUserId: parsed.REVIEWER_AUTH_USER_ID
+    reviewerAuthUserId: parsed.REVIEWER_AUTH_USER_ID,
+    apnsTeamId: parsed.APNS_TEAM_ID,
+    apnsKeyId: parsed.APNS_KEY_ID,
+    apnsPrivateKey: parsed.APNS_PRIVATE_KEY,
+    apnsBundleId: parsed.APNS_BUNDLE_ID,
+    apnsEnvironment: parsed.APNS_ENVIRONMENT,
+    notificationDeliveryMode: parsed.NOTIFICATION_DELIVERY_MODE
   };
 }
