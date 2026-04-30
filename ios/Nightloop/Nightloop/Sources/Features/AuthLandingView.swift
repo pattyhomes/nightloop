@@ -316,6 +316,7 @@ private struct ReviewerDemoSignInView: View {
     @State private var email: String
     @State private var password = ""
     @State private var isSigningIn = false
+    @State private var statusMessage: String?
 
     init(authStore: AuthStore, emailHint: String?) {
         self.authStore = authStore
@@ -333,7 +334,12 @@ private struct ReviewerDemoSignInView: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(NightloopTheme.inkMuted)
 
+            if let statusMessage {
+                ErrorStateView(title: "Reviewer sign-in", message: statusMessage)
+            }
+
             TextField("Email", text: $email)
+                .textContentType(.username)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.emailAddress)
                 .autocorrectionDisabled()
@@ -349,12 +355,7 @@ private struct ReviewerDemoSignInView: View {
 
             Button {
                 Task {
-                    isSigningIn = true
-                    await authStore.signIn(email: email, password: password)
-                    isSigningIn = false
-                    if case .signedIn = authStore.phase {
-                        dismiss()
-                    }
+                    await submit()
                 }
             } label: {
                 if isSigningIn {
@@ -366,12 +367,32 @@ private struct ReviewerDemoSignInView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(NightloopTheme.purple)
-            .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.count < 8 || isSigningIn)
+            .disabled(normalizedEmail.isEmpty || password.count < 8 || isSigningIn)
 
             Spacer()
         }
         .padding(22)
         .background(OrchidBackground())
+    }
+
+    private var normalizedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func submit() async {
+        isSigningIn = true
+        statusMessage = nil
+        await authStore.signIn(email: normalizedEmail, password: password)
+        isSigningIn = false
+
+        switch authStore.phase {
+        case .signedIn:
+            dismiss()
+        case .failed(let message), .unconfigured(let message):
+            statusMessage = message
+        default:
+            statusMessage = "Reviewer sign-in could not complete. Please try again."
+        }
     }
 }
 
