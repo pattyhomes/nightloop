@@ -30,6 +30,7 @@
     "neighborhoods:sf": "tsx src/scripts/normalizeSfNeighborhoods.ts",
     "recommendations:refresh-inputs": "tsx src/scripts/refreshRecommendationInputs.ts",
     "phase6:readiness": "tsx src/scripts/auditPhase6Readiness.ts",
+    "testflight:readiness": "tsx src/scripts/auditTestFlightReadiness.ts",
     "phase6:social-smoke": "tsx src/scripts/seedPhase6SocialSmoke.ts",
     "phase6:social-smoke:audit": "tsx src/scripts/auditPhase6SocialSmoke.ts"
   },
