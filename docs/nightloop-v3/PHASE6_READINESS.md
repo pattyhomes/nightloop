@@ -80,8 +80,11 @@ Next recommended slice: run the APNs Apple Developer setup checklist and test on
 a physical device if real push delivery is desired. Otherwise continue with
 richer group planning polish or another focused social UI pass.
 
-For TestFlight readiness, use `docs/nightloop-v3/TESTFLIGHT_READINESS.md`
-plus the Superpowers spec and implementation plan in `docs/superpowers/`.
+For TestFlight readiness, use:
+
+- `docs/nightloop-v3/TESTFLIGHT_READINESS.md`
+- `docs/superpowers/specs/2026-04-30-testflight-readiness-design.md`
+- `docs/superpowers/plans/2026-04-30-testflight-readiness.md`
 
 ## Verification
 

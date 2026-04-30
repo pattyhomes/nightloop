@@ -20,6 +20,22 @@ Tiny trusted external TestFlight beta for `com.nightloop.app`.
 3. Configure Sign in with Apple for bundle id `com.nightloop.app`.
 4. Copy project URL, JWKS URL, issuer URL, publishable key, and service role key.
 5. Store service role only in Railway/backend env.
+6. Create one staging Supabase Auth reviewer user for App Review.
+7. Record only the reviewer Auth user UUID for backend configuration.
+8. Do not commit or document the reviewer password; put reviewer credentials
+   only in App Store Connect review notes.
+
+### Reviewer Account Seed
+1. Set backend env `REVIEWER_AUTH_USER_ID` to the staging Supabase Auth user UUID.
+2. Deploy/restart the Railway backend so the env var is loaded.
+3. Confirm the admin reviewer status flow reports the account as configured:
+   `GET /api/v1/admin/reviewer-account/status`.
+4. Use the existing admin reviewer-account seed flow to prepare the Nightloop
+   profile for review: `POST /api/v1/admin/reviewer-account/seed`.
+5. If using an admin UI or API client, call the same admin status/seed endpoints
+   with normal admin authentication.
+6. Re-check status and confirm the reviewer account is seeded before submitting
+   the TestFlight build.
 
 ### Railway
 1. Create a Railway service from this repo.
@@ -27,8 +43,10 @@ Tiny trusted external TestFlight beta for `com.nightloop.app`.
 3. Start command: `npm --prefix backend start`.
 4. Set `NODE_ENV=production`.
 5. Set Supabase, DB, provider, and APNs env vars.
-6. Set `NOTIFICATION_DELIVERY_MODE=apns` only after APNs credentials are present.
-7. Confirm `/health` returns success over HTTPS.
+6. Set `APNS_ENVIRONMENT=production` for external TestFlight/Release builds;
+   the backend defaults to `sandbox`.
+7. Set `NOTIFICATION_DELIVERY_MODE=apns` only after APNs credentials are present.
+8. Confirm `/health` returns success over HTTPS.
 
 ### Vercel
 1. Deploy the existing `frontend` app.
@@ -38,6 +56,13 @@ Tiny trusted external TestFlight beta for `com.nightloop.app`.
    - `/support`
    - `/delete-account`
    - `/accessibility`
+3. Set the public URL env vars required by
+   `npm --prefix backend run testflight:readiness`:
+   - `NIGHTLOOP_PRIVACY_URL`
+   - `NIGHTLOOP_TERMS_URL`
+   - `NIGHTLOOP_SUPPORT_URL`
+   - `NIGHTLOOP_DELETE_ACCOUNT_URL`
+   - `NIGHTLOOP_ACCESSIBILITY_URL`
 
 ## Staging Seed
 Apply the current migrations in order against the staging database:
@@ -68,6 +93,7 @@ npm --prefix backend run phase6:readiness -- --market=san-francisco --limit=60
 - Beta description: Nightloop helps small friend groups choose where to go tonight in San Francisco using source-backed venue context, private friends activity, and Decision rooms.
 - Features to test: Apple sign-in, Home recommendations, Map, Venue Detail, Friends, Decision rooms, room chat, final plan, notifications.
 - Reviewer notes: normal auth is Sign in with Apple; reviewer demo access is enabled for this TestFlight build and credentials are provided in App Review notes.
+- Reviewer credentials: provide the staging reviewer email/password only in App Store Connect review notes, never in git.
 - Privacy policy URL: Vercel `/privacy`.
 - Support URL: Vercel `/support`.
 - Contact: `axelbaumcharles@gmail.com`.
