@@ -13,6 +13,7 @@ struct AuthLandingView: View {
     @State private var authMessage: String?
     @State private var currentAppleNonce: String?
     @State private var showDebugSignIn = false
+    @State private var showReviewerDemo = false
 
     var body: some View {
         ZStack {
@@ -39,6 +40,12 @@ struct AuthLandingView: View {
             DevSignInView(authStore: authStore, message: nil)
         }
         #endif
+        .sheet(isPresented: $showReviewerDemo) {
+            ReviewerDemoSignInView(
+                authStore: authStore,
+                emailHint: authStore.config.reviewerDemoEmailHint
+            )
+        }
     }
 
     private var header: some View {
@@ -92,6 +99,19 @@ struct AuthLandingView: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(spacing: 10) {
                 appleSignInControl
+
+                if authStore.config.reviewerDemoEnabled {
+                    Button {
+                        showReviewerDemo = true
+                    } label: {
+                        Label("Reviewer demo access", systemImage: "checkmark.seal.fill")
+                            .font(.subheadline.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 46)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.purple)
+                }
 
                 phoneFlow
             }
@@ -285,6 +305,73 @@ struct AuthLandingView: View {
             return "Sign-in failed. Please try again."
         }
         return message
+    }
+}
+
+private struct ReviewerDemoSignInView: View {
+    @ObservedObject var authStore: AuthStore
+    let emailHint: String?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var email: String
+    @State private var password = ""
+    @State private var isSigningIn = false
+
+    init(authStore: AuthStore, emailHint: String?) {
+        self.authStore = authStore
+        self.emailHint = emailHint
+        _email = State(initialValue: emailHint ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Reviewer demo")
+                .font(.title2.weight(.black))
+                .foregroundStyle(NightloopTheme.ink)
+
+            Text("Use the credentials from App Review notes to open the seeded TestFlight account.")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(NightloopTheme.inkMuted)
+
+            TextField("Email", text: $email)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+                .autocorrectionDisabled()
+                .padding(12)
+                .background(NightloopTheme.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
+
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .padding(12)
+                .background(NightloopTheme.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerSmall))
+
+            Button {
+                Task {
+                    isSigningIn = true
+                    await authStore.signIn(email: email, password: password)
+                    isSigningIn = false
+                    if case .signedIn = authStore.phase {
+                        dismiss()
+                    }
+                }
+            } label: {
+                if isSigningIn {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Sign in")
+                        .font(.headline.weight(.black))
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(NightloopTheme.purple)
+            .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.count < 8 || isSigningIn)
+
+            Spacer()
+        }
+        .padding(22)
+        .background(OrchidBackground())
     }
 }
 

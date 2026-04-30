@@ -8,6 +8,8 @@ struct NightloopConfig: Equatable {
     let phoneAuthEnabled: Bool
     let googleMapsIOSAPIKey: String?
     let googleMapID: String?
+    let reviewerDemoEnabled: Bool
+    let reviewerDemoEmailHint: String?
     let debugPhoneTestNumber: String?
     let debugPhoneTestCode: String?
 
@@ -38,6 +40,8 @@ struct NightloopConfig: Equatable {
         let phoneAuthEnabled = Self.boolValue(info["NightloopPhoneAuthEnabled"])
         let googleMapsIOSAPIKey = Self.optionalConfigValue(info["NightloopGoogleMapsIOSAPIKey"])
         let googleMapID = Self.optionalConfigValue(info["NightloopGoogleMapID"])
+        let reviewerDemoEnabled = Self.boolValue(info["NightloopReviewerDemoEnabled"])
+        let reviewerDemoEmailHint = Self.optionalConfigValue(info["NightloopReviewerDemoEmailHint"])
         let debugPhoneTestNumber = Self.optionalDebugValue(info["NightloopDebugPhoneTestNumber"])
         let debugPhoneTestCode = Self.optionalDebugValue(info["NightloopDebugPhoneTestCode"])
 
@@ -48,6 +52,8 @@ struct NightloopConfig: Equatable {
         self.phoneAuthEnabled = phoneAuthEnabled
         self.googleMapsIOSAPIKey = googleMapsIOSAPIKey
         self.googleMapID = googleMapID
+        self.reviewerDemoEnabled = reviewerDemoEnabled
+        self.reviewerDemoEmailHint = reviewerDemoEmailHint
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }
@@ -60,6 +66,8 @@ struct NightloopConfig: Equatable {
         phoneAuthEnabled: Bool = false,
         googleMapsIOSAPIKey: String? = nil,
         googleMapID: String? = nil,
+        reviewerDemoEnabled: Bool = false,
+        reviewerDemoEmailHint: String? = nil,
         debugPhoneTestNumber: String? = nil,
         debugPhoneTestCode: String? = nil
     ) {
@@ -70,6 +78,8 @@ struct NightloopConfig: Equatable {
         self.phoneAuthEnabled = phoneAuthEnabled
         self.googleMapsIOSAPIKey = googleMapsIOSAPIKey
         self.googleMapID = googleMapID
+        self.reviewerDemoEnabled = reviewerDemoEnabled
+        self.reviewerDemoEmailHint = reviewerDemoEmailHint
         self.debugPhoneTestNumber = debugPhoneTestNumber
         self.debugPhoneTestCode = debugPhoneTestCode
     }

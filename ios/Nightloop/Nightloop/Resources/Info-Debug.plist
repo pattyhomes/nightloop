@@ -36,6 +36,10 @@
 	<string>$(DEBUG_PHONE_TEST_NUMBER)</string>
 	<key>NightloopPhoneAuthEnabled</key>
 	<string>$(AUTH_PHONE_ENABLED)</string>
+	<key>NightloopReviewerDemoEnabled</key>
+	<string>$(REVIEWER_DEMO_ENABLED)</string>
+	<key>NightloopReviewerDemoEmailHint</key>
+	<string>$(REVIEWER_DEMO_EMAIL_HINT)</string>
 	<key>NightloopSupabasePublishableKey</key>
 	<string>$(SUPABASE_PUBLISHABLE_KEY)</string>
 	<key>NightloopSupabaseURL</key>

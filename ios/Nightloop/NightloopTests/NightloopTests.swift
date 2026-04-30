@@ -59,6 +59,32 @@ final class NightloopTests: XCTestCase {
         XCTAssertFalse(config.phoneAuthEnabled)
     }
 
+    func testReviewerDemoConfigDecodesWhenEnabled() throws {
+        let config = try NightloopConfig(info: [
+            "NightloopAPIBaseURL": "https://nightloop-staging.up.railway.app/api/v1",
+            "NightloopSupabaseURL": "https://staging.supabase.co",
+            "NightloopSupabasePublishableKey": "sb_publishable_staging",
+            "NightloopAppleAuthEnabled": "YES",
+            "NightloopPhoneAuthEnabled": "NO",
+            "NightloopReviewerDemoEnabled": "YES",
+            "NightloopReviewerDemoEmailHint": "reviewer@nightloop.test"
+        ])
+
+        XCTAssertTrue(config.reviewerDemoEnabled)
+        XCTAssertEqual(config.reviewerDemoEmailHint, "reviewer@nightloop.test")
+    }
+
+    func testReviewerDemoConfigDefaultsOff() throws {
+        let config = try NightloopConfig(info: [
+            "NightloopAPIBaseURL": "https://nightloop-staging.up.railway.app/api/v1",
+            "NightloopSupabaseURL": "https://staging.supabase.co",
+            "NightloopSupabasePublishableKey": "sb_publishable_staging"
+        ])
+
+        XCTAssertFalse(config.reviewerDemoEnabled)
+        XCTAssertNil(config.reviewerDemoEmailHint)
+    }
+
     func testConfigIgnoresUnresolvedGoogleMapsBuildSettings() throws {
         let config = try NightloopConfig(info: [
             "NightloopAPIBaseURL": "http://127.0.0.1:4000/api/v1",

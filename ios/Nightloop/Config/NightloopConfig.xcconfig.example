@@ -17,6 +17,11 @@ GOOGLE_MAP_ID = paste_google_cloud_map_id_here
 AUTH_APPLE_ENABLED = NO
 AUTH_PHONE_ENABLED = NO
 
+// TestFlight/App Review only. Enables a release-safe reviewer credential entry
+// point. Do not put reviewer passwords in this file.
+REVIEWER_DEMO_ENABLED = NO
+REVIEWER_DEMO_EMAIL_HINT =
+
 // Optional DEBUG-only phone auth test helper values.
 // Use only Supabase dashboard test numbers or a controlled development number.
 // Never put a real user's phone number or one-time code in git.
