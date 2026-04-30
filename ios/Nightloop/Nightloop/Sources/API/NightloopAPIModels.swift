@@ -664,13 +664,23 @@ enum DecisionEmoji: String, Codable, Equatable {
     case thinking
     case down
 
-    var symbol: String {
+    var emoji: String {
         switch self {
-        case .fire: return "flame.fill"
-        case .eyes: return "eyes"
-        case .thumbsUp: return "hand.thumbsup.fill"
-        case .thinking: return "questionmark.bubble.fill"
-        case .down: return "hand.thumbsdown.fill"
+        case .fire: return "🔥"
+        case .eyes: return "👀"
+        case .thumbsUp: return "👍"
+        case .thinking: return "🤔"
+        case .down: return "👎"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .fire: return "Fire"
+        case .eyes: return "Eyes"
+        case .thumbsUp: return "Thumbs up"
+        case .thinking: return "Thinking"
+        case .down: return "Thumbs down"
         }
     }
 }

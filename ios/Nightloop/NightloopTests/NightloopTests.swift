@@ -670,6 +670,16 @@ final class NightloopTests: XCTestCase {
         XCTAssertFalse(FriendsReactionAffordancePolicy.usesCollapsedBackground)
     }
 
+    func testDecisionRoomEmojiUsesNativeGlyphsNotRawEnumLabels() {
+        XCTAssertEqual(DecisionEmoji.fire.emoji, "🔥")
+        XCTAssertEqual(DecisionEmoji.eyes.emoji, "👀")
+        XCTAssertEqual(DecisionEmoji.thumbsUp.emoji, "👍")
+        XCTAssertEqual(DecisionEmoji.thinking.emoji, "🤔")
+        XCTAssertEqual(DecisionEmoji.down.emoji, "👎")
+        XCTAssertEqual(DecisionEmoji.eyes.accessibilityLabel, "Eyes")
+        XCTAssertNotEqual(DecisionEmoji.eyes.emoji, DecisionEmoji.eyes.rawValue)
+    }
+
     func testSocialActionButtonMetricsAreCompactAndCentered() {
         XCTAssertEqual(SocialActionButtonMetrics.height, 40)
         XCTAssertEqual(SocialActionButtonMetrics.iconSize, 13)

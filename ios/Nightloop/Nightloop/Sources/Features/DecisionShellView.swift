@@ -1162,13 +1162,14 @@ struct DecisionShellView: View {
                             Button {
                                 sendEmoji(emoji)
                             } label: {
-                                Image(systemName: emoji.symbol)
-                                    .font(.caption.weight(.black))
+                                Text(emoji.emoji)
+                                    .font(.system(size: 20))
                                     .frame(maxWidth: .infinity)
-                                    .frame(height: 32)
+                                    .frame(height: 36)
+                                    .contentShape(Rectangle())
                             }
-                            .buttonStyle(.bordered)
-                            .tint(NightloopTheme.inkMuted)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(emoji.accessibilityLabel)
                             .disabled(isMutating)
                         }
                     }
@@ -2632,9 +2633,10 @@ private struct DecisionMessageRow: View {
                 }
 
                 if message.type == .emoji, let emoji = message.emoji {
-                    Label(emoji.rawValue.replacingOccurrences(of: "_", with: " "), systemImage: emoji.symbol)
-                        .font(.caption.weight(.black))
+                    Text(emoji.emoji)
+                        .font(.system(size: 18))
                         .foregroundStyle(NightloopTheme.ink)
+                        .accessibilityLabel(emoji.accessibilityLabel)
                 } else {
                     Text(message.text ?? "")
                         .font(.caption.weight(.semibold))
