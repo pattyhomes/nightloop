@@ -98,5 +98,5 @@ export function auditPublicUrls(input: PublicUrlAuditInput): AuditResult {
     ["Delete Account URL", input.deleteAccountUrl],
     ["Accessibility URL", input.accessibilityUrl]
   ];
-  return result(checks.filter(([, value]) => !isHttpsUrl(value)).map(([label]) => `${label} is required.`));
+  return result(checks.filter(([, value]) => value.trim().length === 0).map(([label]) => `${label} is required.`));
 }

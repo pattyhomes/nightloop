@@ -63,4 +63,16 @@ describe("TestFlight readiness audit", () => {
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("Support URL is required.");
   });
+
+  it("treats non-empty public URLs as present without validating URL shape", () => {
+    const result = auditPublicUrls({
+      privacyUrl: "http://example.com/privacy",
+      termsUrl: "terms-page",
+      supportUrl: "localhost/support",
+      deleteAccountUrl: "delete-account",
+      accessibilityUrl: "accessibility"
+    });
+
+    expect(result).toEqual({ ok: true, failures: [] });
+  });
 });

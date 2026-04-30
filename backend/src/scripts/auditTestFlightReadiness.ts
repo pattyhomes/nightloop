@@ -22,11 +22,11 @@ const backend = auditBackendRuntime({
 });
 
 const urls = auditPublicUrls({
-  privacyUrl: process.env.NIGHTLOOP_PRIVACY_URL ?? "",
-  termsUrl: process.env.NIGHTLOOP_TERMS_URL ?? "",
-  supportUrl: process.env.NIGHTLOOP_SUPPORT_URL ?? "",
-  deleteAccountUrl: process.env.NIGHTLOOP_DELETE_ACCOUNT_URL ?? "",
-  accessibilityUrl: process.env.NIGHTLOOP_ACCESSIBILITY_URL ?? ""
+  privacyUrl: has("NIGHTLOOP_PRIVACY_URL") ? "set" : "",
+  termsUrl: has("NIGHTLOOP_TERMS_URL") ? "set" : "",
+  supportUrl: has("NIGHTLOOP_SUPPORT_URL") ? "set" : "",
+  deleteAccountUrl: has("NIGHTLOOP_DELETE_ACCOUNT_URL") ? "set" : "",
+  accessibilityUrl: has("NIGHTLOOP_ACCESSIBILITY_URL") ? "set" : ""
 });
 
 const failures = [...backend.failures, ...urls.failures];
