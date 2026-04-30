@@ -464,6 +464,19 @@ struct NightloopAPIClient {
         )
     }
 
+    func updateNotificationPreference(
+        _ field: NotificationPreferenceField,
+        enabled: Bool,
+        bearerToken: String
+    ) async throws -> NotificationPreferencesResponse {
+        try await send(
+            path: "me/notification-preferences",
+            method: "PATCH",
+            bearerToken: bearerToken,
+            body: NotificationPreferenceFieldPatchBody(field: field, enabled: enabled)
+        )
+    }
+
     func markets() async throws -> MarketsResponse {
         try await send(path: "markets", bearerToken: nil)
     }
@@ -802,6 +815,31 @@ private struct NotificationPreferencesPatchBody: Encodable {
         shortlistReadyEnabled = preferences.shortlistReadyEnabled
         finalPlanLockedEnabled = preferences.finalPlanLockedEnabled
         roomMessagesEnabled = preferences.roomMessagesEnabled
+    }
+}
+
+private struct NotificationPreferenceFieldPatchBody: Encodable {
+    let field: NotificationPreferenceField
+    let enabled: Bool
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        try container.encode(enabled, forKey: DynamicCodingKey(stringValue: field.rawValue))
+    }
+}
+
+private struct DynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = "\(intValue)"
+        self.intValue = intValue
     }
 }
 

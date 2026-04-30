@@ -841,6 +841,13 @@ struct NotificationPreferencesResponse: Decodable, Equatable {
     let preferences: NotificationPreferences
 }
 
+enum NotificationPreferenceField: String, Equatable, Hashable {
+    case roomInvitesEnabled = "room_invites_enabled"
+    case shortlistReadyEnabled = "shortlist_ready_enabled"
+    case finalPlanLockedEnabled = "final_plan_locked_enabled"
+    case roomMessagesEnabled = "room_messages_enabled"
+}
+
 enum RoomNotificationCategory: String, Codable, Equatable {
     case roomInvite = "room_invite"
     case shortlistReady = "shortlist_ready"

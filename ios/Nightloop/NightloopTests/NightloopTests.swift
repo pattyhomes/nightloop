@@ -600,9 +600,20 @@ final class NightloopTests: XCTestCase {
     func testDecisionSwipeCommitRequiresRelease() {
         let overThreshold = CGSize(width: 130, height: -4)
 
-        XCTAssertNil(DecisionSwipeReleasePolicy.commitIntent(for: overThreshold, phase: .dragging))
-        XCTAssertEqual(DecisionSwipeReleasePolicy.commitIntent(for: overThreshold, phase: .ended), .voteIn)
-        XCTAssertNil(DecisionSwipeReleasePolicy.commitIntent(for: CGSize(width: 42, height: 0), phase: .ended))
+        XCTAssertNil(DecisionSwipeCommitPolicy.commitIntent(for: overThreshold, phase: .dragging))
+        XCTAssertEqual(DecisionSwipeCommitPolicy.commitIntent(for: overThreshold, phase: .ended), .voteIn)
+        XCTAssertNil(DecisionSwipeCommitPolicy.commitIntent(for: CGSize(width: 42, height: 0), phase: .ended))
+        XCTAssertEqual(DecisionSwipeCommitPolicy.buttonIntent(.skip), .skip)
+        XCTAssertEqual(DecisionSwipeCommitPolicy.buttonIntent(.voteIn), .voteIn)
+        XCTAssertNil(DecisionSwipeCommitPolicy.buttonIntent(.neutral))
+    }
+
+    func testDecisionSwipeVisualEmphasisDoesNotCommitWhileDragging() {
+        let emphasized = DecisionSwipePresentation.state(for: CGSize(width: -140, height: 16))
+
+        XCTAssertEqual(emphasized.intent, .skip)
+        XCTAssertGreaterThan(emphasized.skipGlow, 0)
+        XCTAssertNil(DecisionSwipeCommitPolicy.commitIntent(for: CGSize(width: -140, height: 16), phase: .dragging))
     }
 
     func testDecisionRoomSurfaceDefaultsToFocusedSwipeWhenActive() {
@@ -952,6 +963,11 @@ final class NightloopTests: XCTestCase {
         XCTAssertFalse(DecisionRoomEventStreamReconnectPolicy.shouldDelayBeforeReconnect(isCancelled: true))
     }
 
+    func testDecisionRoomSnapshotRefreshPolicyDebouncesSSEBursts() {
+        XCTAssertEqual(DecisionRoomSnapshotRefreshPolicy.sseDebounceNanoseconds, 250_000_000)
+        XCTAssertGreaterThan(DecisionRoomSnapshotRefreshPolicy.sseDebounceNanoseconds, 0)
+    }
+
     func testNotificationPreferencesDecodeMetadataFields() throws {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -972,6 +988,27 @@ final class NightloopTests: XCTestCase {
         XCTAssertTrue(response.preferences.shortlistReadyEnabled)
         XCTAssertTrue(response.preferences.finalPlanLockedEnabled)
         XCTAssertTrue(response.preferences.roomMessagesEnabled)
+    }
+
+    func testNotificationRoutePolicySelectsDecisionTab() throws {
+        let userInfo: [AnyHashable: Any] = [
+            "route": [
+                "type": "decision_session",
+                "session_id": "session-1"
+            ]
+        ]
+
+        let destination = NotificationRoutePolicy.destination(from: userInfo)
+
+        XCTAssertEqual(destination, .decisionSession("session-1"))
+        XCTAssertEqual(NotificationRoutePolicy.selectedTab(for: try XCTUnwrap(destination)), .decision)
+        XCTAssertEqual(NotificationCoordinator.decisionSessionID(from: ["session_id": "session-2"]), "session-2")
+    }
+
+    func testAPNsEnvironmentPolicyUsesBackendValues() {
+        XCTAssertEqual(APNsEnvironmentPolicy.backendValue(isDebug: true), "sandbox")
+        XCTAssertEqual(APNsEnvironmentPolicy.backendValue(isDebug: false), "production")
+        XCTAssertNotEqual(APNsEnvironmentPolicy.backendValue(isDebug: true), "development")
     }
 
     func testSocialClientBuildsProtectedRequests() async throws {
@@ -1293,6 +1330,41 @@ final class NightloopTests: XCTestCase {
         XCTAssertTrue(defaults.preferences.roomInvitesEnabled)
         XCTAssertFalse(updated.preferences.roomMessagesEnabled)
         XCTAssertEqual(seen.count, 4)
+    }
+
+    func testNotificationPreferenceFieldPatchSendsOnlyChangedKey() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/me/notification-preferences")
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let body = try XCTUnwrap(Self.bodyData(from: request))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(object.keys.sorted(), ["room_messages_enabled"])
+            XCTAssertEqual(object["room_messages_enabled"] as? Bool, false)
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Self.notificationPreferencesFixtureData(roomMessagesEnabled: false))
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let updated = try await client.updateNotificationPreference(
+            .roomMessagesEnabled,
+            enabled: false,
+            bearerToken: "test-token"
+        )
+
+        XCTAssertFalse(updated.preferences.roomMessagesEnabled)
     }
 
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {

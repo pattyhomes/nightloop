@@ -2,10 +2,12 @@ import SwiftUI
 
 struct AppRootView: View {
     @ObservedObject var authStore: AuthStore
+    @EnvironmentObject private var notificationCoordinator: NotificationCoordinator
     let apiClient: NightloopAPIClient
     let startupError: String?
 
     @State private var didRestoreSession = false
+    @State private var lastRegisteredDeviceTokenKey: String?
 
     var body: some View {
         ZStack {
@@ -38,6 +40,53 @@ struct AppRootView: View {
             didRestoreSession = true
             await authStore.restoreSession()
         }
+        .onChange(of: notificationCoordinator.latestDeviceTokenHex) { _, _ in
+            Task { await registerLatestDeviceTokenIfPossible() }
+        }
+        .onChange(of: authStore.phase) { _, _ in
+            Task { await registerLatestDeviceTokenIfPossible() }
+        }
+    }
+
+    private func registerLatestDeviceTokenIfPossible() async {
+        guard let token = notificationCoordinator.latestDeviceTokenHex,
+              let bearerToken = authStore.accessToken else {
+            if authStore.accessToken == nil {
+                lastRegisteredDeviceTokenKey = nil
+            }
+            return
+        }
+
+        let registrationKey = "\(token)-\(bearerToken.hashValue)"
+        guard registrationKey != lastRegisteredDeviceTokenKey else { return }
+
+        do {
+            _ = try await apiClient.registerDeviceToken(
+                token: token,
+                apnsEnvironment: APNsEnvironmentPolicy.currentBackendValue,
+                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                buildNumber: Bundle.main.infoDictionary?["CFBundleVersion"] as? String,
+                bearerToken: bearerToken
+            )
+            lastRegisteredDeviceTokenKey = registrationKey
+        } catch {
+            // Push registration is best-effort; room actions must keep working offline or on simulator.
+        }
+    }
+
+}
+
+enum APNsEnvironmentPolicy {
+    static var currentBackendValue: String {
+        #if DEBUG
+        return backendValue(isDebug: true)
+        #else
+        return backendValue(isDebug: false)
+        #endif
+    }
+
+    static func backendValue(isDebug: Bool) -> String {
+        isDebug ? "sandbox" : "production"
     }
 }
 
@@ -69,6 +118,7 @@ private struct RootMessageView: View {
 
 struct NightloopTabShell: View {
     @ObservedObject var authStore: AuthStore
+    @EnvironmentObject private var notificationCoordinator: NotificationCoordinator
     let apiClient: NightloopAPIClient
     let me: MeResponse
     let preferences: [String: [String]]
@@ -123,5 +173,19 @@ struct NightloopTabShell: View {
             NightloopBottomTabBar(selectedTab: $selectedTab)
         }
         .toolbar(.hidden, for: .tabBar)
+        .onAppear {
+            routePendingNotificationIfNeeded()
+        }
+        .onChange(of: notificationCoordinator.pendingDecisionSessionID) { _, sessionID in
+            guard sessionID != nil else { return }
+            routePendingNotificationIfNeeded()
+        }
+    }
+
+    private func routePendingNotificationIfNeeded() {
+        guard let sessionID = notificationCoordinator.pendingDecisionSessionID else { return }
+        decisionStartSeed = DecisionStartSeed(id: UUID(), friendIDs: [], decisionSessionID: sessionID)
+        selectedTab = NotificationRoutePolicy.selectedTab(for: .decisionSession(sessionID))
+        notificationCoordinator.clearPendingDecisionSession()
     }
 }

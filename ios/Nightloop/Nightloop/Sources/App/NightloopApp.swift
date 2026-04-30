@@ -1,9 +1,13 @@
 import GoogleMaps
 import SwiftUI
+import UIKit
+import UserNotifications
 
 @main
 struct NightloopApp: App {
     @StateObject private var authStore: AuthStore
+    @StateObject private var notificationCoordinator = NotificationCoordinator()
+    @UIApplicationDelegateAdaptor(NightloopAppDelegate.self) private var appDelegate
     private let apiClient: NightloopAPIClient
     private let startupError: String?
 
@@ -31,6 +35,70 @@ struct NightloopApp: App {
     var body: some Scene {
         WindowGroup {
             AppRootView(authStore: authStore, apiClient: apiClient, startupError: startupError)
+                .environmentObject(notificationCoordinator)
+                .onAppear {
+                    appDelegate.attach(notificationCoordinator)
+                }
         }
+    }
+}
+
+final class NightloopAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    private weak var notificationCoordinator: NotificationCoordinator?
+    private var pendingNotificationUserInfo: [AnyHashable: Any]?
+
+    func attach(_ coordinator: NotificationCoordinator) {
+        notificationCoordinator = coordinator
+        UNUserNotificationCenter.current().delegate = self
+
+        if let pendingNotificationUserInfo {
+            self.pendingNotificationUserInfo = nil
+            Task { @MainActor in
+                coordinator.handleNotificationTap(userInfo: pendingNotificationUserInfo)
+            }
+        }
+    }
+
+    func application(
+        _: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        Task { @MainActor [weak notificationCoordinator] in
+            notificationCoordinator?.receiveDeviceToken(deviceToken)
+        }
+    }
+
+    func application(
+        _: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        Task { @MainActor [weak notificationCoordinator] in
+            notificationCoordinator?.receiveDeviceTokenRegistrationError(error)
+        }
+    }
+
+    func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        if let notificationCoordinator {
+            Task { @MainActor in
+                notificationCoordinator.handleNotificationTap(userInfo: userInfo)
+                completionHandler()
+            }
+        } else {
+            pendingNotificationUserInfo = userInfo
+            completionHandler()
+        }
+    }
+
+    func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        willPresent _: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 }

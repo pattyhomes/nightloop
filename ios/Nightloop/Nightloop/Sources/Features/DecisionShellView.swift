@@ -4,11 +4,19 @@ import UIKit
 struct DecisionStartSeed: Equatable {
     let id: UUID
     let friendIDs: [String]
+    let decisionSessionID: String?
+
+    init(id: UUID, friendIDs: [String], decisionSessionID: String? = nil) {
+        self.id = id
+        self.friendIDs = friendIDs
+        self.decisionSessionID = decisionSessionID
+    }
 }
 
 struct DecisionShellView: View {
     let apiClient: NightloopAPIClient
     @ObservedObject var authStore: AuthStore
+    @EnvironmentObject private var notificationCoordinator: NotificationCoordinator
     let me: MeResponse
     let onAccountChanged: (MeResponse) -> Void
     let startSeed: DecisionStartSeed?
@@ -41,11 +49,31 @@ struct DecisionShellView: View {
     @State private var showingProgressSheet = false
     @State private var showingRoomActionsSheet = false
     @State private var swipeTranslation: CGSize = .zero
-    @State private var rewindSnapshot: DecisionSessionResponse?
     @State private var isRoomLobbyOpen = false
+    @State private var routedRoomUnavailableMessage: String?
+    @State private var isDecisionViewVisible = false
+    @State private var roomEventStream: DecisionRoomEventStream?
+    @State private var roomStreamSessionID: String?
+    @State private var roomStreamState: DecisionRoomEventStreamState = .idle
+    @State private var isRoomSnapshotRefreshInFlight = false
+    @State private var needsRoomSnapshotRefresh = false
+    @State private var roomSnapshotDebounceTask: Task<Void, Never>?
+    @State private var pendingVoteCandidateID: String?
+    @State private var showingNotificationPrePermission = false
+    @AppStorage("nightloop.notificationPrePermissionDismissed") private var notificationPrePermissionDismissed = false
 
     private var activeMarketID: String {
         me.profile?.selectedMarketId ?? "san-francisco"
+    }
+
+    private var activeRoomStreamKey: String? {
+        guard let session = activeSession?.session,
+              session.status == "active",
+              session.viewerStatus == "joined" else {
+            return nil
+        }
+
+        return session.id
     }
 
     var body: some View {
@@ -67,8 +95,19 @@ struct DecisionShellView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            isDecisionViewVisible = true
+            reconcileRoomEventStream()
+        }
+        .onDisappear {
+            isDecisionViewVisible = false
+            stopDecisionRoomEventStream()
+        }
         .task { await loadDecision() }
-        .task(id: startSeed?.id) { applyStartSeed(startSeed) }
+        .task(id: startSeed?.id) { await applyStartSeed(startSeed) }
+        .onChange(of: activeRoomStreamKey) { _, _ in
+            reconcileRoomEventStream()
+        }
         .sheet(item: $finalizingCandidate) { candidate in
             DecisionFinalizationSheet(
                 candidate: candidate,
@@ -139,6 +178,22 @@ struct DecisionShellView: View {
                 .presentationDragIndicator(.visible)
             }
         }
+        .sheet(isPresented: $showingNotificationPrePermission) {
+            NotificationPrePermissionSheet(
+                enable: {
+                    Task {
+                        _ = await notificationCoordinator.requestPermission()
+                        showingNotificationPrePermission = false
+                    }
+                },
+                notNow: {
+                    notificationPrePermissionDismissed = true
+                    showingNotificationPrePermission = false
+                }
+            )
+            .presentationDetents([.fraction(0.32), .medium])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     @ViewBuilder
@@ -152,6 +207,11 @@ struct DecisionShellView: View {
                 ErrorStateView(title: "Decision unavailable", message: errorMessage) {
                     Task { await loadDecision() }
                 }
+            } else if let routedRoomUnavailableMessage, activeSession == nil {
+                header
+                ErrorStateView(title: "Room unavailable", message: routedRoomUnavailableMessage) {
+                    Task { await loadDecision() }
+                }
             } else if let activeSession {
                 activeRoomContent(activeSession)
             } else {
@@ -161,7 +221,6 @@ struct DecisionShellView: View {
         }
     }
 
-    @ViewBuilder
     private func activeRoomContent(_ response: DecisionSessionResponse) -> some View {
         let mode = DecisionRoomSurfacePolicy.mode(
             hasActiveRoom: true,
@@ -170,18 +229,22 @@ struct DecisionShellView: View {
             isLobbyOpen: isRoomLobbyOpen
         )
 
-        switch mode {
-        case .swipeRoom:
-            focusedSwipeRoom(response)
-        case .lobby:
-            roomLobby(response)
-        case .shortlist, .finalPlan:
-            header
-            statusStrip
-            sessionDetail(response)
-        case .noRoom:
-            header
-            noActiveRoomView
+        return VStack(alignment: .leading, spacing: 14) {
+            roomRealtimeStatus
+
+            switch mode {
+            case .swipeRoom:
+                focusedSwipeRoom(response)
+            case .lobby:
+                roomLobby(response)
+            case .shortlist, .finalPlan:
+                header
+                statusStrip
+                sessionDetail(response)
+            case .noRoom:
+                header
+                noActiveRoomView
+            }
         }
     }
 
@@ -269,6 +332,62 @@ struct DecisionShellView: View {
             return first.leader.map { "\($0.venueName) is leading." } ?? "\(first.memberCounts.joined) joined tonight."
         }
         return "Create a private friend room and vote from 12 Nightloop picks."
+    }
+
+    @ViewBuilder
+    private var roomRealtimeStatus: some View {
+        switch roomStreamState {
+        case .reconnecting:
+            realtimeFallbackRow(
+                title: "Catching up",
+                message: "Room updates will retry in the background."
+            )
+        case .stopped where activeRoomStreamKey != nil:
+            realtimeFallbackRow(
+                title: "Manual refresh",
+                message: "Pull to refresh if updates look stale."
+            )
+        default:
+            EmptyView()
+        }
+    }
+
+    private func realtimeFallbackRow(title: String, message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.caption.weight(.black))
+                .foregroundStyle(NightloopTheme.amber)
+                .frame(width: 28, height: 28)
+                .background(NightloopTheme.amber.opacity(0.14))
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.ink)
+                Text(message)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+            }
+            Spacer()
+            Button {
+                enqueueActiveRoomSnapshotRefresh()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption.weight(.black))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .tint(NightloopTheme.inkMuted)
+            .accessibilityLabel("Refresh room")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
     }
 
     private var noActiveRoomView: some View {
@@ -592,9 +711,19 @@ struct DecisionShellView: View {
                     apiClient: apiClient,
                     authStore: authStore,
                     onAccountChanged: onAccountChanged,
-                    onDragChanged: { swipeTranslation = $0 },
+                    onDragChanged: { translation in
+                        guard pendingVoteCandidateID == nil else { return }
+                        swipeTranslation = translation
+                    },
                     onDragEnded: { translation in
-                        switch DecisionSwipeReleasePolicy.commitIntent(for: translation, phase: .ended) {
+                        guard pendingVoteCandidateID == nil else {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                                swipeTranslation = .zero
+                            }
+                            return
+                        }
+
+                        switch DecisionSwipeCommitPolicy.commitIntent(for: translation, phase: .ended) {
                         case .voteIn:
                             vote(nextCandidate, .voteIn)
                         case .skip:
@@ -610,7 +739,7 @@ struct DecisionShellView: View {
                     coming: { setComing(nextCandidate.venue) }
                 )
 
-                if rewindSnapshot != nil {
+                if response.session.deckState?.canRewind == true {
                     Button {
                         rewindLastSwipe()
                     } label: {
@@ -738,6 +867,22 @@ struct DecisionShellView: View {
                 }
                 .disabled(isMutating)
             }
+
+            #if DEBUG
+            if response.session.status == "active" {
+                Button {
+                    sendDevRoomNotification(response.session)
+                } label: {
+                    Label("Test room notification", systemImage: "bell.badge.fill")
+                        .font(.caption.weight(.black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                }
+                .buttonStyle(.bordered)
+                .tint(NightloopTheme.amber)
+                .disabled(isMutating)
+            }
+            #endif
         }
     }
 
@@ -1023,14 +1168,16 @@ struct DecisionShellView: View {
                 activeSession = try await apiClient.decisionSession(id: first.id, bearerToken: token)
                 isRoomLobbyOpen = false
             }
-            rewindSnapshot = nil
+            routedRoomUnavailableMessage = nil
             swipeTranslation = .zero
+            pendingVoteCandidateID = nil
         } catch {
             errorMessage = error.localizedDescription
             showToast(error.localizedDescription, isError: true)
         }
 
         isLoading = false
+        reconcileRoomEventStream()
     }
 
     private func createSession() {
@@ -1053,6 +1200,7 @@ struct DecisionShellView: View {
                 showingCreateSheet = false
                 isRoomLobbyOpen = false
                 showToast("Room created")
+                await maybeShowNotificationPrePermission()
                 await loadDecision()
             } catch {
                 showToast(error.localizedDescription, isError: true)
@@ -1071,6 +1219,7 @@ struct DecisionShellView: View {
                 joinCode = ""
                 isRoomLobbyOpen = false
                 showToast("Joined")
+                await maybeShowNotificationPrePermission()
                 await loadDecision()
             } catch {
                 showToast(error.localizedDescription, isError: true)
@@ -1079,8 +1228,13 @@ struct DecisionShellView: View {
         }
     }
 
-    private func applyStartSeed(_ seed: DecisionStartSeed?) {
+    private func applyStartSeed(_ seed: DecisionStartSeed?) async {
         guard let seed else { return }
+        if let decisionSessionID = seed.decisionSessionID {
+            await openRoutedSession(decisionSessionID)
+            return
+        }
+
         selectedInviteIDs.formUnion(seed.friendIDs)
         showingCreateSheet = true
         showToast(seed.friendIDs.isEmpty ? "Create a room" : "Friends preselected")
@@ -1088,28 +1242,32 @@ struct DecisionShellView: View {
 
     private func openSession(_ id: String) {
         guard let token = authStore.accessToken else { return }
+        stopDecisionRoomEventStream()
         Task {
             do {
                 activeSession = try await apiClient.decisionSession(id: id, bearerToken: token)
                 isRoomLobbyOpen = false
-                rewindSnapshot = nil
+                routedRoomUnavailableMessage = nil
                 swipeTranslation = .zero
+                pendingVoteCandidateID = nil
             } catch {
                 showToast(error.localizedDescription, isError: true)
             }
+            reconcileRoomEventStream()
         }
     }
 
     private func vote(_ candidate: DecisionCandidate, _ vote: DecisionVoteValue) {
-        guard let token = authStore.accessToken, let session = activeSession?.session else { return }
-        let previous = activeSession
-        rewindSnapshot = previous
+        guard pendingVoteCandidateID == nil,
+              let token = authStore.accessToken,
+              let session = activeSession?.session else { return }
+
+        pendingVoteCandidateID = candidate.id
+        isMutating = true
         withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
             swipeTranslation = .zero
         }
-        applyOptimisticVote(candidateID: candidate.id, vote: vote)
         Task {
-            isMutating = true
             do {
                 activeSession = try await apiClient.voteDecisionSession(
                     id: session.id,
@@ -1118,22 +1276,31 @@ struct DecisionShellView: View {
                     bearerToken: token
                 )
             } catch {
-                activeSession = previous
-                rewindSnapshot = nil
                 showToast(error.localizedDescription, isError: true)
             }
+            pendingVoteCandidateID = nil
             isMutating = false
         }
     }
 
     private func rewindLastSwipe() {
-        guard let snapshot = rewindSnapshot else { return }
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-            activeSession = snapshot
-            rewindSnapshot = nil
-            swipeTranslation = .zero
+        guard let token = authStore.accessToken,
+              let session = activeSession?.session,
+              session.deckState?.canRewind == true else { return }
+
+        Task {
+            isMutating = true
+            do {
+                activeSession = try await apiClient.rewindDecisionSession(id: session.id, bearerToken: token)
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                    swipeTranslation = .zero
+                }
+                showToast("Last card restored")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
         }
-        showToast("Last card restored")
     }
 
     private func advanceShortlist() {
@@ -1356,6 +1523,167 @@ struct DecisionShellView: View {
         }
     }
 
+    private func openRoutedSession(_ id: String) async {
+        guard let token = authStore.accessToken else {
+            routedRoomUnavailableMessage = "Sign in again to open this room."
+            activeSession = nil
+            return
+        }
+
+        stopDecisionRoomEventStream()
+        isLoading = activeSession == nil
+        do {
+            activeSession = try await apiClient.decisionSession(id: id, bearerToken: token)
+            routedRoomUnavailableMessage = nil
+            isRoomLobbyOpen = false
+            swipeTranslation = .zero
+            pendingVoteCandidateID = nil
+        } catch {
+            activeSession = nil
+            routedRoomUnavailableMessage = "This room is no longer available, expired, or is not accessible from this account."
+            showToast(routedRoomUnavailableMessage ?? error.localizedDescription, isError: true)
+        }
+        isLoading = false
+        reconcileRoomEventStream()
+    }
+
+    private func maybeShowNotificationPrePermission() async {
+        guard !notificationPrePermissionDismissed else { return }
+        await notificationCoordinator.refreshAuthorizationStatus()
+        guard notificationCoordinator.authorizationStatus == .notDetermined else { return }
+        showingNotificationPrePermission = true
+    }
+
+    private func reconcileRoomEventStream() {
+        guard isDecisionViewVisible,
+              let sessionID = activeRoomStreamKey,
+              let token = authStore.accessToken else {
+            stopDecisionRoomEventStream()
+            return
+        }
+
+        guard roomStreamSessionID != sessionID else { return }
+
+        stopDecisionRoomEventStream()
+        roomStreamSessionID = sessionID
+        roomStreamState = .connecting
+
+        let stream = DecisionRoomEventStream(apiClient: apiClient)
+        roomEventStream = stream
+        stream.start(
+            sessionID: sessionID,
+            bearerToken: token,
+            onEvent: { event in
+                Task { @MainActor in
+                    await handleRoomEvent(event)
+                }
+            },
+            onState: { state in
+                Task { @MainActor in
+                    guard roomStreamSessionID == sessionID else { return }
+                    roomStreamState = state
+                }
+            }
+        )
+    }
+
+    private func stopDecisionRoomEventStream() {
+        roomEventStream?.stop()
+        roomSnapshotDebounceTask?.cancel()
+        roomSnapshotDebounceTask = nil
+        roomEventStream = nil
+        roomStreamSessionID = nil
+        roomStreamState = .idle
+        needsRoomSnapshotRefresh = false
+    }
+
+    private func handleRoomEvent(_ event: DecisionRoomEvent) async {
+        guard event.sessionID == activeSession?.session.id else { return }
+        scheduleDebouncedRoomSnapshotRefresh()
+    }
+
+    private func scheduleDebouncedRoomSnapshotRefresh() {
+        guard activeSession?.session.id != nil else { return }
+
+        roomSnapshotDebounceTask?.cancel()
+        roomSnapshotDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: DecisionRoomSnapshotRefreshPolicy.sseDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                roomSnapshotDebounceTask = nil
+                enqueueActiveRoomSnapshotRefresh()
+            }
+        }
+    }
+
+    private func enqueueActiveRoomSnapshotRefresh() {
+        guard activeSession?.session.id != nil else { return }
+
+        roomSnapshotDebounceTask?.cancel()
+        roomSnapshotDebounceTask = nil
+        needsRoomSnapshotRefresh = true
+        guard !isRoomSnapshotRefreshInFlight else { return }
+
+        Task {
+            await drainActiveRoomSnapshotRefreshQueue()
+        }
+    }
+
+    private func drainActiveRoomSnapshotRefreshQueue() async {
+        guard !isRoomSnapshotRefreshInFlight else { return }
+
+        isRoomSnapshotRefreshInFlight = true
+        while needsRoomSnapshotRefresh {
+            needsRoomSnapshotRefresh = false
+            await performActiveRoomSnapshotRefresh()
+        }
+        isRoomSnapshotRefreshInFlight = false
+    }
+
+    private func performActiveRoomSnapshotRefresh() async {
+        guard let token = authStore.accessToken,
+              let sessionID = activeSession?.session.id else { return }
+
+        do {
+            let refreshed = try await apiClient.decisionSession(id: sessionID, bearerToken: token)
+            guard activeSession?.session.id == sessionID else { return }
+            activeSession = refreshed
+            routedRoomUnavailableMessage = nil
+        } catch {
+            showToast("Refresh failed. Pull to retry.", isError: true)
+        }
+    }
+
+    #if DEBUG
+    private func sendDevRoomNotification(_ session: DecisionSession) {
+        guard let token = authStore.accessToken else { return }
+        Task {
+            isMutating = true
+            do {
+                let response = try await apiClient.sendDevRoomNotification(
+                    sessionID: session.id,
+                    category: .roomMessage,
+                    bearerToken: token,
+                    actorDisplayName: me.profile?.displayName
+                )
+                let sessionID = response.notification.route.sessionID
+                notificationCoordinator.handleNotificationTap(
+                    userInfo: [
+                        "route": [
+                            "type": "decision_session",
+                            "session_id": sessionID
+                        ]
+                    ]
+                )
+                showToast("Notification route queued")
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
+            isMutating = false
+        }
+    }
+    #endif
+
     private func toggleInvite(_ userID: String) {
         if selectedInviteIDs.contains(userID) {
             selectedInviteIDs.remove(userID)
@@ -1390,6 +1718,58 @@ struct DecisionShellView: View {
     private func emptyToNil(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct NotificationPrePermissionSheet: View {
+    let enable: () -> Void
+    let notNow: () -> Void
+
+    var body: some View {
+        ZStack {
+            OrchidBackground(animated: true, gridOpacity: 0.035)
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Image(systemName: "bell.badge.fill")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(NightloopTheme.fab)
+                        .frame(width: 42, height: 42)
+                        .background(NightloopTheme.fab.opacity(0.16))
+                        .clipShape(Circle())
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Stay in the loop")
+                            .font(.title3.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                        Text("Get room updates when your friends pick a spot.")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button(action: notNow) {
+                        Text("Not now")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.inkMuted)
+
+                    Button(action: enable) {
+                        Text("Enable")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NightloopTheme.purple)
+                }
+            }
+            .padding(20)
+        }
     }
 }
 
@@ -1519,11 +1899,15 @@ enum DecisionSwipePhase: Equatable {
     case ended
 }
 
-enum DecisionSwipeReleasePolicy {
+enum DecisionSwipeCommitPolicy {
     static func commitIntent(for translation: CGSize, phase: DecisionSwipePhase) -> DecisionSwipeIntent? {
         guard phase == .ended else { return nil }
         let intent = DecisionSwipePresentation.state(for: translation).intent
         return intent == .neutral ? nil : intent
+    }
+
+    static func buttonIntent(_ intent: DecisionSwipeIntent) -> DecisionSwipeIntent? {
+        intent == .neutral ? nil : intent
     }
 }
 
@@ -1533,6 +1917,10 @@ enum DecisionRoomSurfaceMode: Equatable {
     case lobby
     case shortlist
     case finalPlan
+}
+
+enum DecisionRoomSnapshotRefreshPolicy {
+    static let sseDebounceNanoseconds: UInt64 = 250_000_000
 }
 
 enum DecisionRoomSurfacePolicy {

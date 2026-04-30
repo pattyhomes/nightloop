@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ProfileView: View {
     @ObservedObject var authStore: AuthStore
@@ -70,6 +71,7 @@ struct ProfileView: View {
             NavigationLink {
                 SettingsHubView(
                     authStore: authStore,
+                    apiClient: apiClient,
                     settings: $settings,
                     statusMessage: $settingsStatus,
                     saveSettings: saveSettings,
@@ -418,6 +420,7 @@ private struct EditProfileSheet: View {
 
 private struct SettingsHubView: View {
     @ObservedObject var authStore: AuthStore
+    let apiClient: NightloopAPIClient
     @Binding var settings: UserSettings
     @Binding var statusMessage: String?
     let saveSettings: (UserSettings) async -> Bool
@@ -436,7 +439,11 @@ private struct SettingsHubView: View {
                         MapSettingsView(settings: $settings, statusMessage: $statusMessage, saveSettings: saveSettings)
                     }
                     SettingsHubRow(title: "Notifications", subtitle: "Social, decision, and venue alerts", systemImage: "bell.badge.fill") {
-                        NotificationSettingsView(settings: $settings, statusMessage: $statusMessage, saveSettings: saveSettings)
+                        NotificationSettingsView(
+                            authStore: authStore,
+                            apiClient: apiClient,
+                            statusMessage: $statusMessage
+                        )
                     }
                     SettingsHubRow(title: "Account", subtitle: "Sign out or delete account", systemImage: "person.crop.circle.fill") {
                         AccountSettingsView(authStore: authStore, showDeleteSheet: showDeleteSheet)
@@ -534,30 +541,189 @@ enum MapSettingsOption: Equatable, Hashable {
 }
 
 private struct NotificationSettingsView: View {
-    @Binding var settings: UserSettings
+    @ObservedObject var authStore: AuthStore
+    @EnvironmentObject private var notificationCoordinator: NotificationCoordinator
+    let apiClient: NightloopAPIClient
     @Binding var statusMessage: String?
-    let saveSettings: (UserSettings) async -> Bool
+
+    @State private var preferences: NotificationPreferences?
+    @State private var isLoading = true
+    @State private var isSavingPreferences = false
+    @State private var queuedPreferenceFields: [NotificationPreferenceField: Bool] = [:]
 
     var body: some View {
         SettingsSubpage(title: "Notifications", statusMessage: statusMessage) {
-            AutoSavingToggle(title: "Social notifications", subtitle: "Friend activity and group updates once social ships.", isOn: settings.pushSocialEnabled) { value in
-                await update(settings.with(pushSocialEnabled: value))
+            if isLoading {
+                LoadingStateView(title: "Loading notification settings")
+                    .frame(minHeight: 140)
+            } else if let preferences {
+                notificationPermissionCard
+
+                AutoSavingToggle(
+                    title: "Room invites",
+                    subtitle: "Private room invitations from people already connected to you.",
+                    isOn: preferences.roomInvitesEnabled
+                ) { value in
+                    await update(.roomInvitesEnabled, enabled: value)
+                }
+
+                AutoSavingToggle(
+                    title: "Shortlist ready",
+                    subtitle: "A room has enough votes to compare the final options.",
+                    isOn: preferences.shortlistReadyEnabled
+                ) { value in
+                    await update(.shortlistReadyEnabled, enabled: value)
+                }
+
+                AutoSavingToggle(
+                    title: "Final plan locked",
+                    subtitle: "A creator locks the room's spot for tonight.",
+                    isOn: preferences.finalPlanLockedEnabled
+                ) { value in
+                    await update(.finalPlanLockedEnabled, enabled: value)
+                }
+
+                AutoSavingToggle(
+                    title: "Room messages",
+                    subtitle: "Small planning notes inside rooms you joined.",
+                    isOn: preferences.roomMessagesEnabled
+                ) { value in
+                    await update(.roomMessagesEnabled, enabled: value)
+                }
+
+                Text(notificationPrivacyCopy)
+                    .font(.caption)
+                    .foregroundStyle(NightloopTheme.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ErrorStateView(title: "Settings unavailable", message: statusMessage ?? "Try again when your session is online.") {
+                    Task { await loadPreferences() }
+                }
+                .frame(minHeight: 150)
             }
-            AutoSavingToggle(title: "Decision notifications", subtitle: "Group voting and plan result updates.", isOn: settings.pushDecisionEnabled) { value in
-                await update(settings.with(pushDecisionEnabled: value))
-            }
-            AutoSavingToggle(title: "Favorite venue alerts", subtitle: "Future alerts for venues you care about.", isOn: settings.pushFavoriteVenueAlertsEnabled) { value in
-                await update(settings.with(pushFavoriteVenueAlertsEnabled: value))
-            }
-            Text("These preferences save now. The iOS permission prompt waits until notification features exist.")
-                .font(.caption)
-                .foregroundStyle(NightloopTheme.inkDim)
+        }
+        .task {
+            await notificationCoordinator.refreshAuthorizationStatus()
+            await loadPreferences()
         }
     }
 
-    private func update(_ updated: UserSettings) async {
-        settings = updated
-        _ = await saveSettings(updated)
+    @ViewBuilder
+    private var notificationPermissionCard: some View {
+        switch notificationCoordinator.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            EmptyView()
+        case .notDetermined:
+            NightloopCard(fill: NightloopTheme.purpleSoft) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("System permission needed", systemImage: "bell.badge.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+                    Text("Room preferences save here. Enable iOS notifications to receive them on this device.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task { _ = await notificationCoordinator.requestPermission() }
+                    } label: {
+                        Text("Enable notifications")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NightloopTheme.purple)
+                }
+            }
+        case .denied:
+            NightloopCard(fill: Color.white.opacity(0.04)) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Notifications are off", systemImage: "bell.slash.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.amber)
+                    Text("These room preferences can be saved, but iOS will not deliver alerts until notifications are allowed in Settings.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        openSystemSettings()
+                    } label: {
+                        Text("Open Settings")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(NightloopTheme.ink)
+                }
+            }
+        @unknown default:
+            NightloopCard(fill: Color.white.opacity(0.04)) {
+                Text("Room preferences save here. Check iOS notification settings if alerts do not arrive.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var notificationPrivacyCopy: String {
+        "These controls only affect room notifications. Nightloop does not add global presence, read receipts, or location sharing here."
+    }
+
+    private func loadPreferences() async {
+        guard let token = authStore.accessToken else {
+            statusMessage = "Sign in to manage notification settings."
+            isLoading = false
+            preferences = nil
+            return
+        }
+
+        isLoading = true
+        do {
+            preferences = try await apiClient.notificationPreferences(bearerToken: token).preferences
+            statusMessage = nil
+        } catch {
+            preferences = nil
+            statusMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    private func update(_ field: NotificationPreferenceField, enabled: Bool) async {
+        guard let current = preferences else { return }
+
+        preferences = current.setting(field, enabled: enabled)
+        queuedPreferenceFields[field] = enabled
+        await drainPreferenceSaveQueue()
+    }
+
+    private func drainPreferenceSaveQueue() async {
+        guard !isSavingPreferences,
+              let token = authStore.accessToken else { return }
+
+        isSavingPreferences = true
+        statusMessage = "Saving..."
+
+        while let next = queuedPreferenceFields.first {
+            queuedPreferenceFields.removeValue(forKey: next.key)
+            do {
+                let saved = try await apiClient.updateNotificationPreference(next.key, enabled: next.value, bearerToken: token).preferences
+                if queuedPreferenceFields.isEmpty {
+                    preferences = saved
+                    statusMessage = "Saved."
+                }
+            } catch {
+                if queuedPreferenceFields[next.key] == nil {
+                    statusMessage = error.localizedDescription
+                }
+            }
+        }
+
+        isSavingPreferences = false
+    }
+
+    private func openSystemSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 }
 
@@ -583,6 +749,38 @@ private struct AccountSettingsView: View {
             }
             .buttonStyle(.bordered)
         }
+    }
+}
+
+private extension NotificationPreferences {
+    func setting(_ field: NotificationPreferenceField, enabled: Bool) -> NotificationPreferences {
+        switch field {
+        case .roomInvitesEnabled:
+            return with(roomInvitesEnabled: enabled)
+        case .shortlistReadyEnabled:
+            return with(shortlistReadyEnabled: enabled)
+        case .finalPlanLockedEnabled:
+            return with(finalPlanLockedEnabled: enabled)
+        case .roomMessagesEnabled:
+            return with(roomMessagesEnabled: enabled)
+        }
+    }
+
+    func with(
+        roomInvitesEnabled: Bool? = nil,
+        shortlistReadyEnabled: Bool? = nil,
+        finalPlanLockedEnabled: Bool? = nil,
+        roomMessagesEnabled: Bool? = nil
+    ) -> NotificationPreferences {
+        NotificationPreferences(
+            roomInvitesEnabled: roomInvitesEnabled ?? self.roomInvitesEnabled,
+            shortlistReadyEnabled: shortlistReadyEnabled ?? self.shortlistReadyEnabled,
+            finalPlanLockedEnabled: finalPlanLockedEnabled ?? self.finalPlanLockedEnabled,
+            roomMessagesEnabled: roomMessagesEnabled ?? self.roomMessagesEnabled,
+            userID: userID,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
 }
 
