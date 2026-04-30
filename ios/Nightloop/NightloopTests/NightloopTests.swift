@@ -597,6 +597,29 @@ final class NightloopTests: XCTestCase {
         XCTAssertNil(rewound.lastVote)
     }
 
+    func testDecisionOptimisticVoteAdvancesVisibleDeckImmediately() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let response = try decoder.decode(DecisionSessionResponse.self, from: Self.decisionSessionFixtureData())
+        let firstDeckCandidate = try XCTUnwrap(response.deckCandidates?.first)
+
+        let optimistic = DecisionUIState.optimisticVote(
+            response: response,
+            candidateID: firstDeckCandidate.id,
+            vote: .voteIn
+        )
+
+        XCTAssertEqual(
+            optimistic.deckCandidates?.first(where: { $0.id == firstDeckCandidate.id })?.viewerVote,
+            .voteIn
+        )
+        XCTAssertFalse(DecisionUIState.visibleDeckCandidateIDs(response: optimistic).contains(firstDeckCandidate.id))
+        XCTAssertEqual(
+            DecisionUIState.visibleDeckCandidateIDs(response: optimistic).first,
+            response.deckCandidates?.dropFirst().first?.id
+        )
+    }
+
     func testDecisionSwipeCommitRequiresRelease() {
         let overThreshold = CGSize(width: 130, height: -4)
 

@@ -753,7 +753,39 @@ struct DecisionShellView: View {
                     .disabled(isMutating)
                 }
             } else {
-                EmptyStateView(title: "Deck complete", message: "Open group progress when the room is ready for the shortlist.")
+                VStack(alignment: .leading, spacing: 12) {
+                    EmptyStateView(
+                        title: "Deck complete",
+                        message: "Check group progress, or move the room to the shortlist when it feels ready."
+                    )
+
+                    HStack(spacing: 10) {
+                        Button {
+                            showingProgressSheet = true
+                        } label: {
+                            Label("Group progress", systemImage: "chart.bar.fill")
+                                .font(.caption.weight(.black))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 38)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(NightloopTheme.purple)
+
+                        if response.session.capabilities?.canForceShortlist == true {
+                            Button {
+                                advanceShortlist()
+                            } label: {
+                                Text("See results")
+                                    .font(.caption.weight(.black))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 38)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(NightloopTheme.fab)
+                            .disabled(isMutating)
+                        }
+                    }
+                }
             }
         }
     }
@@ -1262,8 +1294,10 @@ struct DecisionShellView: View {
               let token = authStore.accessToken,
               let session = activeSession?.session else { return }
 
+        let previousSession = activeSession
         pendingVoteCandidateID = candidate.id
         isMutating = true
+        applyOptimisticVote(candidateID: candidate.id, vote: vote)
         withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
             swipeTranslation = .zero
         }
@@ -1276,6 +1310,7 @@ struct DecisionShellView: View {
                     bearerToken: token
                 )
             } catch {
+                activeSession = previousSession
                 showToast(error.localizedDescription, isError: true)
             }
             pendingVoteCandidateID = nil
@@ -2020,6 +2055,11 @@ enum DecisionUIState {
             guard candidate.id == candidateID else { return candidate }
             return candidate.replacingVote(vote)
         }
+    }
+
+    static func visibleDeckCandidateIDs(response: DecisionSessionResponse) -> [String] {
+        let deck = response.deckCandidates ?? Array(response.candidates.prefix(8))
+        return deck.filter { $0.viewerVote == nil }.map(\.id)
     }
 
     static func optimisticShortlistVote(
