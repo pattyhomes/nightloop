@@ -1,12 +1,31 @@
+import fs from "fs";
+import path from "path";
+import { config as loadDotenv } from "dotenv";
 import {
   auditBackendRuntime,
   auditNotificationDeliveryModeEnv,
   auditPublicUrls
 } from "../services/v1/testflightReadinessService";
 
+function loadEnvFiles(): void {
+  const candidates = [
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "backend/.env"),
+    path.resolve(process.cwd(), "../backend/.env")
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      loadDotenv({ path: candidate, override: false, quiet: true });
+    }
+  }
+}
+
 function has(name: string): boolean {
   return (process.env[name] ?? "").trim().length > 0;
 }
+
+loadEnvFiles();
 
 const notificationDeliveryMode = process.env.NOTIFICATION_DELIVERY_MODE;
 const notificationDeliveryModeEnv = auditNotificationDeliveryModeEnv({
@@ -19,7 +38,7 @@ const backend = auditBackendRuntime({
   supabaseProjectUrlSet: has("SUPABASE_PROJECT_URL"),
   supabaseJwksUrlSet: has("SUPABASE_JWKS_URL"),
   supabaseServiceRoleSet: has("SUPABASE_SERVICE_ROLE_KEY"),
-  notificationDeliveryMode: notificationDeliveryMode === "apns" ? "apns" : "mock",
+  notificationDeliveryMode: notificationDeliveryModeEnv.mode,
   apnsConfigured:
     has("APNS_TEAM_ID") &&
     has("APNS_KEY_ID") &&

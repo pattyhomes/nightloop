@@ -55,11 +55,26 @@ describe("TestFlight readiness audit", () => {
   it("requires notification delivery mode env presence for CLI readiness", () => {
     expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "" })).toEqual({
       ok: false,
-      failures: ["NOTIFICATION_DELIVERY_MODE is required."]
+      failures: ["NOTIFICATION_DELIVERY_MODE is required."],
+      mode: "mock"
     });
     expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "mock" })).toEqual({
       ok: true,
-      failures: []
+      failures: [],
+      mode: "mock"
+    });
+  });
+
+  it("rejects invalid notification delivery mode env values", () => {
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "email" })).toEqual({
+      ok: false,
+      failures: ["NOTIFICATION_DELIVERY_MODE must be mock or apns."],
+      mode: "mock"
+    });
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "apns" })).toEqual({
+      ok: true,
+      failures: [],
+      mode: "apns"
     });
   });
 

@@ -35,6 +35,10 @@ export type NotificationDeliveryModeEnvAuditInput = {
   notificationDeliveryMode: string | undefined;
 };
 
+export type NotificationDeliveryModeEnvAuditResult = AuditResult & {
+  mode: "mock" | "apns";
+};
+
 function result(failures: string[]): AuditResult {
   return { ok: failures.length === 0, failures };
 }
@@ -94,12 +98,20 @@ export function auditBackendRuntime(input: BackendRuntimeAuditInput): AuditResul
   return result(failures);
 }
 
-export function auditNotificationDeliveryModeEnv(input: NotificationDeliveryModeEnvAuditInput): AuditResult {
+export function auditNotificationDeliveryModeEnv(
+  input: NotificationDeliveryModeEnvAuditInput
+): NotificationDeliveryModeEnvAuditResult {
   const failures: string[] = [];
-  if ((input.notificationDeliveryMode ?? "").trim().length === 0) {
+  const value = (input.notificationDeliveryMode ?? "").trim();
+  const mode = value === "apns" ? "apns" : "mock";
+
+  if (value.length === 0) {
     failures.push("NOTIFICATION_DELIVERY_MODE is required.");
+  } else if (value !== "mock" && value !== "apns") {
+    failures.push("NOTIFICATION_DELIVERY_MODE must be mock or apns.");
   }
-  return result(failures);
+
+  return { ...result(failures), mode };
 }
 
 export function auditPublicUrls(input: PublicUrlAuditInput): AuditResult {
