@@ -879,6 +879,10 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.session.capabilities?.canForceShortlist, true)
         XCTAssertEqual(response.session.progress?.confidence, 50)
         XCTAssertEqual(response.session.progress?.members.first?.swipedCount, 2)
+        XCTAssertEqual(response.session.deckState?.cardsRemaining, 10)
+        XCTAssertEqual(response.session.deckState?.nextCandidateID, "candidate-2")
+        XCTAssertEqual(response.session.deckState?.lastSwipedCandidateID, "candidate-1")
+        XCTAssertEqual(response.session.deckState?.canRewind, true)
         XCTAssertEqual(response.session.finalPlan?.note, "Meet by the entrance.")
         XCTAssertEqual(response.candidates.first?.venue.name, "Halcyon")
         XCTAssertEqual(response.deckCandidates?.first?.id, "candidate-1")
@@ -894,6 +898,80 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.messages.first?.text, "Meet by the side door?")
         XCTAssertEqual(response.messages.last?.emoji, .fire)
         XCTAssertEqual(response.leader?.id, "candidate-1")
+    }
+
+    func testDecisionDeckStateDecodesSnakeCaseFields() throws {
+        let data = Data("""
+        {
+          "deck_size": 12,
+          "cards_total": 12,
+          "cards_remaining": 9,
+          "next_candidate_id": "candidate-4",
+          "last_swiped_candidate_id": "candidate-3",
+          "can_rewind": true
+        }
+        """.utf8)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let deckState = try decoder.decode(DecisionDeckState.self, from: data)
+
+        XCTAssertEqual(deckState.deckSize, 12)
+        XCTAssertEqual(deckState.cardsTotal, 12)
+        XCTAssertEqual(deckState.cardsRemaining, 9)
+        XCTAssertEqual(deckState.nextCandidateID, "candidate-4")
+        XCTAssertEqual(deckState.lastSwipedCandidateID, "candidate-3")
+        XCTAssertTrue(deckState.canRewind)
+    }
+
+    func testDecisionRoomSSEParserDecodesEventBlock() throws {
+        let block = """
+        id: event-1
+        event: message_created
+        data: {"id":"event-1","session_id":"session-1","type":"message_created","candidate_id":null,"message_id":"message-1","stage":"swiping","created_at":"2026-04-28T01:02:00Z"}
+
+        """
+
+        let event = try XCTUnwrap(DecisionRoomSSEParser.parse(block: block))
+
+        XCTAssertEqual(event.id, "event-1")
+        XCTAssertEqual(event.sessionID, "session-1")
+        XCTAssertEqual(event.type, .messageCreated)
+        XCTAssertEqual(event.messageID, "message-1")
+        XCTAssertEqual(event.stage, .swiping)
+        XCTAssertEqual(event.createdAt, "2026-04-28T01:02:00Z")
+    }
+
+    func testDecisionRoomEventStreamReconnectPolicyBacksOffAfterCleanClose() {
+        XCTAssertEqual(
+            DecisionRoomEventStreamReconnectPolicy.stateAfterDisconnect(isCancelled: false),
+            .reconnecting
+        )
+        XCTAssertTrue(DecisionRoomEventStreamReconnectPolicy.shouldDelayBeforeReconnect(isCancelled: false))
+        XCTAssertNil(DecisionRoomEventStreamReconnectPolicy.stateAfterDisconnect(isCancelled: true))
+        XCTAssertFalse(DecisionRoomEventStreamReconnectPolicy.shouldDelayBeforeReconnect(isCancelled: true))
+    }
+
+    func testNotificationPreferencesDecodeMetadataFields() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let response = try decoder.decode(
+            NotificationPreferencesResponse.self,
+            from: Self.notificationPreferencesFixtureData(
+                userID: "user-1",
+                createdAt: "2026-04-29T00:00:00Z",
+                updatedAt: "2026-04-29T01:00:00Z"
+            )
+        )
+
+        XCTAssertEqual(response.preferences.userID, "user-1")
+        XCTAssertEqual(response.preferences.createdAt, "2026-04-29T00:00:00Z")
+        XCTAssertEqual(response.preferences.updatedAt, "2026-04-29T01:00:00Z")
+        XCTAssertTrue(response.preferences.roomInvitesEnabled)
+        XCTAssertTrue(response.preferences.shortlistReadyEnabled)
+        XCTAssertTrue(response.preferences.finalPlanLockedEnabled)
+        XCTAssertTrue(response.preferences.roomMessagesEnabled)
     }
 
     func testSocialClientBuildsProtectedRequests() async throws {
@@ -1034,6 +1112,8 @@ final class NightloopTests: XCTestCase {
                 XCTAssertEqual(object["candidate_id"] as? String, "candidate-1")
                 XCTAssertEqual(object["vote"] as? String, "in")
                 return (response, Self.decisionSessionFixtureData())
+            case ("POST", "/api/v1/decision-sessions/session-1/rewind"):
+                return (response, Self.decisionSessionFixtureData())
             case ("POST", "/api/v1/decision-sessions/session-1/advance-shortlist"):
                 return (response, Self.decisionSessionFixtureData())
             case ("POST", "/api/v1/decision-sessions/session-1/shortlist-votes"):
@@ -1092,6 +1172,7 @@ final class NightloopTests: XCTestCase {
         _ = try await client.joinDecisionSession(id: "session-1", code: "ND-ABCD-2345", bearerToken: "test-token")
         _ = try await client.joinDecisionSession(code: "ND-ABCD-2345", bearerToken: "test-token")
         _ = try await client.voteDecisionSession(id: "session-1", candidateID: "candidate-1", vote: .voteIn, bearerToken: "test-token")
+        _ = try await client.rewindDecisionSession(id: "session-1", bearerToken: "test-token")
         _ = try await client.advanceDecisionShortlist(sessionID: "session-1", bearerToken: "test-token")
         _ = try await client.voteDecisionShortlist(sessionID: "session-1", candidateID: "candidate-1", bearerToken: "test-token")
         _ = try await client.suggestDecisionCandidate(sessionID: "session-1", venueID: "venue-2", bearerToken: "test-token")
@@ -1113,7 +1194,105 @@ final class NightloopTests: XCTestCase {
         _ = try await client.revokeDecisionSessionCode(id: "session-1", bearerToken: "test-token")
         _ = try await client.endDecisionSession(id: "session-1", bearerToken: "test-token")
 
-        XCTAssertEqual(seen.count, 16)
+        XCTAssertEqual(seen.count, 17)
+    }
+
+    func testNotificationClientBuildsProtectedRequests() async throws {
+        var seen: [String] = []
+        URLProtocolMock.requestHandler = { request in
+            let path = try XCTUnwrap(request.url?.path)
+            seen.append(path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: request.httpMethod == "POST" ? 201 : 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+
+            switch (request.httpMethod, path) {
+            case ("POST", "/api/v1/me/device-tokens"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["token"] as? String, String(repeating: "a", count: 64))
+                XCTAssertEqual(object["apns_environment"] as? String, "sandbox")
+                XCTAssertEqual(object["app_version"] as? String, "1.0")
+                XCTAssertEqual(object["build_number"] as? String, "42")
+                return (response, Data("""
+                {
+                  "device_token": {
+                    "id": "device-token-1",
+                    "user_id": "user-1",
+                    "platform": "ios",
+                    "apns_environment": "sandbox",
+                    "app_version": "1.0",
+                    "build_number": "42",
+                    "last_seen_at": "2026-04-29T00:00:00Z",
+                    "revoked_at": null,
+                    "created_at": "2026-04-29T00:00:00Z",
+                    "updated_at": "2026-04-29T00:00:00Z"
+                  }
+                }
+                """.utf8))
+            case ("DELETE", "/api/v1/me/device-tokens"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["token"] as? String, String(repeating: "a", count: 64))
+                return (response, Data(#"{"revoked_count":1}"#.utf8))
+            case ("GET", "/api/v1/me/notification-preferences"):
+                return (response, Self.notificationPreferencesFixtureData())
+            case ("PATCH", "/api/v1/me/notification-preferences"):
+                let body = try XCTUnwrap(Self.bodyData(from: request))
+                let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(object["room_invites_enabled"] as? Bool, false)
+                XCTAssertEqual(object["shortlist_ready_enabled"] as? Bool, true)
+                XCTAssertEqual(object["final_plan_locked_enabled"] as? Bool, true)
+                XCTAssertEqual(object["room_messages_enabled"] as? Bool, false)
+                XCTAssertNil(object["user_id"])
+                XCTAssertNil(object["created_at"])
+                XCTAssertNil(object["updated_at"])
+                return (response, Self.notificationPreferencesFixtureData(roomInvitesEnabled: false, roomMessagesEnabled: false))
+            default:
+                XCTFail("Unexpected notification path \(path)")
+                return (response, Data("{}".utf8))
+            }
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let token = String(repeating: "a", count: 64)
+        let registered = try await client.registerDeviceToken(
+            token: token,
+            apnsEnvironment: "sandbox",
+            appVersion: "1.0",
+            buildNumber: "42",
+            bearerToken: "test-token"
+        )
+        let revoked = try await client.revokeDeviceToken(token: token, bearerToken: "test-token")
+        let defaults = try await client.notificationPreferences(bearerToken: "test-token")
+        let updated = try await client.updateNotificationPreferences(
+            NotificationPreferences(
+                roomInvitesEnabled: false,
+                shortlistReadyEnabled: true,
+                finalPlanLockedEnabled: true,
+                roomMessagesEnabled: false,
+                userID: "user-1",
+                createdAt: "2026-04-29T00:00:00Z",
+                updatedAt: "2026-04-29T01:00:00Z"
+            ),
+            bearerToken: "test-token"
+        )
+
+        XCTAssertEqual(registered.deviceToken.id, "device-token-1")
+        XCTAssertEqual(revoked.revokedCount, 1)
+        XCTAssertTrue(defaults.preferences.roomInvitesEnabled)
+        XCTAssertFalse(updated.preferences.roomMessagesEnabled)
+        XCTAssertEqual(seen.count, 4)
     }
 
     func testProfileUpdateCanEncodeNullBioForClearing() async throws {
@@ -1243,6 +1422,57 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(response.users.first?.username, "chuck")
         XCTAssertEqual(response.users.first?.role, "primary")
         XCTAssertTrue(response.audit.ok)
+    }
+
+    func testDevRoomNotificationRequestUsesDebugOnlyEndpoint() async throws {
+        URLProtocolMock.requestHandler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4000/api/v1/dev/notifications/room-test")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+
+            let body = try XCTUnwrap(Self.bodyData(from: request))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            XCTAssertEqual(object["session_id"] as? String, "11111111-1111-4111-8111-111111111111")
+            XCTAssertEqual(object["category"] as? String, "room_message")
+
+            let response = HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let data = Data("""
+            {
+              "notification": {
+                "category": "room_message",
+                "copy": "alex sent a room update.",
+                "route": {
+                  "type": "decision_session",
+                  "session_id": "11111111-1111-4111-8111-111111111111"
+                },
+                "queued_count": 1,
+                "delivery_mode": "mock"
+              }
+            }
+            """.utf8)
+            return (response, data)
+        }
+        defer { URLProtocolMock.requestHandler = nil }
+
+        let client = NightloopAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4000/api/v1")!,
+            session: .mocked
+        )
+
+        let response = try await client.sendDevRoomNotification(
+            sessionID: "11111111-1111-4111-8111-111111111111",
+            category: .roomMessage,
+            bearerToken: "test-token"
+        )
+
+        XCTAssertEqual(response.notification.category, .roomMessage)
+        XCTAssertEqual(response.notification.route.sessionID, "11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(response.notification.queuedCount, 1)
     }
     #endif
 
@@ -1548,6 +1778,14 @@ final class NightloopTests: XCTestCase {
                   }
                 ]
               },
+              "deck_state": {
+                "deck_size": 12,
+                "cards_total": 12,
+                "cards_remaining": 10,
+                "next_candidate_id": "candidate-2",
+                "last_swiped_candidate_id": "candidate-1",
+                "can_rewind": true
+              },
               "created_at": "2026-04-28T00:00:00Z",
               "updated_at": "2026-04-28T00:05:00Z"
             },
@@ -1596,6 +1834,30 @@ final class NightloopTests: XCTestCase {
               "updated_at": "2026-04-28T01:01:00Z"
             }
           ]
+        }
+        """.utf8)
+    }
+
+    private static func notificationPreferencesFixtureData(
+        roomInvitesEnabled: Bool = true,
+        shortlistReadyEnabled: Bool = true,
+        finalPlanLockedEnabled: Bool = true,
+        roomMessagesEnabled: Bool = true,
+        userID: String = "user-1",
+        createdAt: String = "2026-04-29T00:00:00Z",
+        updatedAt: String = "2026-04-29T00:00:00Z"
+    ) -> Data {
+        Data("""
+        {
+          "preferences": {
+            "user_id": "\(userID)",
+            "room_invites_enabled": \(roomInvitesEnabled),
+            "shortlist_ready_enabled": \(shortlistReadyEnabled),
+            "final_plan_locked_enabled": \(finalPlanLockedEnabled),
+            "room_messages_enabled": \(roomMessagesEnabled),
+            "created_at": "\(createdAt)",
+            "updated_at": "\(updatedAt)"
+          }
         }
         """.utf8)
     }

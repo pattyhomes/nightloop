@@ -305,6 +305,15 @@ struct NightloopAPIClient {
         )
     }
 
+    func rewindDecisionSession(id: String, bearerToken: String) async throws -> DecisionSessionResponse {
+        try await send(
+            path: "decision-sessions/\(id)/rewind",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: EmptyBody()
+        )
+    }
+
     func advanceDecisionShortlist(sessionID: String, bearerToken: String) async throws -> DecisionSessionResponse {
         try await send(
             path: "decision-sessions/\(sessionID)/advance-shortlist",
@@ -410,6 +419,51 @@ struct NightloopAPIClient {
         try await send(path: "me/preferences", method: "PUT", bearerToken: bearerToken, body: preferences)
     }
 
+    func registerDeviceToken(
+        token: String,
+        apnsEnvironment: String? = nil,
+        appVersion: String? = nil,
+        buildNumber: String? = nil,
+        bearerToken: String
+    ) async throws -> DeviceTokenResponse {
+        try await send(
+            path: "me/device-tokens",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DeviceTokenBody(
+                token: token,
+                apnsEnvironment: apnsEnvironment,
+                appVersion: appVersion,
+                buildNumber: buildNumber
+            )
+        )
+    }
+
+    func revokeDeviceToken(token: String, bearerToken: String) async throws -> DeviceTokenRevokeResponse {
+        try await send(
+            path: "me/device-tokens",
+            method: "DELETE",
+            bearerToken: bearerToken,
+            body: DeviceTokenDeleteBody(token: token)
+        )
+    }
+
+    func notificationPreferences(bearerToken: String) async throws -> NotificationPreferencesResponse {
+        try await send(path: "me/notification-preferences", bearerToken: bearerToken)
+    }
+
+    func updateNotificationPreferences(
+        _ preferences: NotificationPreferences,
+        bearerToken: String
+    ) async throws -> NotificationPreferencesResponse {
+        try await send(
+            path: "me/notification-preferences",
+            method: "PATCH",
+            bearerToken: bearerToken,
+            body: NotificationPreferencesPatchBody(preferences: preferences)
+        )
+    }
+
     func markets() async throws -> MarketsResponse {
         try await send(path: "markets", bearerToken: nil)
     }
@@ -500,6 +554,24 @@ struct NightloopAPIClient {
             method: "POST",
             bearerToken: nil,
             body: DevSocialCrewResetBody(market: market)
+        )
+    }
+
+    func sendDevRoomNotification(
+        sessionID: String,
+        category: RoomNotificationCategory,
+        bearerToken: String,
+        actorDisplayName: String? = nil
+    ) async throws -> DevRoomNotificationResponse {
+        try await send(
+            path: "dev/notifications/room-test",
+            method: "POST",
+            bearerToken: bearerToken,
+            body: DevRoomNotificationBody(
+                sessionID: sessionID,
+                category: category,
+                actorDisplayName: actorDisplayName
+            )
         )
     }
     #endif
@@ -701,6 +773,38 @@ private struct DecisionMessageBody: Encodable {
     let emoji: DecisionEmoji?
 }
 
+private struct DeviceTokenBody: Encodable {
+    let token: String
+    let apnsEnvironment: String?
+    let appVersion: String?
+    let buildNumber: String?
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case apnsEnvironment = "apns_environment"
+        case appVersion = "app_version"
+        case buildNumber = "build_number"
+    }
+}
+
+private struct DeviceTokenDeleteBody: Encodable {
+    let token: String
+}
+
+private struct NotificationPreferencesPatchBody: Encodable {
+    let roomInvitesEnabled: Bool
+    let shortlistReadyEnabled: Bool
+    let finalPlanLockedEnabled: Bool
+    let roomMessagesEnabled: Bool
+
+    init(preferences: NotificationPreferences) {
+        roomInvitesEnabled = preferences.roomInvitesEnabled
+        shortlistReadyEnabled = preferences.shortlistReadyEnabled
+        finalPlanLockedEnabled = preferences.finalPlanLockedEnabled
+        roomMessagesEnabled = preferences.roomMessagesEnabled
+    }
+}
+
 #if DEBUG
 private struct DevConfirmedAuthUserBody: Encodable {
     let email: String
@@ -709,5 +813,17 @@ private struct DevConfirmedAuthUserBody: Encodable {
 
 private struct DevSocialCrewResetBody: Encodable {
     let market: String
+}
+
+private struct DevRoomNotificationBody: Encodable {
+    let sessionID: String
+    let category: RoomNotificationCategory
+    let actorDisplayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case category
+        case actorDisplayName = "actor_display_name"
+    }
 }
 #endif

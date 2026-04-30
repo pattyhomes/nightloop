@@ -565,6 +565,24 @@ struct DecisionProgress: Decodable, Equatable {
     let members: [DecisionMemberProgress]
 }
 
+struct DecisionDeckState: Decodable, Equatable {
+    let deckSize: Int
+    let cardsTotal: Int
+    let cardsRemaining: Int
+    let nextCandidateID: String?
+    let lastSwipedCandidateID: String?
+    let canRewind: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case deckSize
+        case cardsTotal
+        case cardsRemaining
+        case nextCandidateID = "nextCandidateId"
+        case lastSwipedCandidateID = "lastSwipedCandidateId"
+        case canRewind
+    }
+}
+
 struct DecisionFinalPlan: Decodable, Equatable {
     let candidateId: String?
     let venueId: String?
@@ -593,6 +611,7 @@ struct DecisionSession: Decodable, Identifiable, Equatable {
     let viewerStatus: String
     let capabilities: DecisionCapabilities?
     let progress: DecisionProgress?
+    let deckState: DecisionDeckState?
     let createdAt: String?
     let updatedAt: String?
 }
@@ -668,6 +687,42 @@ struct DecisionMessage: Decodable, Identifiable, Equatable {
     let updatedAt: String
 }
 
+enum DecisionRoomEventType: String, Codable, Equatable {
+    case roomJoined = "room_joined"
+    case voteChanged = "vote_changed"
+    case progressChanged = "progress_changed"
+    case shortlistReady = "shortlist_ready"
+    case shortlistVoteChanged = "shortlist_vote_changed"
+    case messageCreated = "message_created"
+    case candidateSuggested = "candidate_suggested"
+    case candidateRemoved = "candidate_removed"
+    case finalPlanLocked = "final_plan_locked"
+    case roomEnded = "room_ended"
+    case roomSnapshotInvalidated = "room_snapshot_invalidated"
+}
+
+struct DecisionRoomEvent: Decodable, Identifiable, Equatable {
+    let id: String
+    let sessionID: String
+    let type: DecisionRoomEventType
+    let actor: DecisionUserSummary?
+    let candidateID: String?
+    let messageID: String?
+    let stage: DecisionStage?
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionID = "sessionId"
+        case type
+        case actor
+        case candidateID = "candidateId"
+        case messageID = "messageId"
+        case stage
+        case createdAt
+    }
+}
+
 struct DecisionSessionResponse: Decodable, Equatable {
     let session: DecisionSession
     let candidates: [DecisionCandidate]
@@ -709,6 +764,113 @@ struct DecisionSessionListResponse: Decodable, Equatable {
 struct DecisionVenueSearchResponse: Decodable, Equatable {
     let items: [VenueItem]
 }
+
+struct DeviceToken: Decodable, Identifiable, Equatable {
+    let id: String
+    let userID: String
+    let platform: String
+    let apnsEnvironment: String
+    let appVersion: String?
+    let buildNumber: String?
+    let lastSeenAt: String
+    let revokedAt: String?
+    let createdAt: String
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "userId"
+        case platform
+        case apnsEnvironment
+        case appVersion
+        case buildNumber
+        case lastSeenAt
+        case revokedAt
+        case createdAt
+        case updatedAt
+    }
+}
+
+struct DeviceTokenResponse: Decodable, Equatable {
+    let deviceToken: DeviceToken
+}
+
+struct DeviceTokenRevokeResponse: Decodable, Equatable {
+    let revokedCount: Int
+}
+
+struct NotificationPreferences: Codable, Equatable {
+    let roomInvitesEnabled: Bool
+    let shortlistReadyEnabled: Bool
+    let finalPlanLockedEnabled: Bool
+    let roomMessagesEnabled: Bool
+    let userID: String?
+    let createdAt: String?
+    let updatedAt: String?
+
+    init(
+        roomInvitesEnabled: Bool,
+        shortlistReadyEnabled: Bool,
+        finalPlanLockedEnabled: Bool,
+        roomMessagesEnabled: Bool,
+        userID: String? = nil,
+        createdAt: String? = nil,
+        updatedAt: String? = nil
+    ) {
+        self.roomInvitesEnabled = roomInvitesEnabled
+        self.shortlistReadyEnabled = shortlistReadyEnabled
+        self.finalPlanLockedEnabled = finalPlanLockedEnabled
+        self.roomMessagesEnabled = roomMessagesEnabled
+        self.userID = userID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case roomInvitesEnabled
+        case shortlistReadyEnabled
+        case finalPlanLockedEnabled
+        case roomMessagesEnabled
+        case userID = "userId"
+        case createdAt
+        case updatedAt
+    }
+}
+
+struct NotificationPreferencesResponse: Decodable, Equatable {
+    let preferences: NotificationPreferences
+}
+
+enum RoomNotificationCategory: String, Codable, Equatable {
+    case roomInvite = "room_invite"
+    case shortlistReady = "shortlist_ready"
+    case finalPlanLocked = "final_plan_locked"
+    case roomMessage = "room_message"
+}
+
+#if DEBUG
+struct DevRoomNotificationRoute: Decodable, Equatable {
+    let type: String
+    let sessionID: String
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case sessionID = "sessionId"
+    }
+}
+
+struct DevRoomNotification: Decodable, Equatable {
+    let category: RoomNotificationCategory
+    let copy: String
+    let route: DevRoomNotificationRoute
+    let queuedCount: Int
+    let deliveryMode: String
+}
+
+struct DevRoomNotificationResponse: Decodable, Equatable {
+    let notification: DevRoomNotification
+}
+#endif
 
 #if DEBUG
 struct DevConfirmedAuthUserResponse: Decodable, Equatable {
