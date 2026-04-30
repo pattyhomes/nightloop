@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   auditBackendRuntime,
   auditIosReleaseConfig,
+  auditNotificationDeliveryModeEnv,
   auditPublicUrls
 } from "../src/services/v1/testflightReadinessService";
 
@@ -49,6 +50,17 @@ describe("TestFlight readiness audit", () => {
 
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("APNs delivery mode requires APNs credentials.");
+  });
+
+  it("requires notification delivery mode env presence for CLI readiness", () => {
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "" })).toEqual({
+      ok: false,
+      failures: ["NOTIFICATION_DELIVERY_MODE is required."]
+    });
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "mock" })).toEqual({
+      ok: true,
+      failures: []
+    });
   });
 
   it("requires public legal and support URLs", () => {

@@ -1,5 +1,6 @@
 import {
   auditBackendRuntime,
+  auditNotificationDeliveryModeEnv,
   auditPublicUrls
 } from "../services/v1/testflightReadinessService";
 
@@ -7,13 +8,18 @@ function has(name: string): boolean {
   return (process.env[name] ?? "").trim().length > 0;
 }
 
+const notificationDeliveryMode = process.env.NOTIFICATION_DELIVERY_MODE;
+const notificationDeliveryModeEnv = auditNotificationDeliveryModeEnv({
+  notificationDeliveryMode
+});
+
 const backend = auditBackendRuntime({
   nodeEnv: process.env.NODE_ENV ?? "development",
   databaseUrlSet: has("DATABASE_URL"),
   supabaseProjectUrlSet: has("SUPABASE_PROJECT_URL"),
   supabaseJwksUrlSet: has("SUPABASE_JWKS_URL"),
   supabaseServiceRoleSet: has("SUPABASE_SERVICE_ROLE_KEY"),
-  notificationDeliveryMode: process.env.NOTIFICATION_DELIVERY_MODE === "apns" ? "apns" : "mock",
+  notificationDeliveryMode: notificationDeliveryMode === "apns" ? "apns" : "mock",
   apnsConfigured:
     has("APNS_TEAM_ID") &&
     has("APNS_KEY_ID") &&
@@ -29,7 +35,7 @@ const urls = auditPublicUrls({
   accessibilityUrl: has("NIGHTLOOP_ACCESSIBILITY_URL") ? "set" : ""
 });
 
-const failures = [...backend.failures, ...urls.failures];
+const failures = [...notificationDeliveryModeEnv.failures, ...backend.failures, ...urls.failures];
 if (failures.length > 0) {
   console.error("TestFlight readiness failed:");
   for (const failure of failures) console.error(`- ${failure}`);

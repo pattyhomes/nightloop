@@ -31,6 +31,10 @@ export type PublicUrlAuditInput = {
   accessibilityUrl: string;
 };
 
+export type NotificationDeliveryModeEnvAuditInput = {
+  notificationDeliveryMode: string | undefined;
+};
+
 function result(failures: string[]): AuditResult {
   return { ok: failures.length === 0, failures };
 }
@@ -86,6 +90,14 @@ export function auditBackendRuntime(input: BackendRuntimeAuditInput): AuditResul
   if (!input.supabaseServiceRoleSet) failures.push("SUPABASE_SERVICE_ROLE_KEY is required server-side.");
   if (input.notificationDeliveryMode === "apns" && !input.apnsConfigured) {
     failures.push("APNs delivery mode requires APNs credentials.");
+  }
+  return result(failures);
+}
+
+export function auditNotificationDeliveryModeEnv(input: NotificationDeliveryModeEnvAuditInput): AuditResult {
+  const failures: string[] = [];
+  if ((input.notificationDeliveryMode ?? "").trim().length === 0) {
+    failures.push("NOTIFICATION_DELIVERY_MODE is required.");
   }
   return result(failures);
 }
