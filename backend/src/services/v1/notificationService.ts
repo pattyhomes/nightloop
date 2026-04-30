@@ -79,6 +79,8 @@ export type ApnsTransport = (request: ApnsRequest) => Promise<{ status: number; 
 
 type ApnsJwtSigner = () => Promise<string>;
 
+export const APNS_REQUEST_TIMEOUT_MS = 10_000;
+
 const TOKEN_PATTERN = /^[a-f0-9]{32,512}$/;
 
 function hashDeviceToken(token: string): string {
@@ -168,48 +170,67 @@ export class MockNotificationSender {
   }
 }
 
-export const defaultApnsTransport: ApnsTransport = async (request) => {
-  const client = http2.connect(`https://${request.authority}`);
-
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
-    let settled = false;
-    const settle = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      client.close();
-      callback();
-    };
-
-    client.once("error", (error) => {
-      settle(() => reject(error));
-    });
-
-    const stream = client.request({
-      ":method": "POST",
-      ":path": request.path,
-      ...request.headers
-    });
-
-    const chunks: Buffer[] = [];
-    let status = 0;
-
-    stream.setEncoding("utf8");
-    stream.on("response", (headers) => {
-      const responseStatus = headers[":status"];
-      status = typeof responseStatus === "number" ? responseStatus : Number(responseStatus ?? 0);
-    });
-    stream.on("data", (chunk) => {
-      chunks.push(Buffer.from(chunk));
-    });
-    stream.once("error", (error) => {
-      settle(() => reject(error));
-    });
-    stream.once("end", () => {
-      settle(() => resolve({ status, body: Buffer.concat(chunks).toString("utf8") }));
-    });
-    stream.end(request.body);
-  });
+type ApnsTransportOptions = {
+  timeoutMs?: number;
+  connect?: typeof http2.connect;
 };
+
+export function createApnsTransport(options: ApnsTransportOptions = {}): ApnsTransport {
+  const timeoutMs = options.timeoutMs ?? APNS_REQUEST_TIMEOUT_MS;
+  const connect = options.connect ?? http2.connect;
+
+  return async (request) => {
+    const client = connect(`https://${request.authority}`);
+
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+      let settled = false;
+      let timeout: NodeJS.Timeout | null = null;
+      const settle = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        client.close();
+        callback();
+      };
+
+      client.once("error", (error) => {
+        settle(() => reject(error));
+      });
+
+      const stream = client.request({
+        ":method": "POST",
+        ":path": request.path,
+        ...request.headers
+      });
+
+      timeout = setTimeout(() => {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+        settle(() => reject(new Error("APNS_REQUEST_TIMEOUT")));
+      }, timeoutMs);
+
+      const chunks: Buffer[] = [];
+      let status = 0;
+
+      stream.setEncoding("utf8");
+      stream.on("response", (headers) => {
+        const responseStatus = headers[":status"];
+        status = typeof responseStatus === "number" ? responseStatus : Number(responseStatus ?? 0);
+      });
+      stream.on("data", (chunk) => {
+        chunks.push(Buffer.from(chunk));
+      });
+      stream.once("error", (error) => {
+        settle(() => reject(error));
+      });
+      stream.once("end", () => {
+        settle(() => resolve({ status, body: Buffer.concat(chunks).toString("utf8") }));
+      });
+      stream.end(request.body);
+    });
+  };
+}
+
+export const defaultApnsTransport: ApnsTransport = createApnsTransport();
 
 export class ApnsNotificationSender {
   constructor(
@@ -251,7 +272,7 @@ export class ApnsNotificationSender {
       return this.jwtSigner();
     }
 
-    const privateKey = await importPKCS8(this.config.apnsPrivateKey!, "ES256");
+    const privateKey = await importPKCS8(this.config.apnsPrivateKey!.replace(/\\n/g, "\n"), "ES256");
     const issuedAt = Math.floor(Date.now() / 1000);
     return new SignJWT({})
       .setProtectedHeader({ alg: "ES256", kid: this.config.apnsKeyId! })

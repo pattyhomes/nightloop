@@ -1,17 +1,19 @@
 import { randomUUID } from "crypto";
+import { EventEmitter } from "events";
 import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
 import path from "path";
-import { exportJWK, generateKeyPair, SignJWT, type JWK } from "jose";
+import { exportJWK, exportPKCS8, generateKeyPair, jwtVerify, SignJWT, type JWK } from "jose";
 import { Pool } from "pg";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { config as loadDotenv } from "dotenv";
 import { createApp, type AuthAdminClient } from "../src/app";
 import { loadConfig } from "../src/lib/config";
 import {
   type ApnsRequest,
   ApnsNotificationSender,
+  createApnsTransport,
   enqueueRoomNotification,
   roomNotificationCopy
 } from "../src/services/v1/notificationService";
@@ -28,6 +30,23 @@ type TestProfile = TestUser & {
   userId: string;
   username: string;
 };
+
+function testDeviceToken(tokenValue: string) {
+  return {
+    id: randomUUID(),
+    user_id: randomUUID(),
+    platform: "ios" as const,
+    token_hash: "not-returned",
+    token_value: tokenValue,
+    apns_environment: "sandbox" as const,
+    app_version: "1.0",
+    build_number: "42",
+    last_seen_at: new Date().toISOString(),
+    revoked_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
 
 class TestJwksServer {
   private privateKey!: CryptoKey;
@@ -380,6 +399,114 @@ describe("Nightloop v1 notification API", () => {
       session_id: sessionId
     });
     expect(JSON.stringify(requests)).not.toContain("PRIVATE KEY");
+  });
+
+  it("signs APNs JWTs with escaped PKCS8 private key newlines", async () => {
+    const { publicKey, privateKey } = await generateKeyPair("ES256", { extractable: true });
+    const escapedPrivateKey = (await exportPKCS8(privateKey)).replace(/\n/g, "\\n");
+    const requests: ApnsRequest[] = [];
+    const sender = new ApnsNotificationSender({
+      ...loadConfig(),
+      notificationDeliveryMode: "apns",
+      apnsTeamId: "TEAMID1234",
+      apnsKeyId: "KEYID1234",
+      apnsPrivateKey: escapedPrivateKey,
+      apnsBundleId: "com.nightloop.app",
+      apnsEnvironment: "sandbox"
+    }, async (request) => {
+      requests.push(request);
+      return { status: 200, body: "{}" };
+    });
+
+    await sender.send({
+      tokens: [testDeviceToken("e".repeat(64))],
+      copy: "your shortlist is ready",
+      route: {
+        type: "decision_session",
+        session_id: randomUUID()
+      },
+      category: "shortlist_ready"
+    });
+
+    const jwt = requests[0].headers.authorization.replace("bearer ", "");
+    const verified = await jwtVerify(jwt, publicKey, {
+      issuer: "TEAMID1234"
+    });
+    expect(verified.protectedHeader).toEqual({ alg: "ES256", kid: "KEYID1234" });
+    expect(JSON.stringify(requests)).not.toContain("PRIVATE KEY");
+  });
+
+  it("uses production authority and only counts successful APNs responses", async () => {
+    const requests: ApnsRequest[] = [];
+    const statuses = [200, 410];
+    const sender = new ApnsNotificationSender({
+      ...loadConfig(),
+      notificationDeliveryMode: "apns",
+      apnsTeamId: "TEAMID1234",
+      apnsKeyId: "KEYID1234",
+      apnsPrivateKey: "-----BEGIN PRIVATE KEY-----\nPRIVATE KEY TEST MATERIAL\n-----END PRIVATE KEY-----",
+      apnsBundleId: "com.nightloop.app",
+      apnsEnvironment: "production"
+    }, async (request) => {
+      requests.push(request);
+      return { status: statuses[requests.length - 1] ?? 500, body: "{}" };
+    }, async () => "test.apns.jwt");
+
+    const result = await sender.send({
+      tokens: [testDeviceToken("1".repeat(64)), testDeviceToken("2".repeat(64))],
+      copy: "the plan is locked",
+      route: {
+        type: "decision_session",
+        session_id: randomUUID()
+      },
+      category: "final_plan_locked"
+    });
+
+    expect(result).toEqual({ delivered_count: 1, delivery_mode: "apns" });
+    expect(requests.map((request) => request.authority)).toEqual([
+      "api.push.apple.com",
+      "api.push.apple.com"
+    ]);
+  });
+
+  it("fails APNs transport timeouts soft per token", async () => {
+    const close = vi.fn();
+    const stream = Object.assign(new EventEmitter(), {
+      setEncoding: vi.fn(),
+      close: vi.fn(),
+      end: vi.fn()
+    });
+    const client = Object.assign(new EventEmitter(), {
+      request: vi.fn(() => stream),
+      close
+    });
+    const transport = createApnsTransport({
+      timeoutMs: 1,
+      connect: (() => client) as never
+    });
+    const sender = new ApnsNotificationSender({
+      ...loadConfig(),
+      notificationDeliveryMode: "apns",
+      apnsTeamId: "TEAMID1234",
+      apnsKeyId: "KEYID1234",
+      apnsPrivateKey: "-----BEGIN PRIVATE KEY-----\nPRIVATE KEY TEST MATERIAL\n-----END PRIVATE KEY-----",
+      apnsBundleId: "com.nightloop.app",
+      apnsEnvironment: "sandbox"
+    }, transport, async () => "test.apns.jwt");
+
+    const result = await sender.send({
+      tokens: [testDeviceToken("3".repeat(64))],
+      copy: "you have a new room message",
+      route: {
+        type: "decision_session",
+        session_id: randomUUID()
+      },
+      category: "room_message"
+    });
+
+    expect(result).toEqual({ delivered_count: 0, delivery_mode: "apns" });
+    expect(stream.close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("returns default notification preferences and updates room toggles", async () => {
