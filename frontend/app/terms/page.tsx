@@ -1,18 +1,8 @@
+import { linkStyle, mutedStyle, pageStyle } from "../legalPageStyles";
+
 export const metadata = {
   title: "Nightloop Terms"
 };
-
-const pageStyle = {
-  maxWidth: 820,
-  margin: "0 auto",
-  padding: "56px 20px 80px",
-  lineHeight: 1.7,
-  color: "#f4f0ff",
-  background: "#08050f",
-  minHeight: "100vh"
-};
-
-const mutedStyle = { color: "#b9accf" };
 
 export default function TermsPage() {
   return (
@@ -48,7 +38,9 @@ export default function TermsPage() {
       <h2>Support</h2>
       <p>
         For beta support, contact{" "}
-        <a href="mailto:axelbaumcharles@gmail.com">axelbaumcharles@gmail.com</a>.
+        <a href="mailto:axelbaumcharles@gmail.com" style={linkStyle}>
+          axelbaumcharles@gmail.com
+        </a>.
       </p>
     </main>
   );

@@ -1,18 +1,8 @@
+import { linkStyle, mutedStyle, pageStyle } from "../legalPageStyles";
+
 export const metadata = {
   title: "Nightloop Delete Account"
 };
-
-const pageStyle = {
-  maxWidth: 820,
-  margin: "0 auto",
-  padding: "56px 20px 80px",
-  lineHeight: 1.7,
-  color: "#f4f0ff",
-  background: "#08050f",
-  minHeight: "100vh"
-};
-
-const mutedStyle = { color: "#b9accf" };
 
 export default function DeleteAccountPage() {
   return (
@@ -27,8 +17,10 @@ export default function DeleteAccountPage() {
 
       <p>
         If you cannot access the app, email{" "}
-        <a href="mailto:axelbaumcharles@gmail.com">axelbaumcharles@gmail.com</a> from the
-        email address associated with your beta account.
+        <a href="mailto:axelbaumcharles@gmail.com" style={linkStyle}>
+          axelbaumcharles@gmail.com
+        </a>{" "}
+        from the email address associated with your beta account.
       </p>
 
       <p>

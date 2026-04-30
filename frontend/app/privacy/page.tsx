@@ -1,18 +1,8 @@
+import { linkStyle, mutedStyle, pageStyle } from "../legalPageStyles";
+
 export const metadata = {
   title: "Nightloop Privacy Policy"
 };
-
-const pageStyle = {
-  maxWidth: 820,
-  margin: "0 auto",
-  padding: "56px 20px 80px",
-  lineHeight: 1.7,
-  color: "#f4f0ff",
-  background: "#08050f",
-  minHeight: "100vh"
-};
-
-const mutedStyle = { color: "#b9accf" };
 
 export default function PrivacyPage() {
   return (
@@ -22,7 +12,10 @@ export default function PrivacyPage() {
 
       <p>
         Nightloop is a beta nightlife planning app. For beta support or privacy
-        questions, contact <a href="mailto:axelbaumcharles@gmail.com">axelbaumcharles@gmail.com</a>.
+        questions, contact{" "}
+        <a href="mailto:axelbaumcharles@gmail.com" style={linkStyle}>
+          axelbaumcharles@gmail.com
+        </a>.
       </p>
 
       <h2>Information We Collect</h2>
@@ -56,7 +49,9 @@ export default function PrivacyPage() {
       <p>
         You can request account deletion in the app from Profile settings. If you cannot
         access the app, email support at{" "}
-        <a href="mailto:axelbaumcharles@gmail.com">axelbaumcharles@gmail.com</a>.
+        <a href="mailto:axelbaumcharles@gmail.com" style={linkStyle}>
+          axelbaumcharles@gmail.com
+        </a>.
       </p>
     </main>
   );
