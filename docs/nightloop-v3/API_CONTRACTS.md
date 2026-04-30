@@ -496,9 +496,11 @@ Request:
 
 ## Decision Sessions
 
-Phase 6B implements private friend-scoped group decision rooms. It does not
-include realtime, push, contacts, universal links, public rooms, named vote
-display, live social presence, or recommendation influence.
+Phase 6B-6D implements private friend-scoped group decision rooms. Realtime is
+limited to the currently viewed Decision room through SSE, and push is limited
+to private room notifications. It does not include contacts, universal links,
+public rooms, named vote display, live social presence, realtime Friends feed,
+notification inbox, or recommendation influence.
 
 Privacy rules:
 
@@ -582,6 +584,32 @@ Response:
 Returns session state, fixed candidates, aggregate votes, viewer vote, group fit
 reason, and the soft leader. It does not expose named votes.
 
+The response may include `session.deck_state`:
+
+```json
+{
+  "deck_size": 8,
+  "cards_total": 8,
+  "cards_remaining": 6,
+  "next_candidate_id": "candidate-3",
+  "last_swiped_candidate_id": "candidate-2",
+  "can_rewind": true
+}
+```
+
+### GET /decision-sessions/:id/events
+
+Server-sent event stream for the currently viewed room. Requires authenticated,
+eligible, joined membership in an active visible room.
+
+Events are invalidation-style and safe for private room UI refreshes. Vote and
+progress events do not expose actor identity, vote value, or candidate ids.
+
+### POST /decision-sessions/:id/rewind
+
+Rewinds the viewer's latest swiping-stage deck vote only. It is disabled after
+shortlist voting, finalization, ending, or expiry.
+
 ### POST /decision-sessions/:id/join
 
 Invited members can join with an empty body. Friends of joined members can join
@@ -607,6 +635,33 @@ Request:
 Allowed `vote`: `skip`, `in`. `venue_id` is also accepted for clients that do
 not have the candidate id.
 
+### Notification Device Tokens
+
+`POST /me/device-tokens`
+
+Registers an iOS APNs token for the authenticated user/device. Response payloads
+never include the raw token or token hash.
+
+`DELETE /me/device-tokens`
+
+Revokes the current device token for this account.
+
+### Notification Preferences
+
+`GET /me/notification-preferences`
+
+`PATCH /me/notification-preferences`
+
+Supported room notification preference fields:
+
+- `room_invites_enabled`
+- `shortlist_ready_enabled`
+- `final_plan_locked_enabled`
+- `room_messages_enabled`
+
+Push copy remains privacy-conscious and does not include venue names in Phase
+6D.
+
 ### POST /decision-sessions/:id/revoke-code
 
 Creator-only. Existing joined members remain in the room.
@@ -617,15 +672,12 @@ Creator-only. Ended sessions reject joins and votes.
 
 ## Realtime
 
-Use WebSocket or SSE for:
+Phase 6D uses SSE only for the currently viewed Decision room. Friends, venue
+live-state updates, global unread counts, and broad social streams remain
+pull-refresh or deferred.
 
-- venue live-state updates
-- friends ticker
-- attendance intents
-- decision vote counters
-- in-app notification events
-
-Push payloads must not include sensitive personal or precise location data.
+Push payloads must not include sensitive personal data, venue names, raw
+provider records, raw coordinates, named vote lists, device tokens, or secrets.
 
 ## Admin/Ops
 

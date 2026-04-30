@@ -1,6 +1,6 @@
 # Phase 6 Readiness Checkpoint
 
-Last updated: 2026-04-28
+Last updated: 2026-04-30
 
 ## Status
 
@@ -58,17 +58,27 @@ Phase 6C group pick rooms are implemented:
   and chat;
 - docs/API checkpoint in `PHASE6C_GROUP_PICK_ROOMS.md`.
 
-Do not add live social presence, friend-influenced recommendations, contacts
-matching, universal links, public rooms, realtime, or push notification behavior
-without a fresh privacy/product plan.
+Phase 6D room-live foundation is implemented:
 
-Recommended mode for the next Phase 6 boundary: Codex Plan Mode, xhigh
-reasoning while privacy and abuse-prevention decisions are being made; high
-reasoning is fine for implementation after the plan is approved.
+- server-authoritative Decision deck state and server-backed rewind;
+- current-room SSE for active joined Decision rooms only;
+- privacy-safe invalidation events that preserve aggregate-only vote semantics;
+- backend notification token/preference foundation;
+- contextual iOS notification permission prompt and room notification routing;
+- Debug/Release APNs entitlement split.
 
-Next recommended slice: simulator walkthrough with the seeded social users and
-one real dev account, then patch any UI friction in group rooms. After that,
-choose between Phase 6D realtime/push or richer planning polish.
+Still do not add live social presence, friend-influenced recommendations,
+contacts matching, universal links, public rooms, realtime Friends feed,
+notification inbox/history, global unread badges, silent pushes, or named vote
+display without a fresh privacy/product plan.
+
+Recommended mode for the next Phase 6 boundary: Codex Plan Mode, high reasoning
+for APNs setup or planning polish; xhigh if turning on production delivery,
+contacts, public rooms, presence, or recommendation influence.
+
+Next recommended slice: run the APNs Apple Developer setup checklist and test on
+a physical device if real push delivery is desired. Otherwise continue with
+richer group planning polish or another focused social UI pass.
 
 ## Verification
 

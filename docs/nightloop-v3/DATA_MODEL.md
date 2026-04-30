@@ -274,9 +274,42 @@ Important columns:
 Votes are exposed to clients only as aggregate counts plus the viewer's own
 vote. Do not expose named voter lists in Phase 6B.
 
-### device_push_tokens
+### user_device_tokens
 
-APNs tokens and notification settings.
+Per-device APNs registration rows.
+
+Important columns:
+
+- `user_id uuid references users(id)`
+- `platform text`: currently `ios`
+- `token_hash text`
+- `token_value text`
+- `apns_environment text`: `sandbox` or `production`
+- `app_version text`
+- `build_number text`
+- `last_seen_at timestamptz`
+- `revoked_at timestamptz`
+
+Registering the same token/environment for a new account revokes active rows for
+other users first, preventing cross-account push leakage on shared devices.
+
+Raw tokens are server-side only and must never be returned to iOS after
+registration.
+
+### user_notification_preferences
+
+Room notification preference row per user.
+
+Important columns:
+
+- `user_id uuid primary key references users(id)`
+- `room_invites_enabled boolean`
+- `shortlist_ready_enabled boolean`
+- `final_plan_locked_enabled boolean`
+- `room_messages_enabled boolean`
+
+Phase 6D does not include notification inboxes, global unread counts, silent
+pushes, or broad Friends notifications.
 
 ### moderation_reports
 
