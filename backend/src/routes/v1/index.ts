@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
@@ -42,6 +43,11 @@ import {
   voteDecisionSession,
   voteDecisionSessionShortlist
 } from "../../services/v1/decisionService";
+import {
+  decisionRoomEventBus,
+  type DecisionRoomEvent,
+  writeSseEvent
+} from "../../services/v1/decisionRoomEvents";
 import {
   acceptFriendInvite,
   acceptFriendRequest,
@@ -764,6 +770,53 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
           filters: body.filters
         })
       );
+    })
+  );
+
+  router.get(
+    "/decision-sessions/:id/events",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const session = await getDecisionSession(accountFromRequest(req), req.params.id);
+      if (session.session.status !== "active") {
+        throw new ApiError(409, "DECISION_SESSION_CLOSED", "This decision session is no longer active.");
+      }
+      if (session.session.viewer_status !== "joined") {
+        throw new ApiError(403, "SESSION_JOIN_REQUIRED", "Join the decision session first.");
+      }
+
+      res.status(200);
+      res.set({
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive"
+      });
+      res.flushHeaders?.();
+
+      const initialEvent: DecisionRoomEvent = {
+        id: randomUUID(),
+        session_id: session.session.id,
+        type: "room_snapshot_invalidated",
+        created_at: new Date().toISOString()
+      };
+      writeSseEvent(res, initialEvent);
+
+      if (config.env === "test" && req.query.once === "1") {
+        res.end();
+        return;
+      }
+
+      const unsubscribe = decisionRoomEventBus.subscribe(req.params.id, (event) => {
+        writeSseEvent(res, event);
+      });
+      const heartbeat = setInterval(() => {
+        res.write(": heartbeat\n\n");
+      }, 25_000);
+
+      req.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
     })
   );
 

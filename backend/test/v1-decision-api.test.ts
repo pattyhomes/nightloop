@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { config as loadDotenv } from "dotenv";
 import { createApp, type AuthAdminClient } from "../src/app";
 import { loadConfig } from "../src/lib/config";
+import { decisionRoomEventBus } from "../src/services/v1/decisionRoomEvents";
 
 loadDotenv({ path: path.resolve(process.cwd(), ".env"), quiet: true });
 loadDotenv({ path: path.resolve(process.cwd(), "../backend/.env"), quiet: true });
@@ -342,6 +343,223 @@ describe("Nightloop v1 decision sessions API", () => {
     expect(JSON.stringify(voted.body)).not.toContain("voter_user_id");
     expect(JSON.stringify(voted.body)).not.toContain(invited.userId);
   }, 120000);
+
+  it("keeps decision room SSE inaccessible to a stranger", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("SSE Host", "sse_host");
+    const stranger = await createEligibleProfile("SSE Stranger", "sse_stranger");
+
+    const created = await createSession(host, marketId).expect(201);
+    const response = await request(app)
+      .get(`/api/v1/decision-sessions/${created.body.session.id}/events`)
+      .query({ once: "1" })
+      .set("Authorization", `Bearer ${stranger.token}`)
+      .expect(404);
+
+    expect(response.body.error.code).toBe("NOT_FOUND");
+  }, 120000);
+
+  it("keeps decision room SSE inaccessible to an invited member until they join", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("SSE Invite Host", "sse_inv_host");
+    const friend = await createEligibleProfile("SSE Invite Friend", "sse_inv_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const response = await request(app)
+      .get(`/api/v1/decision-sessions/${created.body.session.id}/events`)
+      .query({ once: "1" })
+      .set("Authorization", `Bearer ${friend.token}`)
+      .expect(403);
+
+    expect(response.body.error.code).toBe("SESSION_JOIN_REQUIRED");
+  }, 120000);
+
+  it("keeps decision room SSE inaccessible after the room is ended", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("SSE Ended Host", "sse_end_host");
+
+    const created = await createSession(host, marketId).expect(201);
+    const sessionId = created.body.session.id;
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/end`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({})
+      .expect(200);
+
+    const response = await request(app)
+      .get(`/api/v1/decision-sessions/${sessionId}/events`)
+      .query({ once: "1" })
+      .set("Authorization", `Bearer ${host.token}`)
+      .expect(409);
+
+    expect(response.body.error.code).toBe("DECISION_SESSION_CLOSED");
+  }, 120000);
+
+  it("keeps decision room SSE inaccessible after the room expires", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("SSE Expired Host", "sse_exp_host");
+
+    const created = await createSession(host, marketId).expect(201);
+    const sessionId = created.body.session.id;
+    await pool.query(
+      `
+        update decision_sessions
+        set status = 'expired',
+            expires_at = now() - interval '1 minute',
+            updated_at = now()
+        where id = $1::uuid
+      `,
+      [sessionId]
+    );
+
+    const response = await request(app)
+      .get(`/api/v1/decision-sessions/${sessionId}/events`)
+      .query({ once: "1" })
+      .set("Authorization", `Bearer ${host.token}`)
+      .expect(409);
+
+    expect(response.body.error.code).toBe("DECISION_SESSION_CLOSED");
+  }, 120000);
+
+  it("opens decision room SSE for a joined member with an initial snapshot invalidation event", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("SSE Member Host", "sse_mem_host");
+    const friend = await createEligibleProfile("SSE Member Friend", "sse_mem_friend");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/join`)
+      .set("Authorization", `Bearer ${friend.token}`)
+      .send({})
+      .expect(200);
+
+    const stream = await request(app)
+      .get(`/api/v1/decision-sessions/${sessionId}/events`)
+      .query({ once: "1" })
+      .set("Authorization", `Bearer ${friend.token}`)
+      .expect("Content-Type", /text\/event-stream/)
+      .expect(200);
+
+    expect(stream.text).toContain("event: room_snapshot_invalidated");
+    expect(stream.text).toContain(`"session_id":"${sessionId}"`);
+    expect(stream.text).toContain('"type":"room_snapshot_invalidated"');
+  }, 120000);
+
+  it("emits vote change stream events without actor or candidate identity", async () => {
+    const marketId = await getSfMarketId();
+    const host = await createEligibleProfile("Stream Vote Host", "str_vote_host");
+    const friend = await createEligibleProfile("Stream Vote Friend", "str_vote_fr");
+    await requestAndAccept(host, friend);
+
+    const created = await createSession(host, marketId, [friend.userId]).expect(201);
+    const sessionId = created.body.session.id;
+    const candidateId = created.body.deck_candidates[0].id;
+    const events: Array<Record<string, unknown>> = [];
+    const unsubscribe = decisionRoomEventBus.subscribe(sessionId, (event) => {
+      events.push(event);
+    });
+
+    await request(app)
+      .post(`/api/v1/decision-sessions/${sessionId}/votes`)
+      .set("Authorization", `Bearer ${host.token}`)
+      .send({ candidate_id: candidateId, vote: "in" })
+      .expect(200);
+    unsubscribe();
+
+    const voteChanged = events.find((event) => event.type === "vote_changed");
+    const progressChanged = events.find((event) => event.type === "progress_changed");
+    expect(voteChanged).toEqual(
+      expect.objectContaining({
+        session_id: sessionId,
+        type: "vote_changed",
+        stage: "swiping",
+        id: expect.any(String),
+        created_at: expect.any(String)
+      })
+    );
+    expect(voteChanged).not.toHaveProperty("actor");
+    expect(voteChanged).not.toHaveProperty("candidate_id");
+    expect(progressChanged).not.toHaveProperty("actor");
+    expect(progressChanged).not.toHaveProperty("candidate_id");
+  }, 120000);
+
+  it("publishes decision room events to matching session subscribers and isolates listener failures", () => {
+    const sessionId = randomUUID();
+    const seen: string[] = [];
+    const unsubscribeThrowing = decisionRoomEventBus.subscribe(sessionId, () => {
+      throw new Error("stale listener");
+    });
+    const unsubscribeSeen = decisionRoomEventBus.subscribe(sessionId, (event) => {
+      seen.push(`${event.type}:${event.candidate_id}`);
+    });
+
+    let event: ReturnType<typeof decisionRoomEventBus.publish> | undefined;
+    expect(() => {
+      event = decisionRoomEventBus.publish({
+        session_id: sessionId,
+        type: "candidate_suggested",
+        candidate_id: randomUUID(),
+        stage: "swiping"
+      });
+    }).not.toThrow();
+    decisionRoomEventBus.publish({
+      session_id: sessionId,
+      type: "candidate_removed",
+      candidate_id: randomUUID(),
+      stage: "swiping"
+    });
+    decisionRoomEventBus.publish({
+      session_id: randomUUID(),
+      type: "candidate_suggested",
+      candidate_id: randomUUID(),
+      stage: "swiping"
+    });
+    unsubscribeThrowing();
+    unsubscribeSeen();
+    decisionRoomEventBus.publish({
+      session_id: sessionId,
+      type: "progress_changed",
+      stage: "swiping"
+    });
+
+    expect(event?.id).toEqual(expect.any(String));
+    expect(event?.created_at).toEqual(expect.any(String));
+    expect(seen).toEqual([`candidate_suggested:${event?.candidate_id}`, expect.stringMatching(/^candidate_removed:/)]);
+  });
+
+  it("sanitizes shortlist vote stream events before publish", () => {
+    const sessionId = randomUUID();
+    const candidateId = randomUUID();
+    const event = decisionRoomEventBus.publish({
+      session_id: sessionId,
+      type: "shortlist_vote_changed",
+      actor: {
+        id: randomUUID(),
+        display_name: "Private Voter",
+        username: "private_voter",
+        avatar_kind: "initials"
+      },
+      candidate_id: candidateId,
+      stage: "shortlist_voting"
+    });
+
+    expect(event).toEqual(
+      expect.objectContaining({
+        session_id: sessionId,
+        type: "shortlist_vote_changed",
+        stage: "shortlist_voting",
+        id: expect.any(String),
+        created_at: expect.any(String)
+      })
+    );
+    expect(event).not.toHaveProperty("actor");
+    expect(event).not.toHaveProperty("candidate_id");
+  });
 
   it("enforces blocks, code revocation, and ended-session write locks", async () => {
     const marketId = await getSfMarketId();

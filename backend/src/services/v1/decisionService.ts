@@ -3,6 +3,11 @@ import { ApiError, notFoundError, validationError } from "../../lib/apiError";
 import { dbQuery, dbTransaction, type DBClient } from "../../lib/db";
 import type { AccountState } from "./accountService";
 import { requireEligible } from "./accountService";
+import {
+  decisionRoomEventBus,
+  type DecisionRoomEventInput,
+  type DecisionRoomEventType
+} from "./decisionRoomEvents";
 import { findMarketByIdOrSlug } from "./marketService";
 import { listRecommendations } from "./recommendationService";
 import { getVenue, listVenues } from "./venueService";
@@ -296,6 +301,35 @@ function profilePayload(input: {
     username: input.username ?? "nightloop",
     avatar_kind: input.avatarKind ?? "initials"
   };
+}
+
+function publishDecisionRoomEvent(input: {
+  account: AccountState;
+  sessionId: string;
+  type: DecisionRoomEventType;
+  candidateId?: string;
+  messageId?: string;
+  stage?: DecisionStage;
+  includeActor?: boolean;
+}): void {
+  const event: DecisionRoomEventInput = {
+    session_id: input.sessionId,
+    type: input.type,
+    ...(input.includeActor === false
+      ? {}
+      : {
+          actor: {
+            id: input.account.user.id,
+            display_name: input.account.profile.display_name,
+            username: input.account.profile.username,
+            avatar_kind: input.account.profile.avatar_kind
+          }
+        }),
+    ...(input.candidateId ? { candidate_id: input.candidateId } : {}),
+    ...(input.messageId ? { message_id: input.messageId } : {}),
+    ...(input.stage ? { stage: input.stage } : {})
+  };
+  decisionRoomEventBus.publish(event);
 }
 
 function formatCandidate(
@@ -1198,6 +1232,7 @@ export async function joinDecisionSession(input: {
 }) {
   requireEligible(input.account);
 
+  let joined = false;
   await dbTransaction(async (client) => {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
@@ -1218,6 +1253,7 @@ export async function joinDecisionSession(input: {
         `,
         [membership.id]
       );
+      joined = true;
       return;
     }
 
@@ -1254,7 +1290,16 @@ export async function joinDecisionSession(input: {
       `,
       [input.sessionId, input.account.user.id]
     );
+    joined = true;
   });
+
+  if (joined) {
+    publishDecisionRoomEvent({
+      account: input.account,
+      sessionId: input.sessionId,
+      type: "room_joined"
+    });
+  }
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
@@ -1265,6 +1310,7 @@ export async function joinDecisionSessionByCode(input: {
 }) {
   requireEligible(input.account);
 
+  let joined = false;
   const sessionId = await dbTransaction(async (client) => {
     const codeResult = await client.query<{ id: string }>(
       `
@@ -1301,6 +1347,7 @@ export async function joinDecisionSessionByCode(input: {
         `,
         [membership.id]
       );
+      joined = true;
       return session.id;
     }
 
@@ -1318,8 +1365,17 @@ export async function joinDecisionSessionByCode(input: {
       [session.id, input.account.user.id]
     );
 
+    joined = true;
     return session.id;
   });
+
+  if (joined) {
+    publishDecisionRoomEvent({
+      account: input.account,
+      sessionId,
+      type: "room_joined"
+    });
+  }
 
   return formatSessionResponse({ query: dbQuery }, sessionId, input.account);
 }
@@ -1376,6 +1432,21 @@ export async function voteDecisionSession(input: {
     );
   });
 
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "vote_changed",
+    stage: "swiping",
+    includeActor: false
+  });
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "progress_changed",
+    stage: "swiping",
+    includeActor: false
+  });
+
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
 
@@ -1411,6 +1482,21 @@ export async function rewindDecisionSession(input: {
     );
   });
 
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "vote_changed",
+    stage: "swiping",
+    includeActor: false
+  });
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "progress_changed",
+    stage: "swiping",
+    includeActor: false
+  });
+
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
 
@@ -1419,6 +1505,7 @@ export async function advanceDecisionSessionShortlist(input: {
   sessionId: string;
 }) {
   requireEligible(input.account);
+  let advanced = false;
   await dbTransaction(async (client) => {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
@@ -1441,7 +1528,17 @@ export async function advanceDecisionSessionShortlist(input: {
       `,
       [input.sessionId, input.account.user.id]
     );
+    advanced = true;
   });
+
+  if (advanced) {
+    publishDecisionRoomEvent({
+      account: input.account,
+      sessionId: input.sessionId,
+      type: "shortlist_ready",
+      stage: "shortlist_voting"
+    });
+  }
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
@@ -1481,6 +1578,14 @@ export async function voteDecisionSessionShortlist(input: {
       `,
       [input.sessionId, input.candidateId, input.account.user.id]
     );
+  });
+
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "shortlist_vote_changed",
+    stage: "shortlist_voting",
+    includeActor: false
   });
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
@@ -1530,6 +1635,7 @@ export async function suggestDecisionCandidate(input: {
   venueId: string;
 }) {
   requireEligible(input.account);
+  let suggestedCandidateId: string | undefined;
   await dbTransaction(async (client) => {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
@@ -1590,6 +1696,7 @@ export async function suggestDecisionCandidate(input: {
         input.account.user.id
       ]
     );
+    suggestedCandidateId = inserted.rows[0]?.id;
 
     await client.query(
       `
@@ -1601,6 +1708,14 @@ export async function suggestDecisionCandidate(input: {
       `,
       [input.sessionId, inserted.rows[0]?.id, input.account.user.id]
     );
+  });
+
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "candidate_suggested",
+    candidateId: suggestedCandidateId,
+    stage: "swiping"
   });
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
@@ -1654,6 +1769,14 @@ export async function removeDecisionCandidate(input: {
       `,
       [input.candidateId]
     );
+  });
+
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "candidate_removed",
+    candidateId: input.candidateId,
+    stage: "swiping"
   });
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
@@ -1715,6 +1838,14 @@ export async function finalizeDecisionSession(input: {
     );
   });
 
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "final_plan_locked",
+    candidateId: input.candidateId,
+    stage: "finalized"
+  });
+
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
 }
 
@@ -1726,13 +1857,16 @@ export async function addDecisionSessionMessage(input: {
   emoji?: DecisionEmoji;
 }) {
   requireEligible(input.account);
+  let messageId: string | undefined;
+  let messageStage: DecisionStage | undefined;
   await dbTransaction(async (client) => {
     const session = await readSession(client, input.sessionId);
     assertActiveSession(session);
+    messageStage = effectiveStage(session);
     const membership = await assertVisibleMember(client, input.sessionId, input.account.user.id);
     assertJoinedMember(membership);
 
-    await client.query(
+    const inserted = await client.query<{ id: string }>(
       `
         INSERT INTO decision_session_messages (
           session_id,
@@ -1743,6 +1877,7 @@ export async function addDecisionSessionMessage(input: {
           expires_at
         )
         VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::timestamptz)
+        RETURNING id
       `,
       [
         input.sessionId,
@@ -1753,6 +1888,15 @@ export async function addDecisionSessionMessage(input: {
         session.expires_at
       ]
     );
+    messageId = inserted.rows[0]?.id;
+  });
+
+  publishDecisionRoomEvent({
+    account: input.account,
+    sessionId: input.sessionId,
+    type: "message_created",
+    messageId,
+    stage: messageStage
   });
 
   return formatSessionResponse({ query: dbQuery }, input.sessionId, input.account);
@@ -1819,9 +1963,11 @@ export async function revokeDecisionSessionCode(account: AccountState, sessionId
 
 export async function endDecisionSession(account: AccountState, sessionId: string) {
   requireEligible(account);
+  let stage: DecisionStage | undefined;
   await dbTransaction(async (client) => {
     const session = await readSession(client, sessionId);
     assertCreator(session, account);
+    stage = effectiveStage(session);
     await client.query(
       `
         UPDATE decision_sessions
@@ -1832,6 +1978,12 @@ export async function endDecisionSession(account: AccountState, sessionId: strin
       `,
       [sessionId]
     );
+  });
+  publishDecisionRoomEvent({
+    account,
+    sessionId,
+    type: "room_ended",
+    stage
   });
   return formatSessionResponse({ query: dbQuery }, sessionId, account);
 }
