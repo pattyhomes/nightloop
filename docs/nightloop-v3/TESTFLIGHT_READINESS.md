@@ -186,24 +186,24 @@ Goal: App Store Connect and the backend need public legal/support URLs.
 Current Vercel production URL:
 
 ```bash
-https://frontend-charlie-axelbaum.vercel.app
+https://getnightloop.vercel.app
 ```
 
 Deploy the frontend and confirm these pages load over HTTPS:
 
-- `https://frontend-charlie-axelbaum.vercel.app/privacy`
-- `https://frontend-charlie-axelbaum.vercel.app/terms`
-- `https://frontend-charlie-axelbaum.vercel.app/support`
-- `https://frontend-charlie-axelbaum.vercel.app/delete-account`
-- `https://frontend-charlie-axelbaum.vercel.app/accessibility`
+- `https://getnightloop.vercel.app/privacy`
+- `https://getnightloop.vercel.app/terms`
+- `https://getnightloop.vercel.app/support`
+- `https://getnightloop.vercel.app/delete-account`
+- `https://getnightloop.vercel.app/accessibility`
 
 Then paste those full URLs into the hosted backend env vars:
 
-- `NIGHTLOOP_PRIVACY_URL=https://frontend-charlie-axelbaum.vercel.app/privacy`
-- `NIGHTLOOP_TERMS_URL=https://frontend-charlie-axelbaum.vercel.app/terms`
-- `NIGHTLOOP_SUPPORT_URL=https://frontend-charlie-axelbaum.vercel.app/support`
-- `NIGHTLOOP_DELETE_ACCOUNT_URL=https://frontend-charlie-axelbaum.vercel.app/delete-account`
-- `NIGHTLOOP_ACCESSIBILITY_URL=https://frontend-charlie-axelbaum.vercel.app/accessibility`
+- `NIGHTLOOP_PRIVACY_URL=https://getnightloop.vercel.app/privacy`
+- `NIGHTLOOP_TERMS_URL=https://getnightloop.vercel.app/terms`
+- `NIGHTLOOP_SUPPORT_URL=https://getnightloop.vercel.app/support`
+- `NIGHTLOOP_DELETE_ACCOUNT_URL=https://getnightloop.vercel.app/delete-account`
+- `NIGHTLOOP_ACCESSIBILITY_URL=https://getnightloop.vercel.app/accessibility`
 
 Also add/check these hosted backend variables during the Vercel/public setup pass:
 
