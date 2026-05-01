@@ -1,128 +1,164 @@
 # TestFlight Readiness Runbook
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 ## Target
 Tiny trusted external TestFlight beta for `com.nightloop.app`.
 
-## Manual Account Setup
+## Current Baseline
+- Canonical database: the existing Supabase **Pro** project. Use this for TestFlight.
+- Scratch database: `NightloopStaging`. Keep it only for rehearsal/destructive testing.
+- Do not rerun migrations, seeds, or smoke resets against Pro unless a new migration or explicit data task requires it.
+- Pro read-only audit on 2026-05-01:
+  - Approved active SF venues: `136`.
+  - Recommendation input coverage: `136/136`.
+  - Fresh/unexpired schedules: `140`.
+  - Future approved events: `134`.
+  - Event sources: `36`, trusted: `4`.
+  - Fixture rows: `0`.
+  - Unknown neighborhood cleanup: `0`.
+  - `phase6:readiness -- --market=san-francisco --limit=60`: passed.
 
-### Apple Developer
-1. Open Certificates, Identifiers & Profiles.
-2. Select or create App ID `com.nightloop.app`.
-3. Enable Sign in with Apple.
-4. Enable Push Notifications.
-5. Create an APNs Auth Key.
-6. Record Team ID, Key ID, and download the private key once.
+## Apple Values
+- Apple Team ID: `HFAR6K43RC`
+- Sign in with Apple Key ID: `266WLZ656M`
+- APNs Key ID: `AGDL986SYH`
+- Bundle ID / APNs topic: `com.nightloop.app`
 
-### Supabase Staging
-1. Create a separate staging Supabase project.
-2. Apply migrations `db/migrations/*.sql` in order.
-3. Configure Sign in with Apple for bundle id `com.nightloop.app`.
-4. Copy project URL, JWKS URL, issuer URL, publishable key, and service role key.
-5. Store service role only in Railway/backend env.
-6. Create one staging Supabase Auth reviewer user for App Review.
-7. Record only the reviewer Auth user UUID for backend configuration.
-8. Do not commit or document the reviewer password; put reviewer credentials
-   only in App Store Connect review notes.
+Do not commit `.p8` private keys or Apple private key contents. Store private keys only in local ignored env files and hosted backend/Supabase provider settings as needed.
 
-### Reviewer Account Seed
-1. Set backend env `REVIEWER_AUTH_USER_ID` to the staging Supabase Auth user UUID.
-2. Deploy/restart the Railway backend so the env var is loaded.
-3. Confirm the admin reviewer status flow reports the account as configured:
-   `GET /api/v1/admin/reviewer-account/status`.
-4. Use the existing admin reviewer-account seed flow to prepare the Nightloop
-   profile for review: `POST /api/v1/admin/reviewer-account/seed`.
-5. If using an admin UI or API client, call the same admin status/seed endpoints
-   with normal admin authentication.
-6. Re-check status and confirm the reviewer account is seeded before submitting
-   the TestFlight build.
+## Database Policy
+- `backend/.env` should point to the Pro database for TestFlight setup work.
+- `backend/.env.pro` is an ignored local backup of the Pro backend env.
+- If we keep NightloopStaging, store it separately as `backend/.env.staging`; do not make it the default TestFlight DB.
+- Local Node `pg` scripts may need `sslmode=no-verify` in `DATABASE_URL`.
+- Raw `psql` does not support `sslmode=no-verify`; translate to `sslmode=require` only for direct `psql` commands.
 
-### Railway
-1. Create a Railway service from this repo.
-2. Build command: `npm --prefix backend run build`.
-3. Start command: `npm --prefix backend start`.
-4. Set `NODE_ENV=production`.
-5. Set Supabase, DB, provider, and APNs env vars.
-6. Set `APNS_ENVIRONMENT=production` for external TestFlight/Release builds;
-   the backend defaults to `sandbox`.
-7. Set `NOTIFICATION_DELIVERY_MODE=apns` only after APNs credentials are present.
-8. Confirm `/health` returns success over HTTPS.
+## Remaining Setup
 
-### Vercel
-1. Deploy the existing `frontend` app.
-2. Confirm these public URLs load:
-   - `/privacy`
-   - `/terms`
-   - `/support`
-   - `/delete-account`
-   - `/accessibility`
-3. Set the public URL env vars required by
-   `npm --prefix backend run testflight:readiness`:
-   - `NIGHTLOOP_PRIVACY_URL`
-   - `NIGHTLOOP_TERMS_URL`
-   - `NIGHTLOOP_SUPPORT_URL`
-   - `NIGHTLOOP_DELETE_ACCOUNT_URL`
-   - `NIGHTLOOP_ACCESSIBILITY_URL`
+### Supabase Pro
+1. Confirm the Pro project URL and publishable key for iOS Release config.
+2. Configure Sign in with Apple for `com.nightloop.app` using:
+   - Team ID: `HFAR6K43RC`
+   - Sign in with Apple Key ID: `266WLZ656M`
+   - Apple private key: stored in Supabase only, not git.
+3. Copy the Pro service role key into the hosted Express backend env only.
+4. Create or confirm the App Review / reviewer Supabase Auth user.
+5. Record only the reviewer Auth user UUID as backend env `REVIEWER_AUTH_USER_ID`.
+6. Do not document the reviewer password anywhere except App Store Connect review notes.
 
-## Staging Seed
-Apply the current migrations in order against the staging database:
+### Hosted Express Backend
+Deploy the backend to Railway or equivalent. The backend is the only server that should use DB/provider/service-role/APNs secrets.
+
+Required backend build settings:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/001_venue_enrichments.sql
-psql "$DATABASE_URL" -f db/migrations/002_phase1_backend_foundation.sql
-psql "$DATABASE_URL" -f db/migrations/003_phase2_data_ops.sql
-psql "$DATABASE_URL" -f db/migrations/004_phase2b_google_places.sql
-psql "$DATABASE_URL" -f db/migrations/005_phase4_security_advisor_cleanup.sql
-psql "$DATABASE_URL" -f db/migrations/006_phase55_56_data_recommendations.sql
-psql "$DATABASE_URL" -f db/migrations/007_phase58_sf_venue_trust.sql
-psql "$DATABASE_URL" -f db/migrations/008_phase58a_hours_trust.sql
-psql "$DATABASE_URL" -f db/migrations/009_phase6a_social_beta.sql
-psql "$DATABASE_URL" -f db/migrations/010_phase6b_decision_sessions.sql
-psql "$DATABASE_URL" -f db/migrations/011_phase6c_group_pick_rooms.sql
-psql "$DATABASE_URL" -f db/migrations/012_phase6c1_social_design_realignment.sql
-psql "$DATABASE_URL" -f db/migrations/013_phase6d_room_live_foundation.sql
-npm --prefix backend run import:sf-notable
-npm --prefix backend run neighborhoods:sf -- --apply --market=san-francisco
-npm --prefix backend run recommendations:refresh-inputs -- --market=san-francisco
-npm --prefix backend run phase6:social-smoke -- --market=san-francisco --reset
-npm --prefix backend run phase6:social-smoke:audit -- --market=san-francisco
-npm --prefix backend run phase6:readiness -- --market=san-francisco --limit=60
+npm --prefix backend run build
+npm --prefix backend start
 ```
 
-## App Store Connect Test Info
+Required hosted backend env:
+
+```bash
+NODE_ENV=production
+DATABASE_URL=<Pro Supabase Postgres URL>
+SUPABASE_PROJECT_URL=<Pro Supabase project URL>
+SUPABASE_JWKS_URL=<Pro Supabase JWKS URL>
+SUPABASE_SERVICE_ROLE_KEY=<server-side only>
+NOTIFICATION_DELIVERY_MODE=apns
+APNS_TEAM_ID=HFAR6K43RC
+APNS_KEY_ID=AGDL986SYH
+APNS_PRIVATE_KEY=<.p8 contents, server-side only>
+APNS_BUNDLE_ID=com.nightloop.app
+APNS_ENVIRONMENT=production
+NIGHTLOOP_PRIVACY_URL=<public /privacy URL>
+NIGHTLOOP_TERMS_URL=<public /terms URL>
+NIGHTLOOP_SUPPORT_URL=<public /support URL>
+NIGHTLOOP_DELETE_ACCOUNT_URL=<public /delete-account URL>
+NIGHTLOOP_ACCESSIBILITY_URL=<public /accessibility URL>
+REVIEWER_AUTH_USER_ID=<Supabase Auth UUID for reviewer>
+```
+
+Optional/if configured:
+
+```bash
+GOOGLE_PLACES_API_KEY=<backend-only>
+FOURSQUARE_API_KEY=<backend-only, Pro fields only>
+REVIEWER_DEMO_ENABLED=true
+```
+
+After deploy:
+1. Confirm hosted `/health` returns success over HTTPS.
+2. Run `npm --prefix backend run testflight:readiness` with env pointed at the hosted/production-like backend values.
+3. Seed the reviewer Nightloop profile through the backend admin flow:
+   - `GET /api/v1/admin/reviewer-account/status`
+   - `POST /api/v1/admin/reviewer-account/seed`
+   - Re-check status.
+
+### Public Web URLs
+Deploy the existing frontend app and confirm these load publicly:
+
+- `/privacy`
+- `/terms`
+- `/support`
+- `/delete-account`
+- `/accessibility`
+
+Set the matching `NIGHTLOOP_*_URL` env vars on the hosted backend.
+
+### iOS Release Config
+Update ignored `ios/Nightloop/Config/NightloopConfig.xcconfig` for the TestFlight build:
+
+```bash
+API_BASE_URL=<hosted Express HTTPS URL>
+SUPABASE_URL=<Pro Supabase project URL>
+SUPABASE_PUBLISHABLE_KEY=<Pro publishable key>
+GOOGLE_MAPS_IOS_API_KEY=<iOS-restricted Maps key>
+APPLE_AUTH_ENABLED=true
+PHONE_AUTH_ENABLED=false
+REVIEWER_DEMO_ENABLED=true
+```
+
+Keep provider/server keys out of iOS config.
+
+### App Store Connect
 - Beta description: Nightloop helps small friend groups choose where to go tonight in San Francisco using source-backed venue context, private friends activity, and Decision rooms.
 - Features to test: Apple sign-in, Home recommendations, Map, Venue Detail, Friends, Decision rooms, room chat, final plan, notifications.
 - Reviewer notes: normal auth is Sign in with Apple; reviewer demo access is enabled for this TestFlight build and credentials are provided in App Review notes.
-- Reviewer credentials: provide the staging reviewer email/password only in App Store Connect review notes, never in git.
-- Privacy policy URL: Vercel `/privacy`.
-- Support URL: Vercel `/support`.
+- Reviewer credentials: provide the reviewer email/password only in App Store Connect review notes.
+- Privacy policy URL: public `/privacy`.
+- Support URL: public `/support`.
 - Contact: `axelbaumcharles@gmail.com`.
 
 ## Verification
-Run the local readiness checks:
+Run before upload:
 
 ```bash
 npm --prefix backend run build
 npm --prefix backend test
 npm --prefix backend run testflight:readiness
-npm --prefix backend run phase6:social-smoke:audit -- --market=san-francisco
+npm --prefix backend run audit:sf-trust -- --market=san-francisco --json --top=20
 npm --prefix backend run phase6:readiness -- --market=san-francisco --limit=60
 npm run build
 cd ios/Nightloop
 xcodegen generate
 xcodebuild -project Nightloop.xcodeproj -scheme Nightloop -destination 'platform=iOS Simulator,name=iPhone 17' test
+xcodebuild -project Nightloop.xcodeproj -scheme Nightloop -configuration Release -destination 'generic/platform=iOS Simulator' build
 ```
 
 Real-device smoke list:
 
 - Apple sign-in.
 - Reviewer demo access.
-- Home.
+- Home recommendations.
 - Map.
 - Venue Detail.
 - Friends.
-- Decision.
+- Decision room creation/join/swipe/shortlist/final plan.
 - Notification permission.
-- At least one room notification.
+- At least one room notification delivered through APNs production/TestFlight.
 
-Do not include real env var values or secrets in docs, tickets, logs, or commits.
+## Hard Rules
+- Do not include real env var values or secrets in docs, tickets, logs, screenshots, or commits.
+- Do not point TestFlight at NightloopStaging unless we intentionally decide to use a scratch DB.
+- Do not run destructive smoke resets against Pro without explicit approval.
+- iOS uses Supabase only for Auth/session and calls Express `/api/v1` for product data.
