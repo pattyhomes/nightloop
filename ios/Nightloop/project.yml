@@ -53,6 +53,7 @@ targets:
         Release:
           INFOPLIST_FILE: Nightloop/Resources/Info-Release.plist
           CODE_SIGN_ENTITLEMENTS: Nightloop/Resources/Nightloop-Release.entitlements
+          CODE_SIGN_IDENTITY: ""
     dependencies:
       - package: Supabase
         product: Supabase
