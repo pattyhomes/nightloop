@@ -15,6 +15,7 @@ struct HomeView: View {
     @State private var errorMessage: String?
     @State private var signalMessage: String?
     @State private var isShowingMarketSheet = false
+    @State private var savedReminderVenueIDs: Set<String> = []
 
     private var activeMarketID: String? {
         selectedMarketID ?? me.profile?.selectedMarketId ?? markets.first?.id
@@ -38,7 +39,7 @@ struct HomeView: View {
 
                     if let recommendationFeed {
                         trustPulseStrip(feed: recommendationFeed)
-                        filterStrip(counts: recommendationFeed.counts)
+                        filterStrip(feed: recommendationFeed)
 
                         if let heroRecommendation {
                             heroCard(heroRecommendation.venue, recommendation: heroRecommendation)
@@ -117,6 +118,7 @@ struct HomeView: View {
     private func isToastError(_ message: String) -> Bool {
         !message.contains("+") &&
             message != "Reminders coming soon" &&
+            message != "Reminder saved for tonight" &&
             !message.localizedCaseInsensitiveContains("open details")
     }
 
@@ -173,7 +175,27 @@ struct HomeView: View {
         }
     }
 
-    private func filterStrip(counts: VenueCounts) -> some View {
+    @ViewBuilder
+    private func filterStrip(feed: RecommendationListResponse) -> some View {
+        if feed.mode == "tonight_preview" {
+            previewStrip(feed: feed)
+        } else {
+            pulseFilterStrip(counts: feed.counts)
+        }
+    }
+
+    private func previewStrip(feed: RecommendationListResponse) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                PreviewPill(title: "All")
+                PreviewPill(title: "\(feed.items.filter { $0.venue.liveness?.state != .closedToday }.count) expected")
+                PreviewPill(title: "\(feed.items.filter { $0.venue.liveness?.state == .opensLater }.count) opens later")
+                PreviewPill(title: "source-backed")
+            }
+        }
+    }
+
+    private func pulseFilterStrip(counts: VenueCounts) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 FilterPill(title: "All", count: counts.all, isSelected: selectedPulse == nil, color: NightloopTheme.purple) {
@@ -252,8 +274,13 @@ struct HomeView: View {
                         SignalButton(title: "Verify at venue", systemImage: "location.fill") {
                             signalMessage = "Open details or the map to verify you're there before signaling."
                         }
-                        SignalButton(title: "Remind me", systemImage: "bell.fill") {
-                            signalMessage = "Reminders coming soon"
+                        SignalButton(
+                            title: savedReminderVenueIDs.contains(venue.id) ? "Reminder saved" : "Remind me",
+                            systemImage: savedReminderVenueIDs.contains(venue.id) ? "bell.badge.fill" : "bell.fill"
+                        ) {
+                            NightloopHaptics.success()
+                            savedReminderVenueIDs.insert(venue.id)
+                            signalMessage = "Reminder saved for tonight"
                         }
                     }
                 }
@@ -372,6 +399,29 @@ private struct FilterPill: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct PreviewPill: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(NightloopTheme.purple)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .textCase(.lowercase)
+        }
+        .foregroundStyle(NightloopTheme.ink)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.055))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(NightloopTheme.hairline)
+        }
     }
 }
 

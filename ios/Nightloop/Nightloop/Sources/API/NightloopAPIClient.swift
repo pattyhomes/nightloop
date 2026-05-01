@@ -117,6 +117,14 @@ struct NightloopAPIClient {
         )
     }
 
+    func landingMetrics(market: String = "san-francisco") async throws -> LandingMetricsResponse {
+        try await send(
+            path: "landing-metrics",
+            queryItems: [URLQueryItem(name: "market", value: market)],
+            bearerToken: nil
+        )
+    }
+
     func friends(bearerToken: String) async throws -> FriendsResponse {
         try await send(path: "friends", bearerToken: bearerToken)
     }

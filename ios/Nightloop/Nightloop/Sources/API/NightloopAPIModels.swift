@@ -118,6 +118,28 @@ struct MarketsResponse: Decodable, Equatable {
     let items: [Market]
 }
 
+struct LandingMetricsResponse: Decodable, Equatable {
+    let market: LandingMetricsMarket
+    let metrics: LandingMetrics
+    let copy: LandingMetricsCopy
+}
+
+struct LandingMetricsMarket: Decodable, Equatable {
+    let id: String
+    let shortLabel: String
+}
+
+struct LandingMetrics: Decodable, Equatable {
+    let approvedPublicVenues: Int
+    let approvedFutureVenueOwnedEvents: Int
+    let usableHoursEvidence: Int
+    let venueDatapoints: Int
+}
+
+struct LandingMetricsCopy: Decodable, Equatable {
+    let venueDatapointsLabel: String
+}
+
 struct MarketConfigResponse: Decodable, Equatable {
     let market: Market
     let neighborhoods: [MarketNeighborhood]

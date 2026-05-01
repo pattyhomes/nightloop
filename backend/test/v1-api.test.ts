@@ -440,6 +440,29 @@ describe("Nightloop v1 API", () => {
     );
   });
 
+  it("returns public landing metrics without raw provider data", async () => {
+    const response = await request(app)
+      .get("/api/v1/landing-metrics?market=san-francisco")
+      .expect(200);
+
+    expect(response.body.market.short_label).toBe("SF");
+    expect(response.body.metrics).toEqual(
+      expect.objectContaining({
+        approved_public_venues: expect.any(Number),
+        approved_future_venue_owned_events: expect.any(Number),
+        usable_hours_evidence: expect.any(Number),
+        venue_datapoints: expect.any(Number)
+      })
+    );
+    expect(response.body.metrics.venue_datapoints).toBeGreaterThanOrEqual(
+      response.body.metrics.approved_public_venues
+    );
+    expect(response.body.copy.venue_datapoints_label).toBe("Venue datapoints");
+    expect(JSON.stringify(response.body)).not.toContain("raw_payload");
+    expect(JSON.stringify(response.body)).not.toContain("provider_records");
+    expect(JSON.stringify(response.body)).not.toContain("service_role");
+  });
+
   it("returns authenticated venue feed data for eligible users", async () => {
     const user = await createTestUser();
     await attestEligible(user);

@@ -876,27 +876,15 @@ struct DecisionShellView: View {
             }
 
             if response.session.viewerRole == "creator" && response.session.status == "active" {
-                HStack(spacing: 8) {
-                    Button {
-                        revokeCode(response.session)
-                    } label: {
-                        Label("Revoke code", systemImage: "qrcode.viewfinder")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.inkMuted)
-
-                    Button {
-                        endSession(response.session)
-                    } label: {
-                        Label("End room", systemImage: "checkmark.circle")
-                            .font(.caption.weight(.black))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NightloopTheme.rose)
+                Button {
+                    endSession(response.session)
+                } label: {
+                    Label("End tonight room", systemImage: "checkmark.circle")
+                        .font(.caption.weight(.black))
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(NightloopTheme.rose)
                 .disabled(isMutating)
             }
 
@@ -1296,6 +1284,7 @@ struct DecisionShellView: View {
               let session = activeSession?.session else { return }
 
         let previousSession = activeSession
+        NightloopHaptics.commit()
         pendingVoteCandidateID = candidate.id
         isMutating = true
         applyOptimisticVote(candidateID: candidate.id, vote: vote)
@@ -1356,6 +1345,7 @@ struct DecisionShellView: View {
     private func voteShortlist(_ candidate: DecisionCandidate) {
         guard let token = authStore.accessToken, let session = activeSession?.session else { return }
         let previous = activeSession
+        NightloopHaptics.commit()
         applyOptimisticShortlistVote(candidateID: candidate.id)
         Task {
             isMutating = true
@@ -1379,6 +1369,7 @@ struct DecisionShellView: View {
             isMutating = true
             do {
                 _ = try await apiClient.toggleComing(venueID: venue.id, isComing: true, bearerToken: token)
+                NightloopHaptics.success()
                 showToast("You're coming")
                 if let session = activeSession?.session {
                     activeSession = try await apiClient.decisionSession(id: session.id, bearerToken: token)
@@ -1466,6 +1457,7 @@ struct DecisionShellView: View {
                     bearerToken: token
                 )
                 finalizingCandidate = nil
+                NightloopHaptics.success()
                 showToast("Pick locked")
             } catch {
                 showToast(error.localizedDescription, isError: true)

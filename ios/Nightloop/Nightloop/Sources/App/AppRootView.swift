@@ -24,13 +24,13 @@ struct AppRootView: View {
                 case .loading:
                     LoadingStateView(title: "Restoring Nightloop")
                 case .unconfigured(let message):
-                    AuthLandingView(authStore: authStore, message: message)
+                    AuthLandingView(authStore: authStore, apiClient: apiClient, message: message)
                 case .signedOut:
-                    AuthLandingView(authStore: authStore, message: nil)
+                    AuthLandingView(authStore: authStore, apiClient: apiClient, message: nil)
                 case .signedIn:
                     AccountGateView(authStore: authStore, apiClient: apiClient)
                 case .failed(let message):
-                    AuthLandingView(authStore: authStore, message: message)
+                    AuthLandingView(authStore: authStore, apiClient: apiClient, message: message)
                 }
             }
         }

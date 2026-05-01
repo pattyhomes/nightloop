@@ -640,6 +640,7 @@ struct FriendsShellView: View {
                     showToast("Plan removed")
                 } else {
                     _ = try await apiClient.toggleComing(venueID: venueID, isComing: true, bearerToken: token)
+                    NightloopHaptics.success()
                     showToast("You're coming")
                 }
                 await loadSocial()
@@ -665,6 +666,7 @@ struct FriendsShellView: View {
                     showToast("Plan removed")
                 } else {
                     _ = try await apiClient.toggleComing(venueID: group.venue.id, isComing: true, bearerToken: token)
+                    NightloopHaptics.success()
                     showToast("You're coming")
                 }
                 await loadSocial()

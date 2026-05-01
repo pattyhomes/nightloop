@@ -184,6 +184,20 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
     }
 
+    func testLandingMetricsRequestUsesPublicEndpoint() throws {
+        let client = NightloopAPIClient(baseURL: URL(string: "https://nightloop-production.up.railway.app/api/v1")!)
+        let request = try client.makeRequest(
+            path: "landing-metrics",
+            queryItems: [URLQueryItem(name: "market", value: "san-francisco")]
+        )
+
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://nightloop-production.up.railway.app/api/v1/landing-metrics?market=san-francisco"
+        )
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
     func testVenueRequestIncludesLocationOnlyWhenProvided() async throws {
         var requestIndex = 0
         URLProtocolMock.requestHandler = { request in
@@ -555,6 +569,21 @@ final class NightloopTests: XCTestCase {
     func testMapAllFilterLabelOmitsCount() {
         XCTAssertEqual(MapPulseFilterLabel.text(title: "All", count: 136), "All")
         XCTAssertEqual(MapPulseFilterLabel.text(title: "Active", count: 2), "Active 2")
+    }
+
+    func testMetricDisplayAvoidsFakeSignalCopy() {
+        XCTAssertEqual(MetricDisplay.compact(999), "999")
+        XCTAssertEqual(MetricDisplay.compact(1_200), "1.2k")
+        XCTAssertEqual(MetricDisplay.compact(2_000), "2k")
+    }
+
+    func testNightlifePreviewPolicyUsesDaytimeWindow() {
+        let formatter = ISO8601DateFormatter()
+        let noonUtc = formatter.date(from: "2026-05-01T19:00:00Z")!
+        let eveningUtc = formatter.date(from: "2026-05-02T03:00:00Z")!
+
+        XCTAssertTrue(NightlifePreviewPolicy.isPreview(now: noonUtc, timeZoneIdentifier: "America/Los_Angeles"))
+        XCTAssertFalse(NightlifePreviewPolicy.isPreview(now: eveningUtc, timeZoneIdentifier: "America/Los_Angeles"))
     }
 
     func testSignalVerificationTrayWaitsForCoordinateWhenAlreadyAuthorized() {

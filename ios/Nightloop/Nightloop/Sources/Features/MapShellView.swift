@@ -235,14 +235,21 @@ struct MapShellView: View {
     private var filterStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(MapPulseFilter.allCases) { filter in
-                    MapFilterPill(
-                        title: filter.label,
-                        count: filter.count(from: counts),
-                        color: filter.color,
-                        isSelected: selectedPulse == filter
-                    ) {
-                        selectedPulse = filter
+                if isTonightPreviewNow {
+                    MapPreviewPill(title: "All")
+                    MapPreviewPill(title: "expected tonight")
+                    MapPreviewPill(title: "opens later")
+                    MapPreviewPill(title: "source-backed")
+                } else {
+                    ForEach(MapPulseFilter.allCases) { filter in
+                        MapFilterPill(
+                            title: filter.label,
+                            count: filter.count(from: counts),
+                            color: filter.color,
+                            isSelected: selectedPulse == filter
+                        ) {
+                            selectedPulse = filter
+                        }
                     }
                 }
             }
@@ -257,6 +264,9 @@ struct MapShellView: View {
                 .frame(width: 42, height: 4)
                 .padding(.top, 9)
                 .padding(.bottom, sheetDetent == .peek ? 8 : 12)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .gesture(sheetDragGesture(height: height, availableHeight: availableHeight))
 
             if isLoading && venues.isEmpty {
                 LoadingStateView(title: "Loading the map")
@@ -319,20 +329,6 @@ struct MapShellView: View {
                 .stroke(NightloopTheme.hairline)
         }
         .shadow(color: .black.opacity(0.38), radius: 24, x: 0, y: -8)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    sheetDragTranslation = value.translation.height
-                }
-                .onEnded { value in
-                    let proposedHeight = height - value.predictedEndTranslation.height
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                        sheetDetent = MapSheetDetent.snap(to: proposedHeight, availableHeight: availableHeight)
-                        sheetDragTranslation = 0
-                    }
-                }
-        )
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: sheetDetent)
     }
 
@@ -460,6 +456,27 @@ struct MapShellView: View {
         }
     }
 
+    private var isTonightPreviewNow: Bool {
+        NightlifePreviewPolicy.isPreview(
+            now: Date(),
+            timeZoneIdentifier: marketConfig?.market.timezone ?? "America/Los_Angeles"
+        )
+    }
+
+    private func sheetDragGesture(height: CGFloat, availableHeight: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                sheetDragTranslation = value.translation.height
+            }
+            .onEnded { value in
+                let proposedHeight = height - value.predictedEndTranslation.height
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    sheetDetent = MapSheetDetent.snap(to: proposedHeight, availableHeight: availableHeight)
+                    sheetDragTranslation = 0
+                }
+            }
+    }
+
     private func load() async {
         guard authStore.config.isGoogleMapsConfigured else {
             isLoading = false
@@ -485,7 +502,7 @@ struct MapShellView: View {
                 marketID: marketID,
                 bearerToken: token,
                 limit: 100,
-                pulse: selectedPulse.apiValue,
+                pulse: isTonightPreviewNow ? nil : selectedPulse.apiValue,
                 userCoordinate: locationManager.userCoordinate
             )
 
@@ -580,6 +597,7 @@ struct MapShellView: View {
                 details: details
             )
             signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
+            NightloopHaptics.success()
             isSignalMenuOpen = false
             await load()
             if let updatedMe = try? await apiClient.me(bearerToken: token) {
@@ -904,6 +922,29 @@ private struct MapFilterPill: View {
     }
 }
 
+private struct MapPreviewPill: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(NightloopTheme.purple)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(NightloopTheme.ink)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
+        .background(NightloopTheme.surface.opacity(0.82))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(NightloopTheme.hairline)
+        }
+    }
+}
+
 private struct SelectedVenueMapCard: View {
     let venue: VenueItem
     let apiClient: NightloopAPIClient
@@ -1131,6 +1172,14 @@ private struct LocationPromptCard: View {
 enum MapPulseFilterLabel {
     static func text(title: String, count: Int) -> String {
         title == "All" ? title : "\(title) \(count)"
+    }
+}
+
+enum NightlifePreviewPolicy {
+    static func isPreview(now: Date, timeZoneIdentifier: String) -> Bool {
+        let timeZone = TimeZone(identifier: timeZoneIdentifier) ?? TimeZone(identifier: "America/Los_Angeles") ?? .current
+        let hour = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: now).hour ?? 12
+        return hour >= 3 && hour < 18
     }
 }
 

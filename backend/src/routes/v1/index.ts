@@ -20,6 +20,7 @@ import {
   REQUIRED_PREFERENCE_CATEGORIES
 } from "../../services/v1/accountService";
 import { getMarketConfig, listMarkets } from "../../services/v1/marketService";
+import { getLandingMetrics } from "../../services/v1/landingMetricsService";
 import { getVenue, listVenues } from "../../services/v1/venueService";
 import { listRecommendations } from "../../services/v1/recommendationService";
 import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
@@ -447,6 +448,14 @@ export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): R
     "/markets/:id/config",
     asyncHandler(async (req, res) => {
       res.json(await getMarketConfig(req.params.id));
+    })
+  );
+
+  router.get(
+    "/landing-metrics",
+    asyncHandler(async (req, res) => {
+      const market = typeof req.query.market === "string" ? req.query.market : "san-francisco";
+      res.json(await getLandingMetrics(market));
     })
   );
 

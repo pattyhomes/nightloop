@@ -381,6 +381,7 @@ struct VenueDetailView: View {
                 details: details
             )
             signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
+            NightloopHaptics.success()
             await load()
             if let updatedMe = try? await apiClient.me(bearerToken: token) {
                 onAccountChanged(updatedMe)

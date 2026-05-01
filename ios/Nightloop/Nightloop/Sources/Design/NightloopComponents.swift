@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct OrchidBackground: View {
     var animated: Bool = false
@@ -590,6 +591,16 @@ struct SignalButton: View {
         }
         .frame(maxWidth: .infinity)
         .buttonStyle(.plain)
+    }
+}
+
+enum NightloopHaptics {
+    static func commit() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    static func success() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 }
 

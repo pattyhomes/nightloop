@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AuthLandingView: View {
     @ObservedObject var authStore: AuthStore
+    let apiClient: NightloopAPIClient
     let message: String?
 
     @State private var phoneNumber = ""
@@ -11,9 +12,10 @@ struct AuthLandingView: View {
     @State private var isSendingPhoneCode = false
     @State private var isVerifyingPhoneCode = false
     @State private var authMessage: String?
+    @State private var landingMetrics: LandingMetricsResponse?
     @State private var currentAppleNonce: String?
     @State private var showDebugSignIn = false
-    @State private var showReviewerDemo = false
+    @State private var showEmailLogin = false
 
     var body: some View {
         ZStack {
@@ -40,12 +42,10 @@ struct AuthLandingView: View {
             DevSignInView(authStore: authStore, message: nil)
         }
         #endif
-        .sheet(isPresented: $showReviewerDemo) {
-            ReviewerDemoSignInView(
-                authStore: authStore,
-                emailHint: authStore.config.reviewerDemoEmailHint
-            )
+        .sheet(isPresented: $showEmailLogin) {
+            EmailPasswordSignInView(authStore: authStore)
         }
+        .task { await loadLandingMetrics() }
     }
 
     private var header: some View {
@@ -55,7 +55,7 @@ struct AuthLandingView: View {
                     .fill(NightloopTheme.rose)
                     .frame(width: 7, height: 7)
                     .shadow(color: NightloopTheme.rose.opacity(0.9), radius: 8)
-                Text("LIVE IN SF · TONIGHT")
+                Text("SF PREVIEW · NIGHTLOOP IS BUILDING")
                     .font(.caption2.weight(.black))
                     .tracking(1.6)
                     .foregroundStyle(NightloopTheme.rose)
@@ -79,7 +79,7 @@ struct AuthLandingView: View {
                     )
                 )
 
-            Text("A live read on every room in the city. Who's going off. Who's dead. Where your people are.")
+            Text("A sharper way to pick the night. Source-backed venues, trusted hours, and social plans without pretending the whole city is live at noon.")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(NightloopTheme.inkMuted)
                 .lineSpacing(4)
@@ -89,9 +89,20 @@ struct AuthLandingView: View {
 
     private var statsStrip: some View {
         HStack(spacing: 10) {
-            StatMiniCard(value: "142", label: "Spots live")
-            StatMiniCard(value: "38", label: "Packed now", color: NightloopTheme.rose)
-            StatMiniCard(value: "2.1k", label: "Signals · 1h", color: NightloopTheme.amber)
+            StatMiniCard(
+                value: MetricDisplay.compact(landingMetrics?.metrics.approvedPublicVenues ?? 100),
+                label: "SF venues"
+            )
+            StatMiniCard(
+                value: MetricDisplay.compact(landingMetrics?.metrics.approvedFutureVenueOwnedEvents ?? 4),
+                label: "Events queued",
+                color: NightloopTheme.rose
+            )
+            StatMiniCard(
+                value: MetricDisplay.compact(landingMetrics?.metrics.venueDatapoints ?? 240),
+                label: landingMetrics?.copy.venueDatapointsLabel ?? "Venue datapoints",
+                color: NightloopTheme.amber
+            )
         }
     }
 
@@ -100,24 +111,24 @@ struct AuthLandingView: View {
             VStack(spacing: 10) {
                 appleSignInControl
 
-                if authStore.config.reviewerDemoEnabled {
-                    Button {
-                        showReviewerDemo = true
-                    } label: {
-                        Label("Reviewer demo access", systemImage: "checkmark.seal.fill")
-                            .font(.subheadline.weight(.black))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(NightloopTheme.purple)
+                Button {
+                    showEmailLogin = true
+                } label: {
+                    Label("Log in", systemImage: "envelope.fill")
+                        .font(.subheadline.weight(.black))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
                 }
+                .buttonStyle(.bordered)
+                .tint(NightloopTheme.purple)
 
-                phoneFlow
+                if authStore.config.phoneAuthEnabled {
+                    phoneFlow
+                }
             }
 
             VStack(spacing: 10) {
-                Text("21+ · SF only · be cool to doors, tip bartenders")
+                Text("21+ · live first in SF · built for nights out, not doomscrolling")
                     .font(.caption2.weight(.semibold))
                     .tracking(0.3)
                     .foregroundStyle(NightloopTheme.inkDim)
@@ -218,11 +229,6 @@ struct AuthLandingView: View {
                             Task { await verifyPhoneCode() }
                         }
                     }
-                } else {
-                    AuthProviderPendingRow(
-                        title: "SMS setup pending",
-                        message: "Phone sign-in turns on after a Supabase SMS provider is configured."
-                    )
                 }
 
                 #if DEBUG
@@ -306,36 +312,37 @@ struct AuthLandingView: View {
         }
         return message
     }
+
+    private func loadLandingMetrics() async {
+        do {
+            landingMetrics = try await apiClient.landingMetrics()
+        } catch {
+            landingMetrics = nil
+        }
+    }
 }
 
-private struct ReviewerDemoSignInView: View {
+private struct EmailPasswordSignInView: View {
     @ObservedObject var authStore: AuthStore
-    let emailHint: String?
 
     @Environment(\.dismiss) private var dismiss
-    @State private var email: String
+    @State private var email = ""
     @State private var password = ""
     @State private var isSigningIn = false
     @State private var statusMessage: String?
 
-    init(authStore: AuthStore, emailHint: String?) {
-        self.authStore = authStore
-        self.emailHint = emailHint
-        _email = State(initialValue: emailHint ?? "")
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Reviewer demo")
+            Text("Log in")
                 .font(.title2.weight(.black))
                 .foregroundStyle(NightloopTheme.ink)
 
-            Text("Use the credentials from App Review notes to open the seeded TestFlight account.")
+            Text("Use your email and password to get back into nightloop.")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(NightloopTheme.inkMuted)
 
             if let statusMessage {
-                ErrorStateView(title: "Reviewer sign-in", message: statusMessage)
+                ErrorStateView(title: "Sign-in failed", message: statusMessage)
             }
 
             TextField("Email", text: $email)
@@ -391,8 +398,21 @@ private struct ReviewerDemoSignInView: View {
         case .failed(let message), .unconfigured(let message):
             statusMessage = message
         default:
-            statusMessage = "Reviewer sign-in could not complete. Please try again."
+            statusMessage = "Sign-in could not complete. Please try again."
         }
+    }
+}
+
+enum MetricDisplay {
+    static func compact(_ value: Int) -> String {
+        if value >= 1_000 {
+            let decimal = Double(value) / 1_000
+            if value % 1_000 == 0 {
+                return "\(Int(decimal))k"
+            }
+            return String(format: "%.1fk", decimal)
+        }
+        return "\(value)"
     }
 }
 
