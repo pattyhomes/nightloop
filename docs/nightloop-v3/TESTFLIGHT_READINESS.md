@@ -99,9 +99,32 @@ Important: there is no "hosted Express `.env` file" inside the repo. On Railway,
 Railway service settings:
 
 ```bash
-Build command: npm --prefix backend run build
-Start command: npm --prefix backend start
+Root directory: backend
+Build command: npm ci --include=dev && npm run build
+Start command: npm start
 ```
+
+Railway settings to use:
+
+- **Public networking:** enable this so the iOS app can reach the API. Current
+  Railway API base: `https://nightloop-production.up.railway.app`.
+- **Public port:** `8080` for the current Railway service.
+- **Regions and replicas:** one region and one replica is fine for TestFlight. Prefer
+  the default free/trial-supported region. Do not pay for multi-region yet.
+- **Builder:** leave the default Railway builder unless the deploy fails.
+- **Metal build environment:** okay to enable. It worked for the current backend
+  deploy.
+- **Custom build command:** set to `npm ci --include=dev && npm run build`.
+- **Watch paths:** leave blank for now.
+- **Custom start command:** set to `npm start`.
+- **Teardown:** leave off.
+- **Cron schedule:** leave blank. We are not scheduling hosted jobs yet.
+- **Healthcheck path:** `/health`; timeout `30` seconds.
+- **Serverless:** leave off. The API should stay warm for auth, SSE, and normal mobile
+  traffic.
+- **Restart policy:** `On Failure` is fine. The default retry count is fine.
+- **Railway config file / config-as-code:** leave unset for now.
+- **Feature flags:** leave unchanged unless a deploy error specifically points to one.
 
 Required Railway/backend env vars:
 
@@ -109,6 +132,7 @@ Required Railway/backend env vars:
 NODE_ENV=production
 DATABASE_URL=<Pro Supabase Postgres URL>
 SUPABASE_PROJECT_URL=<Pro Supabase project URL>
+SUPABASE_JWT_ISSUER=<Pro Supabase project URL>/auth/v1
 SUPABASE_JWKS_URL=<Pro Supabase project URL>/auth/v1/.well-known/jwks.json
 SUPABASE_SERVICE_ROLE_KEY=<Pro Supabase service role key>
 NOTIFICATION_DELIVERY_MODE=apns
@@ -159,21 +183,37 @@ Where: Vercel or whatever hosts the `frontend` app.
 
 Goal: App Store Connect and the backend need public legal/support URLs.
 
+Current Vercel production URL:
+
+```bash
+https://frontend-charlie-axelbaum.vercel.app
+```
+
 Deploy the frontend and confirm these pages load over HTTPS:
 
-- `/privacy`
-- `/terms`
-- `/support`
-- `/delete-account`
-- `/accessibility`
+- `https://frontend-charlie-axelbaum.vercel.app/privacy`
+- `https://frontend-charlie-axelbaum.vercel.app/terms`
+- `https://frontend-charlie-axelbaum.vercel.app/support`
+- `https://frontend-charlie-axelbaum.vercel.app/delete-account`
+- `https://frontend-charlie-axelbaum.vercel.app/accessibility`
 
 Then paste those full URLs into the hosted backend env vars:
 
-- `NIGHTLOOP_PRIVACY_URL`
-- `NIGHTLOOP_TERMS_URL`
-- `NIGHTLOOP_SUPPORT_URL`
-- `NIGHTLOOP_DELETE_ACCOUNT_URL`
-- `NIGHTLOOP_ACCESSIBILITY_URL`
+- `NIGHTLOOP_PRIVACY_URL=https://frontend-charlie-axelbaum.vercel.app/privacy`
+- `NIGHTLOOP_TERMS_URL=https://frontend-charlie-axelbaum.vercel.app/terms`
+- `NIGHTLOOP_SUPPORT_URL=https://frontend-charlie-axelbaum.vercel.app/support`
+- `NIGHTLOOP_DELETE_ACCOUNT_URL=https://frontend-charlie-axelbaum.vercel.app/delete-account`
+- `NIGHTLOOP_ACCESSIBILITY_URL=https://frontend-charlie-axelbaum.vercel.app/accessibility`
+
+Also add/check these hosted backend variables during the Vercel/public setup pass:
+
+- `REVIEWER_AUTH_USER_ID`
+- `GOOGLE_PLACES_API_KEY`
+- `FOURSQUARE_API_KEY`
+
+`GOOGLE_PLACES_API_KEY` and `FOURSQUARE_API_KEY` are backend-only. They belong in
+Railway if hosted enrichment/audits need them, never in iOS. Foursquare remains
+optional while it is on the backburner.
 
 ## Step 5: Reviewer Account
 
