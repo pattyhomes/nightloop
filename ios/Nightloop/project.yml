@@ -46,6 +46,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         DEVELOPMENT_TEAM: HFAR6K43RC
         CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: 1
       configs:
         Debug:
           INFOPLIST_FILE: Nightloop/Resources/Info-Debug.plist
