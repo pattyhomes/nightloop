@@ -67,7 +67,7 @@ struct FriendsShellView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
-                .padding(.bottom, 18)
+                .padding(.bottom, BottomContentInsets.scrollBottomPadding())
             }
 
             if let toastMessage {

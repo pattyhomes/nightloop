@@ -566,6 +566,103 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(HomePulseFilterLabel.text(title: "Packed", count: 2), "Packed · 2")
     }
 
+    func testBottomContentInsetsClearCustomTabBar() {
+        XCTAssertEqual(BottomContentInsets.scrollBottomPadding(tabBarHeight: 82, safeAreaBottom: 34), 140)
+    }
+
+    func testPreviewFilterLabelsAndPredicates() {
+        XCTAssertEqual(PreviewFilterPolicy.allCases.map(\.label), ["All", "expected", "opens later", "source-backed"])
+
+        let opensLater = Self.venueFixture(
+            id: "venue-opens",
+            name: "Opens Later",
+            latitude: 37.2,
+            longitude: -122.2,
+            score: 55,
+            level: 1,
+            livenessState: .opensLater
+        )
+        let live = Self.venueFixture(
+            id: "venue-live",
+            name: "Live",
+            latitude: 37.3,
+            longitude: -122.3,
+            score: 85,
+            level: 3,
+            livenessState: .live
+        )
+
+        XCTAssertTrue(PreviewFilterPolicy.expected.matches(opensLater))
+        XCTAssertTrue(PreviewFilterPolicy.opensLater.matches(opensLater))
+        XCTAssertFalse(PreviewFilterPolicy.opensLater.matches(live))
+        XCTAssertTrue(PreviewFilterPolicy.sourceBacked.matches(live, expectedPulseBasis: ["source-backed hours"]))
+    }
+
+    func testVenueActionPolicySeparatesPreviewGoingFromLiveSignals() {
+        let opensLater = Self.venueFixture(
+            id: "venue-opens",
+            name: "Opens Later",
+            latitude: 37.2,
+            longitude: -122.2,
+            score: 55,
+            level: 1,
+            livenessState: .opensLater
+        )
+        let live = Self.venueFixture(
+            id: "venue-live",
+            name: "Live",
+            latitude: 37.3,
+            longitude: -122.3,
+            score: 85,
+            level: 3,
+            livenessState: .live
+        )
+
+        XCTAssertEqual(VenueActionPolicy.primaryAction(for: opensLater, isTonightPreview: true), .going(title: "I'm going"))
+        XCTAssertEqual(VenueActionPolicy.primaryAction(for: live, isTonightPreview: true), .signal(title: "Report live signal"))
+        XCTAssertTrue(VenueActionPolicy.allowsLiveSignal(for: live))
+        XCTAssertFalse(VenueActionPolicy.allowsLiveSignal(for: opensLater))
+    }
+
+    func testVenueArtPolicyHidesCreditOnSmallCards() {
+        let asset = VenueAsset(
+            id: "asset-1",
+            assetType: "image",
+            url: "https://example.com/venue.jpg",
+            altText: "Venue room",
+            creditText: "Venue press kit",
+            creditUrl: nil,
+            licenseName: "Owned",
+            licenseUrl: nil,
+            rightsStatus: "owned",
+            source: "venue_media"
+        )
+
+        XCTAssertFalse(VenueArtPolicy.presentation(placement: .row, asset: asset).shouldShowCredit)
+        XCTAssertFalse(VenueArtPolicy.presentation(placement: .card, asset: asset).shouldShowCredit)
+        XCTAssertTrue(VenueArtPolicy.presentation(placement: .hero, asset: asset).shouldShowCredit)
+        XCTAssertTrue(VenueArtPolicy.presentation(placement: .detail, asset: asset).shouldShowCredit)
+        XCTAssertTrue(VenueArtPolicy.presentation(placement: .detail, asset: nil).shouldPreferFallback)
+    }
+
+    func testAuthLandingProofLineUsesCompactMetrics() {
+        let metrics = LandingMetrics(
+            approvedPublicVenues: 136,
+            approvedFutureVenueOwnedEvents: 129,
+            usableHoursEvidence: 288,
+            venueDatapoints: 553
+        )
+
+        XCTAssertEqual(
+            AuthLandingProofLine.text(metrics: metrics),
+            "136 SF venues · 129 future events · 553 venue datapoints"
+        )
+        XCTAssertEqual(
+            AuthLandingProofLine.text(metrics: nil),
+            "136 SF venues · 129 future events · 553 venue datapoints"
+        )
+    }
+
     func testMapAllFilterLabelOmitsCount() {
         XCTAssertEqual(MapPulseFilterLabel.text(title: "All", count: 136), "All")
         XCTAssertEqual(MapPulseFilterLabel.text(title: "Active", count: 2), "Active 2")
@@ -717,6 +814,25 @@ final class NightloopTests: XCTestCase {
         )
     }
 
+    func testDecisionEntrySurfacePolicyKeepsLoadingDistinct() {
+        XCTAssertEqual(
+            DecisionEntrySurfacePolicy.mode(isLoading: true, hasActiveRoom: false, isLobbyOpen: false),
+            .loading
+        )
+        XCTAssertEqual(
+            DecisionEntrySurfacePolicy.mode(isLoading: false, hasActiveRoom: false, isLobbyOpen: false),
+            .noRoom
+        )
+        XCTAssertEqual(
+            DecisionEntrySurfacePolicy.mode(isLoading: false, hasActiveRoom: true, isLobbyOpen: false),
+            .activeRoom
+        )
+        XCTAssertEqual(
+            DecisionEntrySurfacePolicy.mode(isLoading: false, hasActiveRoom: true, isLobbyOpen: true),
+            .lobby
+        )
+    }
+
     func testFriendsReactionOptionsAreCompactAndNightlifeRelevant() {
         XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.label), ["Packed", "Walking", "Music"])
         XCTAssertEqual(FriendsReactionOption.defaultOptions.map(\.emoji), ["🔥", "🚶", "🎧"])
@@ -758,6 +874,15 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(MapSheetDetent.snap(to: 690, availableHeight: availableHeight), .full)
         XCTAssertLessThan(MapSheetDetent.peek.height(for: availableHeight), MapSheetDetent.half.height(for: availableHeight))
         XCTAssertLessThan(MapSheetDetent.half.height(for: availableHeight), MapSheetDetent.full.height(for: availableHeight))
+    }
+
+    func testMapSheetDragStateKeepsSettledVenueLimitWhileDragging() {
+        let dragging = MapSheetDragState(settledDetent: .peek, translation: -180)
+
+        XCTAssertTrue(dragging.isDragging)
+        XCTAssertEqual(dragging.venueLimit, 2)
+        XCTAssertEqual(MapSheetDragState.venueLimit(for: .half), 20)
+        XCTAssertEqual(MapSheetDragState.venueLimit(for: .full), 60)
     }
 
     func testMapOverlayLayoutFollowsSheetHeight() {

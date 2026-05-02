@@ -93,7 +93,7 @@ struct VenueDetailView: View {
 
     private func detailHero(_ venue: VenueItem) -> some View {
         ZStack(alignment: .bottomLeading) {
-            VenueArtView(venue: venue, height: 340, cornerRadius: 0)
+            VenueArtView(venue: venue, height: 340, cornerRadius: 0, placement: .detail)
                 .overlay(
                     LinearGradient(
                         colors: [.black.opacity(0.08), NightloopTheme.background.opacity(0.92)],
@@ -139,26 +139,54 @@ struct VenueDetailView: View {
 
     @ViewBuilder
     private func signalVerificationSection(_ venue: VenueItem) -> some View {
-        let status = signalStatus(for: venue)
-        if SignalVerificationTrayVisibility.shouldShow(
-            status: status,
-            isAuthorized: locationManager.isAuthorized,
-            isDenied: locationManager.isDenied
-        ) {
-            SignalVerificationTray(
-                venue: venue,
+        switch VenueActionPolicy.primaryAction(for: venue, isTonightPreview: venue.liveness?.state != .live) {
+        case .signal:
+            let status = signalStatus(for: venue)
+            if SignalVerificationTrayVisibility.shouldShow(
                 status: status,
-                isDenied: locationManager.isDenied,
-                locationError: locationManager.locationError,
-                submittingSignal: submittingSignal,
-                verify: { locationManager.requestLocationAccess() },
-                submit: { kind in
-                    Task { await submitSignal(venueID: venue.id, kind: kind) }
-                },
-                moreDetails: {
-                    isShowingDetailedReport = true
+                isAuthorized: locationManager.isAuthorized,
+                isDenied: locationManager.isDenied
+            ) {
+                SignalVerificationTray(
+                    venue: venue,
+                    status: status,
+                    isDenied: locationManager.isDenied,
+                    locationError: locationManager.locationError,
+                    submittingSignal: submittingSignal,
+                    verify: { locationManager.requestLocationAccess() },
+                    submit: { kind in
+                        Task { await submitSignal(venueID: venue.id, kind: kind) }
+                    },
+                    moreDetails: {
+                        isShowingDetailedReport = true
+                    }
+                )
+            }
+        case .going(let title):
+            NightloopCard(fill: NightloopTheme.purpleSoft) {
+                VStack(alignment: .leading, spacing: 12) {
+                    NightloopSectionHeader(title: "Planning tonight")
+                    Text(VenueActionPolicy.offHoursSignalCopy)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                    Button {
+                        Task { await submitGoing(venueID: venue.id) }
+                    } label: {
+                        Label(title, systemImage: "figure.walk")
+                            .font(.subheadline.weight(.black))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(NightloopTheme.fab)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(submittingSignal != nil)
                 }
-            )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .unavailable(let message):
+            EmptyStateView(title: "Signals later", message: message)
         }
     }
 
@@ -361,6 +389,10 @@ struct VenueDetailView: View {
     private func submitSignal(venueID: String, kind: SignalKind, details: SignalDetails? = nil) async {
         guard let token = authStore.accessToken else { return }
         guard let venue else { return }
+        guard VenueActionPolicy.allowsLiveSignal(for: venue) else {
+            signalMessage = VenueActionPolicy.offHoursSignalCopy
+            return
+        }
         guard let userCoordinate = locationManager.userCoordinate else {
             signalMessage = "Share location to verify you're at \(venue.name)."
             locationManager.requestLocationAccess()
@@ -386,6 +418,20 @@ struct VenueDetailView: View {
             if let updatedMe = try? await apiClient.me(bearerToken: token) {
                 onAccountChanged(updatedMe)
             }
+        } catch {
+            signalMessage = error.localizedDescription
+        }
+        submittingSignal = nil
+    }
+
+    private func submitGoing(venueID: String) async {
+        guard let token = authStore.accessToken else { return }
+
+        submittingSignal = .eventLive
+        do {
+            _ = try await apiClient.toggleComing(venueID: venueID, isComing: true, bearerToken: token)
+            signalMessage = "You're going"
+            NightloopHaptics.success()
         } catch {
             signalMessage = error.localizedDescription
         }

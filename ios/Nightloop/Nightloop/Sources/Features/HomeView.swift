@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var markets: [Market] = []
     @State private var selectedMarketID: String?
     @State private var selectedPulse: PulseFilter?
+    @State private var selectedPreviewFilter: PreviewFilterPolicy = .all
     @State private var recommendationFeed: RecommendationListResponse?
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -26,7 +27,13 @@ struct HomeView: View {
     }
 
     private var heroRecommendation: RecommendationItem? {
-        recommendationFeed?.items.first { $0.venue.liveness?.state != .closedToday }
+        displayedRecommendationItems.first { $0.venue.liveness?.state != .closedToday }
+    }
+
+    private var displayedRecommendationItems: [RecommendationItem] {
+        guard let recommendationFeed else { return [] }
+        guard recommendationFeed.mode == "tonight_preview" else { return recommendationFeed.items }
+        return recommendationFeed.items.filter { selectedPreviewFilter.matches($0) }
     }
 
     var body: some View {
@@ -58,7 +65,7 @@ struct HomeView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
-                .padding(.bottom, 18)
+                .padding(.bottom, BottomContentInsets.scrollBottomPadding())
             }
 
             if let signalMessage {
@@ -187,11 +194,24 @@ struct HomeView: View {
     private func previewStrip(feed: RecommendationListResponse) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                PreviewPill(title: "All")
-                PreviewPill(title: "\(feed.items.filter { $0.venue.liveness?.state != .closedToday }.count) expected")
-                PreviewPill(title: "\(feed.items.filter { $0.venue.liveness?.state == .opensLater }.count) opens later")
-                PreviewPill(title: "source-backed")
+                ForEach(PreviewFilterPolicy.allCases) { filter in
+                    PreviewPill(
+                        title: previewTitle(filter, feed: feed),
+                        isSelected: selectedPreviewFilter == filter
+                    ) {
+                        selectedPreviewFilter = filter
+                    }
+                }
             }
+        }
+    }
+
+    private func previewTitle(_ filter: PreviewFilterPolicy, feed: RecommendationListResponse) -> String {
+        switch filter {
+        case .all:
+            return filter.label
+        case .expected, .opensLater, .sourceBacked:
+            return "\(filter.count(in: feed.items)) \(filter.label)"
         }
     }
 
@@ -230,7 +250,7 @@ struct HomeView: View {
         } label: {
             VStack(spacing: 0) {
                 ZStack(alignment: .topLeading) {
-                    VenueArtView(venue: venue, height: 200, cornerRadius: 0)
+                    VenueArtView(venue: venue, height: 200, cornerRadius: 0, placement: .hero)
                     HStack(spacing: 6) {
                         LivenessChip(liveness: venue.liveness)
                         Text("#1 tonight")
@@ -299,7 +319,7 @@ struct HomeView: View {
     @ViewBuilder
     private func recommendationSections(feed: RecommendationListResponse) -> some View {
         let heroID = heroRecommendation?.venue.id
-        let remaining = feed.items.filter { $0.venue.id != heroID }
+        let remaining = displayedRecommendationItems.filter { $0.venue.id != heroID }
         let high = remaining.filter { $0.confidence == .high && $0.venue.liveness?.state != .closedToday }
         let medium = remaining.filter { ($0.confidence ?? $0.venue.liveness?.confidence) == .medium && $0.venue.liveness?.state != .closedToday }
         let review = remaining.filter {
@@ -404,24 +424,29 @@ private struct FilterPill: View {
 
 private struct PreviewPill: View {
     let title: String
+    let isSelected: Bool
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(NightloopTheme.purple)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .font(.caption2.weight(.bold))
-                .textCase(.lowercase)
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isSelected ? NightloopTheme.rose : NightloopTheme.purple)
+                    .frame(width: 6, height: 6)
+                Text(title)
+                    .font(.caption2.weight(.bold))
+                    .textCase(.lowercase)
+            }
+            .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(isSelected ? .white : Color.white.opacity(0.055))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(isSelected ? .white.opacity(0.8) : NightloopTheme.hairline)
+            }
         }
-        .foregroundStyle(NightloopTheme.ink)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(Color.white.opacity(0.055))
-        .clipShape(Capsule())
-        .overlay {
-            Capsule().stroke(NightloopTheme.hairline)
-        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -435,9 +460,14 @@ struct VenueArtView: View {
     let venue: VenueItem
     var height: CGFloat = 132
     var cornerRadius: CGFloat = NightloopTheme.cornerMedium
+    var placement: VenueArtPlacement = .card
+
+    private var presentation: VenueArtPresentation {
+        VenueArtPolicy.presentation(placement: placement, asset: venue.image)
+    }
 
     var body: some View {
-        if let urlString = venue.image?.url, let url = URL(string: urlString) {
+        if !presentation.shouldPreferFallback, let urlString = venue.image?.url, let url = URL(string: urlString) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
@@ -448,10 +478,15 @@ struct VenueArtView: View {
                         .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                         .overlay(alignment: .bottomLeading) {
-                            Text(venue.image?.creditText ?? "")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(NightloopTheme.inkMuted)
-                                .padding(8)
+                            if presentation.shouldShowCredit, let credit = venue.image?.creditText, !credit.isEmpty {
+                                Text(credit)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(NightloopTheme.inkMuted)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(Color.black.opacity(0.32), in: Capsule())
+                                    .padding(8)
+                            }
                         }
                 default:
                     fallback
@@ -530,7 +565,7 @@ private struct VenueRow: View {
     var body: some View {
         HStack(spacing: 12) {
             if venue.image?.url != nil {
-                VenueArtView(venue: venue, height: 58, cornerRadius: 10)
+                VenueArtView(venue: venue, height: 58, cornerRadius: 10, placement: .row)
                     .frame(width: 58, height: 58)
                     .clipped()
             } else {

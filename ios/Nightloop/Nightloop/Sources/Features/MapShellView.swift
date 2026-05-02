@@ -15,6 +15,7 @@ struct MapShellView: View {
     @State private var venues: [VenueItem] = []
     @State private var counts: VenueCounts?
     @State private var selectedPulse: MapPulseFilter = .all
+    @State private var selectedPreviewFilter: PreviewFilterPolicy = .all
     @State private var selectedVenueID: String?
     @State private var camera: GoogleMapCamera = .sanFrancisco
     @State private var errorMessage: String?
@@ -39,7 +40,8 @@ struct MapShellView: View {
     }
 
     private var rankedVenues: [VenueItem] {
-        MapVenueFilter.rankedVenues(from: venues)
+        let base = isTonightPreviewNow ? venues.filter { selectedPreviewFilter.matches($0) } : venues
+        return MapVenueFilter.rankedVenues(from: base)
     }
 
     var body: some View {
@@ -236,10 +238,14 @@ struct MapShellView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 if isTonightPreviewNow {
-                    MapPreviewPill(title: "All")
-                    MapPreviewPill(title: "expected tonight")
-                    MapPreviewPill(title: "opens later")
-                    MapPreviewPill(title: "source-backed")
+                    ForEach(PreviewFilterPolicy.allCases) { filter in
+                        MapPreviewPill(
+                            title: mapPreviewTitle(filter),
+                            isSelected: selectedPreviewFilter == filter
+                        ) {
+                            selectedPreviewFilter = filter
+                        }
+                    }
                 } else {
                     ForEach(MapPulseFilter.allCases) { filter in
                         MapFilterPill(
@@ -283,8 +289,9 @@ struct MapShellView: View {
                         onAccountChanged: onAccountChanged,
                         isSubmittingSignal: isSubmittingSignal,
                         isCompact: sheetDetent == .peek,
+                        primaryActionTitle: selectedVenuePrimaryActionTitle,
                         submitPacked: {
-                            Task { await submitSignal(kind: .packed) }
+                            Task { await submitSelectedVenuePrimaryAction() }
                         }
                     )
                     .padding(.horizontal, 18)
@@ -309,7 +316,7 @@ struct MapShellView: View {
                     }
                     .padding(.horizontal, 18)
                     .padding(.top, 8)
-                    .padding(.bottom, 18)
+                    .padding(.bottom, BottomContentInsets.scrollBottomPadding())
                 }
                 .frame(maxHeight: listMaxHeight(for: height))
             }
@@ -330,35 +337,70 @@ struct MapShellView: View {
         }
         .shadow(color: .black.opacity(0.38), radius: 24, x: 0, y: -8)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: sheetDetent)
+        .contentShape(Rectangle())
+        .simultaneousGesture(sheetDragGesture(height: height, availableHeight: availableHeight))
     }
 
+    private func mapPreviewTitle(_ filter: PreviewFilterPolicy) -> String {
+        switch filter {
+        case .all:
+            return filter.label
+        case .expected, .opensLater, .sourceBacked:
+            return "\(filter.count(in: venues)) \(filter.label)"
+        }
+    }
+
+    @ViewBuilder
     private var signalFAB: some View {
-        Button {
-            guard selectedVenue != nil else { return }
-            guard canSignalSelectedVenue else {
-                verifySelectedVenueForSignal()
-                return
-            }
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                isSignalMenuOpen.toggle()
-            }
-        } label: {
-            Image(systemName: isSignalMenuOpen ? "xmark" : "plus")
-                .font(.system(size: 22, weight: .black))
-                .foregroundStyle(.white)
-                .frame(width: 60, height: 60)
-                .background(NightloopTheme.fab)
-                .clipShape(Circle())
-                .shadow(color: NightloopTheme.fabGlow, radius: 26, x: 0, y: 10)
-                .overlay {
-                    Circle()
-                        .stroke(NightloopTheme.fab.opacity(0.28), lineWidth: 8)
+        if selectedVenueRequiresGoingAction {
+            goingFAB
+        } else {
+            Button {
+                guard selectedVenue != nil else { return }
+                guard canSignalSelectedVenue else {
+                    verifySelectedVenueForSignal()
+                    return
                 }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    isSignalMenuOpen.toggle()
+                }
+            } label: {
+                Image(systemName: isSignalMenuOpen ? "xmark" : "plus")
+                    .font(.system(size: 22, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 60, height: 60)
+                    .background(NightloopTheme.fab)
+                    .clipShape(Circle())
+                    .shadow(color: NightloopTheme.fabGlow, radius: 26, x: 0, y: 10)
+                    .overlay {
+                        Circle()
+                            .stroke(NightloopTheme.fab.opacity(0.28), lineWidth: 8)
+                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedVenue == nil)
+            .opacity(selectedVenue == nil ? 0.5 : 1)
+            .accessibilityLabel("Report a signal for the selected venue")
+        }
+    }
+
+    private var goingFAB: some View {
+        Button {
+            Task { await submitGoingForSelectedVenue() }
+        } label: {
+            Label("I'm going", systemImage: "figure.walk")
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .background(NightloopTheme.fab)
+                .clipShape(Capsule())
+                .shadow(color: NightloopTheme.fabGlow, radius: 22, x: 0, y: 8)
         }
         .buttonStyle(.plain)
-        .disabled(selectedVenue == nil)
+        .disabled(selectedVenue == nil || isSubmittingSignal)
         .opacity(selectedVenue == nil ? 0.5 : 1)
-        .accessibilityLabel("Report a signal for the selected venue")
+        .accessibilityLabel("Mark selected venue as I'm going")
     }
 
     private var signalMenu: some View {
@@ -430,11 +472,7 @@ struct MapShellView: View {
     }
 
     private var sheetVenueLimit: Int {
-        switch sheetDetent {
-        case .peek: return 2
-        case .half: return 20
-        case .full: return 60
-        }
+        MapSheetDragState.venueLimit(for: sheetDetent)
     }
 
     private func interactiveSheetHeight(for availableHeight: CGFloat) -> CGFloat {
@@ -574,6 +612,11 @@ struct MapShellView: View {
     private func submitSignal(kind: SignalKind, details: SignalDetails? = nil) async {
         guard let selectedVenue, let token = authStore.accessToken else { return }
         guard !isSubmittingSignal else { return }
+        guard VenueActionPolicy.allowsLiveSignal(for: selectedVenue) else {
+            signalMessage = VenueActionPolicy.offHoursSignalCopy
+            isSignalMenuOpen = false
+            return
+        }
         guard let userCoordinate = locationManager.userCoordinate else {
             verifySelectedVenueForSignal()
             return
@@ -627,6 +670,7 @@ struct MapShellView: View {
 
     private var canSignalSelectedVenue: Bool {
         guard let selectedVenue else { return false }
+        guard VenueActionPolicy.allowsLiveSignal(for: selectedVenue) else { return false }
         return SignalProximity.status(
             userCoordinate: locationManager.userCoordinate,
             venueCoordinate: selectedVenue.coordinate
@@ -635,6 +679,11 @@ struct MapShellView: View {
 
     private func verifySelectedVenueForSignal() {
         guard let selectedVenue else { return }
+        guard VenueActionPolicy.allowsLiveSignal(for: selectedVenue) else {
+            signalMessage = VenueActionPolicy.offHoursSignalCopy
+            isSignalMenuOpen = false
+            return
+        }
         switch SignalProximity.status(userCoordinate: locationManager.userCoordinate, venueCoordinate: selectedVenue.coordinate) {
         case .needsLocation:
             signalMessage = nil
@@ -646,6 +695,54 @@ struct MapShellView: View {
         case .verified:
             break
         }
+    }
+
+    private var selectedVenueRequiresGoingAction: Bool {
+        guard let selectedVenue else { return false }
+        if case .going = VenueActionPolicy.primaryAction(for: selectedVenue, isTonightPreview: isTonightPreviewNow) {
+            return true
+        }
+        return false
+    }
+
+    private var selectedVenuePrimaryActionTitle: String {
+        guard let selectedVenue else { return "Packed" }
+        switch VenueActionPolicy.primaryAction(for: selectedVenue, isTonightPreview: isTonightPreviewNow) {
+        case .signal:
+            return "Packed"
+        case .going(let title):
+            return title
+        case .unavailable:
+            return "Signals later"
+        }
+    }
+
+    private func submitSelectedVenuePrimaryAction() async {
+        guard let selectedVenue else { return }
+        switch VenueActionPolicy.primaryAction(for: selectedVenue, isTonightPreview: isTonightPreviewNow) {
+        case .signal:
+            await submitSignal(kind: .packed)
+        case .going:
+            await submitGoingForSelectedVenue()
+        case .unavailable(let message):
+            signalMessage = message
+        }
+    }
+
+    private func submitGoingForSelectedVenue() async {
+        guard let selectedVenue, let token = authStore.accessToken else { return }
+        guard !isSubmittingSignal else { return }
+
+        isSubmittingSignal = true
+        do {
+            _ = try await apiClient.toggleComing(venueID: selectedVenue.id, isComing: true, bearerToken: token)
+            signalMessage = "You're going"
+            NightloopHaptics.success()
+            isSignalMenuOpen = false
+        } catch {
+            signalMessage = error.localizedDescription
+        }
+        isSubmittingSignal = false
     }
 }
 
@@ -731,11 +828,12 @@ private struct GoogleNightloopMapView: UIViewRepresentable {
         }
 
         func applyPadding(bottomSheetHeight: CGFloat, to mapView: GMSMapView) {
-            guard appliedBottomSheetHeight.map({ abs($0 - bottomSheetHeight) > 0.5 }) ?? true else {
+            guard appliedBottomSheetHeight.map({ abs($0 - bottomSheetHeight) > 2 }) ?? true else {
                 return
             }
-            appliedBottomSheetHeight = bottomSheetHeight
-            mapView.padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: bottomSheetHeight)
+            let smoothedHeight = appliedBottomSheetHeight.map { $0 + (bottomSheetHeight - $0) * 0.45 } ?? bottomSheetHeight
+            appliedBottomSheetHeight = smoothedHeight
+            mapView.padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: smoothedHeight)
         }
 
         func syncMarkers(_ markers: [VenueMapMarker], selectedVenueID: String?, on mapView: GMSMapView) {
@@ -924,24 +1022,29 @@ private struct MapFilterPill: View {
 
 private struct MapPreviewPill: View {
     let title: String
+    let isSelected: Bool
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(NightloopTheme.purple)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .font(.caption.weight(.bold))
-                .lineLimit(1)
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isSelected ? NightloopTheme.rose : NightloopTheme.purple)
+                    .frame(width: 6, height: 6)
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(isSelected ? .white : NightloopTheme.surface.opacity(0.82))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(isSelected ? .white.opacity(0.8) : NightloopTheme.hairline)
+            }
         }
-        .foregroundStyle(NightloopTheme.ink)
-        .padding(.horizontal, 13)
-        .padding(.vertical, 8)
-        .background(NightloopTheme.surface.opacity(0.82))
-        .clipShape(Capsule())
-        .overlay {
-            Capsule().stroke(NightloopTheme.hairline)
-        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -952,6 +1055,7 @@ private struct SelectedVenueMapCard: View {
     let onAccountChanged: (MeResponse) -> Void
     let isSubmittingSignal: Bool
     let isCompact: Bool
+    let primaryActionTitle: String
     let submitPacked: () -> Void
 
     var body: some View {
@@ -1012,7 +1116,7 @@ private struct SelectedVenueMapCard: View {
                     .buttonStyle(.plain)
 
                     Button(action: submitPacked) {
-                        Label("Packed", systemImage: "flame.fill")
+                        Label(primaryActionTitle, systemImage: primaryActionTitle == "I'm going" ? "figure.walk" : "flame.fill")
                             .font(.subheadline.weight(.black))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)

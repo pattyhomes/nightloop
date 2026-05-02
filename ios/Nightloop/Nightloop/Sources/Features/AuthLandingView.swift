@@ -24,7 +24,7 @@ struct AuthLandingView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     header
-                    statsStrip
+                    proofLine
                     authPanel
 
                     if let message = authMessage ?? message {
@@ -87,23 +87,21 @@ struct AuthLandingView: View {
         }
     }
 
-    private var statsStrip: some View {
-        HStack(spacing: 10) {
-            StatMiniCard(
-                value: MetricDisplay.compact(landingMetrics?.metrics.approvedPublicVenues ?? 100),
-                label: "SF venues"
-            )
-            StatMiniCard(
-                value: MetricDisplay.compact(landingMetrics?.metrics.approvedFutureVenueOwnedEvents ?? 4),
-                label: "Events queued",
-                color: NightloopTheme.rose
-            )
-            StatMiniCard(
-                value: MetricDisplay.compact(landingMetrics?.metrics.venueDatapoints ?? 240),
-                label: landingMetrics?.copy.venueDatapointsLabel ?? "Venue datapoints",
-                color: NightloopTheme.amber
-            )
-        }
+    private var proofLine: some View {
+        Text(AuthLandingProofLine.text(metrics: landingMetrics?.metrics))
+            .font(.caption.weight(.black))
+            .foregroundStyle(NightloopTheme.ink)
+            .lineLimit(2)
+            .minimumScaleFactor(0.82)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(NightloopTheme.hairline)
+            }
     }
 
     private var authPanel: some View {
@@ -138,7 +136,7 @@ struct AuthLandingView: View {
                 Button {
                     showDebugSignIn = true
                 } label: {
-                    Label("Developer testing", systemImage: "hammer.fill")
+                    Label("Internal access", systemImage: "hammer.fill")
                         .font(.caption.weight(.black))
                         .foregroundStyle(NightloopTheme.inkMuted)
                         .padding(.horizontal, 12)
@@ -319,6 +317,15 @@ struct AuthLandingView: View {
         } catch {
             landingMetrics = nil
         }
+    }
+}
+
+enum AuthLandingProofLine {
+    static func text(metrics: LandingMetrics?) -> String {
+        let venues = metrics?.approvedPublicVenues ?? 136
+        let events = metrics?.approvedFutureVenueOwnedEvents ?? 129
+        let datapoints = metrics?.venueDatapoints ?? 553
+        return "\(venues) SF venues · \(events) future events · \(datapoints) venue datapoints"
     }
 }
 

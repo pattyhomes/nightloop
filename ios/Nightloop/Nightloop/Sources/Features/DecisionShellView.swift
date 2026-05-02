@@ -45,6 +45,7 @@ struct DecisionShellView: View {
     @State private var showingJoinSheet = false
     @State private var showingRoomsSheet = false
     @State private var showingSuggestionSheet = false
+    @State private var showingTuneSheet = false
     @State private var showingChatSheet = false
     @State private var showingProgressSheet = false
     @State private var showingRoomActionsSheet = false
@@ -84,7 +85,7 @@ struct DecisionShellView: View {
                 mainContent
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
-                    .padding(.bottom, 22)
+                    .padding(.bottom, BottomContentInsets.scrollBottomPadding())
             }
             .refreshable { await loadDecision() }
 
@@ -126,6 +127,15 @@ struct DecisionShellView: View {
                 createSection.padding(20)
             }
             .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingTuneSheet) {
+            DecisionTuneRoomSheet(
+                neighborhood: $neighborhoodFilter,
+                vibe: $categoryFilter,
+                pulse: $pulseFilter
+            )
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingJoinSheet) {
@@ -345,7 +355,7 @@ struct DecisionShellView: View {
         case .stopped where activeRoomStreamKey != nil:
             realtimeFallbackRow(
                 title: "Manual refresh",
-                message: "Pull to refresh if updates look stale."
+                message: "Pull to refresh for the latest room updates."
             )
         default:
             EmptyView()
@@ -404,7 +414,7 @@ struct DecisionShellView: View {
                     Button {
                         showingCreateSheet = true
                     } label: {
-                        Label("Create room", systemImage: "sparkles")
+                        Label("Invite friends", systemImage: "person.crop.circle.badge.plus")
                             .font(.caption.weight(.black))
                             .frame(maxWidth: .infinity)
                     }
@@ -414,13 +424,25 @@ struct DecisionShellView: View {
                     Button {
                         showingJoinSheet = true
                     } label: {
-                        Label("Join", systemImage: "qrcode")
+                        Label("Join with code", systemImage: "qrcode")
                             .font(.caption.weight(.black))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .tint(NightloopTheme.ink)
                 }
+                Button {
+                    selectedInviteIDs.removeAll()
+                    createSession()
+                } label: {
+                    Label("Plan solo tonight", systemImage: "figure.walk")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                }
+                .buttonStyle(.plain)
+                .disabled(isMutating)
             }
         }
     }
@@ -430,18 +452,40 @@ struct DecisionShellView: View {
             VStack(alignment: .leading, spacing: 14) {
                 NightloopSectionHeader(title: "Create room", trailing: "\(friends.count) friends")
 
-                VStack(spacing: 10) {
-                    HStack(spacing: 8) {
-                        DecisionFilterField(title: "Neighborhood", text: $neighborhoodFilter)
-                        DecisionFilterField(title: "Type", text: $categoryFilter)
+                VStack(alignment: .leading, spacing: 10) {
+                    Button {
+                        showingTuneSheet = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(NightloopTheme.purple)
+                                .frame(width: 30, height: 30)
+                                .background(NightloopTheme.purpleSoft)
+                                .clipShape(Circle())
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Tune the room")
+                                    .font(.subheadline.weight(.black))
+                                    .foregroundStyle(NightloopTheme.ink)
+                                Text(decisionTuneSummary)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(NightloopTheme.inkMuted)
+                                    .lineLimit(2)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(NightloopTheme.inkMuted)
+                        }
+                        .padding(12)
+                        .background(Color.white.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(NightloopTheme.hairline)
+                        }
                     }
-
-                    HStack(spacing: 8) {
-                        DecisionPulseButton(title: "Any", isSelected: pulseFilter == nil) { pulseFilter = nil }
-                        DecisionPulseButton(title: "Chill", isSelected: pulseFilter == "chill") { pulseFilter = "chill" }
-                        DecisionPulseButton(title: "Active", isSelected: pulseFilter == "active") { pulseFilter = "active" }
-                        DecisionPulseButton(title: "Packed", isSelected: pulseFilter == "packed") { pulseFilter = "packed" }
-                    }
+                    .buttonStyle(.plain)
                 }
 
                 if friends.isEmpty {
@@ -476,6 +520,13 @@ struct DecisionShellView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var decisionTuneSummary: String {
+        let neighborhood = neighborhoodFilter.isEmpty ? "Any neighborhood" : neighborhoodFilter
+        let vibe = categoryFilter.isEmpty ? "Any vibe" : categoryFilter.replacingOccurrences(of: "_", with: " ").capitalized
+        let energy = pulseFilter?.capitalized ?? "Any energy"
+        return "\(neighborhood) · \(vibe) · \(energy)"
     }
 
     private var joinSection: some View {
@@ -1801,24 +1852,101 @@ private struct NotificationPrePermissionSheet: View {
     }
 }
 
-private struct DecisionFilterField: View {
-    let title: String
-    @Binding var text: String
+private struct DecisionTuneRoomSheet: View {
+    @Binding var neighborhood: String
+    @Binding var vibe: String
+    @Binding var pulse: String?
+    @Environment(\.dismiss) private var dismiss
+
+    private let neighborhoods = ["Any", "SoMa", "Mission", "Castro", "North Beach", "Hayes Valley", "Tenderloin"]
+    private let vibes: [(label: String, value: String?)] = [
+        ("Any", nil),
+        ("Dance", "club"),
+        ("Live music", "live_music"),
+        ("Lounge", "lounge"),
+        ("Bar", "bar")
+    ]
+    private let energies: [(label: String, value: String?)] = [
+        ("Any", nil),
+        ("Chill", "chill"),
+        ("Active", "active"),
+        ("Packed", "packed")
+    ]
 
     var body: some View {
-        TextField(title, text: $text)
-            .textInputAutocapitalization(.words)
-            .autocorrectionDisabled()
-            .font(.caption.weight(.bold))
-            .foregroundStyle(NightloopTheme.ink)
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-            .background(Color.white.opacity(0.055))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(NightloopTheme.hairline)
+        NavigationStack {
+            ZStack {
+                OrchidBackground(animated: true, gridOpacity: 0.035)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        optionSection(title: "Neighborhood") {
+                            ForEach(neighborhoods, id: \.self) { item in
+                                DecisionTunePill(title: item, isSelected: selectedNeighborhoodLabel == item) {
+                                    neighborhood = item == "Any" ? "" : item
+                                }
+                            }
+                        }
+                        optionSection(title: "Vibe") {
+                            ForEach(vibes, id: \.label) { item in
+                                DecisionTunePill(title: item.label, isSelected: vibe == (item.value ?? "")) {
+                                    vibe = item.value ?? ""
+                                }
+                            }
+                        }
+                        optionSection(title: "Energy") {
+                            ForEach(energies, id: \.label) { item in
+                                DecisionTunePill(title: item.label, isSelected: pulse == item.value) {
+                                    pulse = item.value
+                                }
+                            }
+                        }
+                    }
+                    .padding(20)
+                }
             }
+            .navigationTitle("Tune the room")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var selectedNeighborhoodLabel: String {
+        neighborhood.isEmpty ? "Any" : neighborhood
+    }
+
+    private func optionSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            NightloopSectionHeader(title: title)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], alignment: .leading, spacing: 8) {
+                content()
+            }
+        }
+    }
+}
+
+private struct DecisionTunePill: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.black))
+                .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(isSelected ? .white : Color.white.opacity(0.055))
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule().stroke(isSelected ? .white.opacity(0.8) : NightloopTheme.hairline)
+                }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1945,6 +2073,21 @@ enum DecisionRoomSurfaceMode: Equatable {
     case lobby
     case shortlist
     case finalPlan
+}
+
+enum DecisionEntrySurfaceMode: Equatable {
+    case loading
+    case noRoom
+    case activeRoom
+    case lobby
+}
+
+enum DecisionEntrySurfacePolicy {
+    static func mode(isLoading: Bool, hasActiveRoom: Bool, isLobbyOpen: Bool) -> DecisionEntrySurfaceMode {
+        if isLoading { return .loading }
+        if !hasActiveRoom { return .noRoom }
+        return isLobbyOpen ? .lobby : .activeRoom
+    }
 }
 
 enum DecisionRoomSnapshotRefreshPolicy {
@@ -2168,7 +2311,7 @@ private struct DecisionDeckCard: View {
         VStack(spacing: 13) {
             NightloopCard(padding: 12, radius: 20, fill: NightloopTheme.surface.opacity(0.74)) {
                 VStack(alignment: .leading, spacing: 13) {
-                    VenueArtView(venue: candidate.venue, height: 232, cornerRadius: 17)
+                    VenueArtView(venue: candidate.venue, height: 232, cornerRadius: 17, placement: .decision)
                         .overlay(alignment: .topLeading) {
                             HStack(spacing: 8) {
                                 LivenessChip(liveness: candidate.venue.liveness, compact: true)
@@ -2395,7 +2538,7 @@ private struct DecisionCandidateCard: View {
                 } label: {
                     HStack(spacing: 12) {
                         if candidate.venue.image?.url != nil {
-                            VenueArtView(venue: candidate.venue, height: 58, cornerRadius: 10)
+                            VenueArtView(venue: candidate.venue, height: 58, cornerRadius: 10, placement: .decision)
                                 .frame(width: 58, height: 58)
                                 .clipped()
                         } else {

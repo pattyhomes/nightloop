@@ -33,6 +33,7 @@ struct ProfileView: View {
                 }
                 .padding(20)
                 .padding(.top, 6)
+                .padding(.bottom, BottomContentInsets.scrollBottomPadding())
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -191,16 +192,16 @@ struct ProfileView: View {
             HStack(spacing: 12) {
                 ZStack {
                     Circle()
-                        .fill(NightloopTheme.purpleSoft)
+                        .fill(settings.ghostMode ? NightloopTheme.amber.opacity(0.14) : NightloopTheme.good.opacity(0.12))
                         .frame(width: 42, height: 42)
-                    Image(systemName: "person.2.fill")
+                    Image(systemName: settings.ghostMode ? "eye.slash.fill" : "person.2.fill")
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(NightloopTheme.purple)
+                        .foregroundStyle(settings.ghostMode ? NightloopTheme.amber : NightloopTheme.good)
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    NightloopSectionHeader(title: "Your crew", trailing: "Soon")
-                    Text("Friends, presence, and group plans will land here once the social phase is wired.")
+                    NightloopSectionHeader(title: "Your crew", trailing: settings.ghostMode ? "Ghost on" : "Visible")
+                    Text(settings.ghostMode ? "Your activity is hidden from social surfaces tonight." : "Ghost mode is off, so your coming intents can appear to friends.")
                         .font(.caption)
                         .foregroundStyle(NightloopTheme.inkMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -736,18 +737,50 @@ private struct AccountSettingsView: View {
             Button {
                 Task { await authStore.signOut() }
             } label: {
-                Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                    .frame(maxWidth: .infinity)
+                SettingsActionRow(title: "Sign out", subtitle: "End this session on this device.", systemImage: "rectangle.portrait.and.arrow.right")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
 
             Button(role: .destructive) {
                 showDeleteSheet()
             } label: {
-                Label("Delete account", systemImage: "trash.fill")
-                    .frame(maxWidth: .infinity)
+                SettingsActionRow(title: "Delete account", subtitle: "Permanently remove this Nightloop account.", systemImage: "trash.fill", tint: NightloopTheme.rose)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct SettingsActionRow: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    var tint: Color = NightloopTheme.inkMuted
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.black))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.12))
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.black))
+                    .foregroundStyle(title == "Delete account" ? tint : NightloopTheme.ink)
+                Text(subtitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(title == "Delete account" ? tint.opacity(0.36) : NightloopTheme.hairline)
         }
     }
 }

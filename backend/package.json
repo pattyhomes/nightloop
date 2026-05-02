@@ -27,6 +27,8 @@
     "events:bootstrap-websites": "tsx src/scripts/bootstrapVenueEventSources.ts",
     "events:discover-sources": "tsx src/scripts/discoverVenueEventSources.ts",
     "events:sync": "tsx src/scripts/syncVenueEvents.ts",
+    "media:discover": "tsx src/scripts/discoverVenueMedia.ts",
+    "media:discover:core10": "tsx src/scripts/discoverVenueMedia.ts --market=san-francisco --core10 --dry-run",
     "neighborhoods:sf": "tsx src/scripts/normalizeSfNeighborhoods.ts",
     "recommendations:refresh-inputs": "tsx src/scripts/refreshRecommendationInputs.ts",
     "phase6:readiness": "tsx src/scripts/auditPhase6Readiness.ts",

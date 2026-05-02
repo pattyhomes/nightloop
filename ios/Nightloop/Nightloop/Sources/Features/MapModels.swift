@@ -357,6 +357,27 @@ enum MapSheetDetent: String, CaseIterable, Equatable {
     }
 }
 
+struct MapSheetDragState: Equatable {
+    let settledDetent: MapSheetDetent
+    let translation: CGFloat
+
+    var isDragging: Bool {
+        abs(translation) > 0.5
+    }
+
+    var venueLimit: Int {
+        Self.venueLimit(for: settledDetent)
+    }
+
+    static func venueLimit(for detent: MapSheetDetent) -> Int {
+        switch detent {
+        case .peek: return 2
+        case .half: return 20
+        case .full: return 60
+        }
+    }
+}
+
 struct MapOverlayLayout {
     let sheetHeight: CGFloat
 
