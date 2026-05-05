@@ -1,10 +1,14 @@
-# Build 3 Staging Media Runbook
+# Build 3 Venue Media Runbook
 
 ## Environment Boundary
 
-- TestFlight uses the Railway-hosted Express API in production mode.
-- Railway points at the staging Supabase project for Auth and Postgres.
-- iOS uses only the staging Supabase URL and publishable key.
+- TestFlight Build 3 uses the Railway-hosted Express API in production mode:
+  `https://nightloop-production.up.railway.app/api/v1`.
+- The TestFlight data plane should match that Railway backend's Supabase
+  project for Auth, Postgres, and Storage.
+- NightloopStaging remains a rehearsal sandbox for migrations/media applies, not
+  the final TestFlight runtime.
+- iOS uses only the matching Supabase URL and publishable key.
 - Supabase service-role keys, database URLs, provider keys, and storage apply
   permissions stay in backend/Railway/local `.env` only.
 
@@ -16,18 +20,20 @@ Run discovery as dry-run first:
 npm --prefix backend run media:discover:core10
 ```
 
-Apply only after reviewing the dry-run report:
+Apply only after reviewing the dry-run report. Use `--target=staging` for the
+rehearsal sandbox and `--target=production` only for the Railway/TestFlight data
+plane:
 
 ```bash
-npm --prefix backend run media:discover -- --market=san-francisco --core10 --target=staging --apply
+npm --prefix backend run media:discover -- --market=san-francisco --core10 --target=production --apply
 ```
 
 `--apply` requires:
 
-- `DATABASE_URL` for staging Postgres;
-- `SUPABASE_PROJECT_URL` for staging;
+- `DATABASE_URL` for the target Postgres database;
+- `SUPABASE_PROJECT_URL` for the target Supabase project;
 - `SUPABASE_SERVICE_ROLE_KEY` in backend-only env;
-- `SUPABASE_PROJECT_REF_CONFIRM` matching the staging project ref;
+- `SUPABASE_PROJECT_REF_CONFIRM` matching the target project ref;
 - optional `VENUE_MEDIA_BUCKET`, defaulting to `venue-media-approved`.
 
 ## Build 3 Primary Media Applied To Staging
@@ -60,6 +66,45 @@ Selected primaries:
 After apply, these three images were verified as the first approved image per
 venue by `sort_order ASC, created_at ASC`. Older Public Works pipeline images
 remain approved but were moved behind the selected primary.
+
+## Build 3 Primary Media Promoted To Production
+
+On May 5, 2026, the same three reviewed primary images were promoted to the
+production Supabase project used by `nightloop-production.up.railway.app`.
+
+Before apply, production had no `venue_media_candidates` table, no
+`venue_assets.pipeline_original_image_url` generated column, and no
+`venue-media-approved` bucket. Migrations `014_build3_venue_media_candidates.sql`
+and `015_build3_media_security_hardening.sql` were applied first, then verified:
+
+- `venue_media_candidates` RLS enabled;
+- `venue_assets` RLS enabled;
+- `venue-media-approved` bucket exists and is public;
+- 38 app-owned public tables checked with no RLS-disabled app tables.
+
+Applied with a production-ID reviewed file:
+
+```bash
+SUPABASE_PROJECT_REF_CONFIRM=<production-project-ref> \
+  npm --prefix backend run media:discover -- \
+  --market=san-francisco \
+  --core10 \
+  --apply \
+  --target=production \
+  --apply-reviewed=/tmp/nightloop-media-review-balanced/selected-apply-primary-production.json
+```
+
+The apply report selected 9 production Core 10 rows and applied exactly 3
+reviewed approved candidates. `Audio SF` was reported as the one missing Core 10
+production row.
+
+Verified production `venue_assets` rows:
+
+| Venue | Sort order | Original image URL |
+| --- | ---: | --- |
+| 1015 Folsom | 0 | `https://1015.com/wp-content/uploads/2020/01/EricAnanmalay_1015SF_Gryffin-02977.jpg` |
+| Monarch | 0 | `https://images.squarespace-cdn.com/content/v1/64066ea051710848ff6e7c28/20a0946c-f0a8-4046-b2fd-3dd6da68b2fd/DSC_7853-Enhanced-NR.jpg?format=2500w` |
+| Public Works | 0 | `https://publicsf.com/wp-content/uploads/2023/11/Miss-Monique-Public-Works-11032023-Preview-5.jpg` |
 
 ## Supabase Advisor Note
 

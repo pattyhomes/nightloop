@@ -289,15 +289,15 @@ describe("venue media discovery", () => {
     expect(unsupported.ok).toBe(false);
   });
 
-  it("requires explicit staging target and project-ref confirmation for apply", () => {
+  it("requires explicit environment target and project-ref confirmation for apply", () => {
     expect(() =>
       assertMediaApplyTarget({
         apply: true,
-        target: "production",
+        target: "preview",
         supabaseProjectUrl: "https://hbsbemhyhopmkykihxct.supabase.co",
         projectRefConfirmation: "hbsbemhyhopmkykihxct"
       })
-    ).toThrow("--target=staging");
+    ).toThrow("--target=staging or --target=production");
 
     expect(() =>
       assertMediaApplyTarget({
@@ -307,6 +307,24 @@ describe("venue media discovery", () => {
         projectRefConfirmation: "hbsbemhyhopmkykihxct"
       })
     ).not.toThrow();
+
+    expect(() =>
+      assertMediaApplyTarget({
+        apply: true,
+        target: "production",
+        supabaseProjectUrl: "https://vvpfgxpxsxuhgbqeosqg.supabase.co",
+        projectRefConfirmation: "vvpfgxpxsxuhgbqeosqg"
+      })
+    ).not.toThrow();
+
+    expect(() =>
+      assertMediaApplyTarget({
+        apply: true,
+        target: "production",
+        supabaseProjectUrl: "https://vvpfgxpxsxuhgbqeosqg.supabase.co",
+        projectRefConfirmation: "wrong-ref"
+      })
+    ).toThrow("SUPABASE_PROJECT_REF_CONFIRM");
   });
 
   it("uploads only validated approved images to the approved media bucket with byte-hash path", async () => {

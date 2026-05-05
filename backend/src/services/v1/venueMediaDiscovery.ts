@@ -351,13 +351,13 @@ export function assertMediaApplyTarget(input: {
   projectRefConfirmation?: string;
 }): void {
   if (!input.apply) return;
-  if (input.target !== "staging") {
-    throw new Error("--apply requires --target=staging for Build 3 media publishing.");
+  if (input.target !== "staging" && input.target !== "production") {
+    throw new Error("--apply requires --target=staging or --target=production for Build 3 media publishing.");
   }
 
   const projectRef = projectRefFromSupabaseUrl(input.supabaseProjectUrl);
   if (!projectRef || input.projectRefConfirmation !== projectRef) {
-    throw new Error("--apply requires SUPABASE_PROJECT_REF_CONFIRM to match the staging Supabase project ref.");
+    throw new Error("--apply requires SUPABASE_PROJECT_REF_CONFIRM to match the Supabase project ref.");
   }
 }
 
