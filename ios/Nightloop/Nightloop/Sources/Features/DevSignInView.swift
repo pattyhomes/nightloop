@@ -106,7 +106,7 @@ struct DevSignInView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(OrchidBackground())
+        .background(OrchidBackground(animated: true, gridOpacity: 0))
     }
 
     private var normalizedEmail: String {
@@ -136,18 +136,18 @@ struct DevSignInView: View {
                     Text("Dev crew")
                         .font(.headline.weight(.black))
                         .foregroundStyle(NightloopTheme.ink)
-                    Text("Reset the seeded social graph, then jump between real Supabase dev users.")
+                    Text("Jump between seeded Supabase dev users. Reset data only when you need a fresh social graph.")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(NightloopTheme.inkMuted)
                 }
 
                 Button {
-                    Task { await resetCrewAndSignIn(as: DevCrewPreset.chuck) }
+                    Task { await signInPreset(DevCrewPreset.chuck) }
                 } label: {
-                    if isResettingCrew {
+                    if isSubmitting {
                         ProgressView().tint(.white)
                     } else {
-                        Label("Reset + Sign In as Chuck", systemImage: "person.3.sequence.fill")
+                        Label("Sign in as Chuck", systemImage: "person.fill.checkmark")
                             .font(.headline.weight(.black))
                             .frame(maxWidth: .infinity)
                     }
@@ -156,16 +156,17 @@ struct DevSignInView: View {
                 .tint(NightloopTheme.purple)
                 .disabled(isBusy)
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                VStack(spacing: 8) {
                     ForEach(DevCrewPreset.allCases.filter { $0 != .chuck }) { preset in
                         Button {
-                            Task { await ensurePresetAndSignIn(preset) }
+                            Task { await signInPreset(preset) }
                         } label: {
-                            VStack(spacing: 3) {
+                            HStack(spacing: 10) {
                                 Text(preset.displayName)
                                     .font(.caption.weight(.black))
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.75)
+                                Spacer()
                                 Text(preset.roleLabel)
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(NightloopTheme.inkMuted)
@@ -178,6 +179,21 @@ struct DevSignInView: View {
                         .disabled(isBusy)
                     }
                 }
+
+                Button {
+                    Task { await resetCrew() }
+                } label: {
+                    if isResettingCrew {
+                        ProgressView().tint(NightloopTheme.ink)
+                    } else {
+                        Label("Reset dev data", systemImage: "arrow.counterclockwise")
+                            .font(.subheadline.weight(.black))
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(NightloopTheme.amber)
+                .disabled(isBusy)
             }
         }
     }
@@ -202,40 +218,29 @@ struct DevSignInView: View {
         isCreatingAccount = false
     }
 
-    private func resetCrewAndSignIn(as preset: DevCrewPreset) async {
+    private func signInPreset(_ preset: DevCrewPreset) async {
+        isSubmitting = true
+        devMessage = nil
+
+        await authStore.signIn(email: preset.email, password: preset.password)
+        updateDevMessageAfterSignIn(successMessage: "Signed in as \(preset.displayName).")
+
+        isSubmitting = false
+    }
+
+    private func resetCrew() async {
         isResettingCrew = true
         devMessage = nil
 
         do {
             let client = NightloopAPIClient(baseURL: authStore.config.apiBaseURL)
             let response = try await client.resetDevSocialCrew()
-            let resetMessage = response.audit.ok ? "Dev crew reset. \(response.users.count) users ready around \(response.venue)." : "Dev crew reset, but audit needs attention."
-            devMessage = resetMessage
-            await authStore.signIn(email: preset.email, password: preset.password)
-            updateDevMessageAfterSignIn(successMessage: resetMessage)
+            devMessage = response.audit.ok ? "Dev data reset. \(response.users.count) users ready around \(response.venue)." : "Dev data reset, but audit needs attention."
         } catch {
-            devMessage = "Dev crew reset failed: \(error.localizedDescription)"
+            devMessage = "Dev data reset failed: \(error.localizedDescription)"
         }
 
         isResettingCrew = false
-    }
-
-    private func ensurePresetAndSignIn(_ preset: DevCrewPreset) async {
-        isCreatingAccount = true
-        devMessage = nil
-
-        do {
-            let client = NightloopAPIClient(baseURL: authStore.config.apiBaseURL)
-            _ = try await client.createConfirmedDevAuthUser(email: preset.email, password: preset.password)
-            let successMessage = "Signed in as \(preset.displayName)."
-            devMessage = successMessage
-            await authStore.signIn(email: preset.email, password: preset.password)
-            updateDevMessageAfterSignIn(successMessage: successMessage)
-        } catch {
-            devMessage = "Dev preset sign-in failed: \(error.localizedDescription)"
-        }
-
-        isCreatingAccount = false
     }
 
     private func updateDevMessageAfterSignIn(successMessage: String) {

@@ -866,23 +866,15 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(NightloopBottomNavMetrics.standardIconSize, 18)
     }
 
-    func testMapSheetDetentsSnapToNearestHeight() {
-        let availableHeight: CGFloat = 760
-
-        XCTAssertEqual(MapSheetDetent.snap(to: 205, availableHeight: availableHeight), .peek)
-        XCTAssertEqual(MapSheetDetent.snap(to: 390, availableHeight: availableHeight), .half)
-        XCTAssertEqual(MapSheetDetent.snap(to: 690, availableHeight: availableHeight), .full)
-        XCTAssertLessThan(MapSheetDetent.peek.height(for: availableHeight), MapSheetDetent.half.height(for: availableHeight))
-        XCTAssertLessThan(MapSheetDetent.half.height(for: availableHeight), MapSheetDetent.full.height(for: availableHeight))
-    }
-
-    func testMapSheetDragStateKeepsSettledVenueLimitWhileDragging() {
-        let dragging = MapSheetDragState(settledDetent: .peek, translation: -180)
-
-        XCTAssertTrue(dragging.isDragging)
-        XCTAssertEqual(dragging.venueLimit, 2)
-        XCTAssertEqual(MapSheetDragState.venueLimit(for: .half), 20)
-        XCTAssertEqual(MapSheetDragState.venueLimit(for: .full), 60)
+    func testMapNativeSheetPolicyUsesSystemDetentsAndDoesNotCollapseVenueLimit() {
+        XCTAssertEqual(MapNativeSheetPolicy.compactHeight, 248)
+        XCTAssertTrue(MapNativeSheetPolicy.detents.contains(.height(MapNativeSheetPolicy.compactHeight)))
+        XCTAssertTrue(MapNativeSheetPolicy.detents.contains(.medium))
+        XCTAssertTrue(MapNativeSheetPolicy.detents.contains(.large))
+        XCTAssertEqual(MapNativeSheetPolicy.venueLimit, 100)
+        XCTAssertGreaterThan(MapNativeSheetPolicy.venueLimit, 2)
+        XCTAssertEqual(MapNativeSheetPolicy.mapPaddingHeight(for: .height(MapNativeSheetPolicy.compactHeight)), 248)
+        XCTAssertGreaterThan(MapNativeSheetPolicy.mapPaddingHeight(for: .large), MapNativeSheetPolicy.mapPaddingHeight(for: .medium))
     }
 
     func testMapOverlayLayoutFollowsSheetHeight() {

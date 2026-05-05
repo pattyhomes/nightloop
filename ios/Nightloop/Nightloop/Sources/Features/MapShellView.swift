@@ -25,8 +25,8 @@ struct MapShellView: View {
     @State private var isSignalMenuOpen = false
     @State private var isShowingDetailedReport = false
     @State private var isShowingSignalLocationPrompt = false
-    @State private var sheetDetent: MapSheetDetent = .half
-    @State private var sheetDragTranslation: CGFloat = 0
+    @State private var sheetDetent: PresentationDetent = .medium
+    @State private var isMapSheetPresented = true
     @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
     @State private var currentMapZoom = 12.2
     @State private var didLoad = false
@@ -78,11 +78,10 @@ struct MapShellView: View {
 
     private var mapContent: some View {
         GeometryReader { proxy in
-            let sheetHeight = interactiveSheetHeight(for: proxy.size.height)
-            let overlayLayout = MapOverlayLayout(sheetHeight: sheetHeight)
+            let overlayLayout = MapOverlayLayout(sheetHeight: MapNativeSheetPolicy.compactHeight)
 
             ZStack(alignment: .bottom) {
-                mapView(bottomSheetHeight: sheetHeight)
+                mapView(bottomSheetHeight: MapNativeSheetPolicy.mapPaddingHeight(for: sheetDetent))
                     .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 12) {
@@ -135,10 +134,10 @@ struct MapShellView: View {
                 }
 
                 if let errorMessage {
-                    ErrorToast(message: errorMessage) {
-                        Task { await load() }
-                    }
-                    .padding(.horizontal, 16)
+                        ErrorToast(message: errorMessage) {
+                            Task { await load() }
+                        }
+                        .padding(.horizontal, 16)
                     .padding(.bottom, overlayLayout.toastBottomPadding)
                 }
 
@@ -147,8 +146,6 @@ struct MapShellView: View {
                         .padding(.bottom, overlayLayout.toastBottomPadding)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-
-                mapBottomSheet(height: sheetHeight, availableHeight: proxy.size.height)
 
                 signalFAB
                     .padding(.trailing, 20)
@@ -163,6 +160,20 @@ struct MapShellView: View {
                 }
             }
             .background(NightloopTheme.background)
+            .sheet(isPresented: $isMapSheetPresented) {
+                mapBottomSheet
+                    .presentationDetents(MapNativeSheetPolicy.detents, selection: $sheetDetent)
+                    .presentationDragIndicator(.visible)
+                    .presentationContentInteraction(.scrolls)
+                    .presentationBackgroundInteraction(.enabled(upThrough: .height(MapNativeSheetPolicy.compactHeight)))
+                    .presentationCornerRadius(24)
+                    .interactiveDismissDisabled()
+            }
+            .onChange(of: isMapSheetPresented) { _, isPresented in
+                if !isPresented {
+                    isMapSheetPresented = true
+                }
+            }
         }
     }
 
@@ -263,23 +274,17 @@ struct MapShellView: View {
         }
     }
 
-    private func mapBottomSheet(height: CGFloat, availableHeight: CGFloat) -> some View {
+    private var mapBottomSheet: some View {
         VStack(spacing: 0) {
-            Capsule()
-                .fill(Color.white.opacity(0.22))
-                .frame(width: 42, height: 4)
-                .padding(.top, 9)
-                .padding(.bottom, sheetDetent == .peek ? 8 : 12)
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-                .gesture(sheetDragGesture(height: height, availableHeight: availableHeight))
+            Color.clear
+                .frame(height: 10)
 
             if isLoading && venues.isEmpty {
                 LoadingStateView(title: "Loading the map")
-                    .frame(maxWidth: .infinity, minHeight: max(130, height - 42))
+                    .frame(maxWidth: .infinity, minHeight: 180)
             } else if venues.isEmpty {
                 EmptyMapState(retry: { Task { await load() } })
-                    .frame(maxWidth: .infinity, minHeight: max(130, height - 42))
+                    .frame(maxWidth: .infinity, minHeight: 180)
             } else {
                 if let selectedVenue {
                     SelectedVenueMapCard(
@@ -288,7 +293,7 @@ struct MapShellView: View {
                         authStore: authStore,
                         onAccountChanged: onAccountChanged,
                         isSubmittingSignal: isSubmittingSignal,
-                        isCompact: sheetDetent == .peek,
+                        isCompact: sheetDetent == .height(MapNativeSheetPolicy.compactHeight),
                         primaryActionTitle: selectedVenuePrimaryActionTitle,
                         submitPacked: {
                             Task { await submitSelectedVenuePrimaryAction() }
@@ -305,7 +310,7 @@ struct MapShellView: View {
 
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(Array(rankedVenues.prefix(sheetVenueLimit))) { venue in
+                        ForEach(Array(rankedVenues.prefix(MapNativeSheetPolicy.venueLimit))) { venue in
                             MapRankedVenueRow(
                                 venue: venue,
                                 isSelected: venue.id == selectedVenueID
@@ -318,11 +323,9 @@ struct MapShellView: View {
                     .padding(.top, 8)
                     .padding(.bottom, BottomContentInsets.scrollBottomPadding())
                 }
-                .frame(maxHeight: listMaxHeight(for: height))
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: height)
         .background(
             LinearGradient(
                 colors: [NightloopTheme.surface.opacity(0.98), NightloopTheme.background],
@@ -335,10 +338,6 @@ struct MapShellView: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(NightloopTheme.hairline)
         }
-        .shadow(color: .black.opacity(0.38), radius: 24, x: 0, y: -8)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: sheetDetent)
-        .contentShape(Rectangle())
-        .simultaneousGesture(sheetDragGesture(height: height, availableHeight: availableHeight))
     }
 
     private func mapPreviewTitle(_ filter: PreviewFilterPolicy) -> String {
@@ -471,48 +470,11 @@ struct MapShellView: View {
         !locationPromptSeen && locationManager.userCoordinate == nil && !locationManager.isDenied && !isLoading
     }
 
-    private var sheetVenueLimit: Int {
-        MapSheetDragState.venueLimit(for: sheetDetent)
-    }
-
-    private func interactiveSheetHeight(for availableHeight: CGFloat) -> CGFloat {
-        let baseHeight = sheetDetent.height(for: availableHeight)
-        let draggedHeight = baseHeight - sheetDragTranslation
-        let minHeight = MapSheetDetent.peek.height(for: availableHeight)
-        let maxHeight = MapSheetDetent.full.height(for: availableHeight)
-        return min(maxHeight, max(minHeight, draggedHeight))
-    }
-
-    private func listMaxHeight(for sheetHeight: CGFloat) -> CGFloat {
-        switch sheetDetent {
-        case .peek:
-            return max(64, sheetHeight - 164)
-        case .half:
-            return max(150, sheetHeight - 202)
-        case .full:
-            return max(280, sheetHeight - 218)
-        }
-    }
-
     private var isTonightPreviewNow: Bool {
         NightlifePreviewPolicy.isPreview(
             now: Date(),
             timeZoneIdentifier: marketConfig?.market.timezone ?? "America/Los_Angeles"
         )
-    }
-
-    private func sheetDragGesture(height: CGFloat, availableHeight: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                sheetDragTranslation = value.translation.height
-            }
-            .onEnded { value in
-                let proposedHeight = height - value.predictedEndTranslation.height
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    sheetDetent = MapSheetDetent.snap(to: proposedHeight, availableHeight: availableHeight)
-                    sheetDragTranslation = 0
-                }
-            }
     }
 
     private func load() async {

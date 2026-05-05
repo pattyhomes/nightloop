@@ -333,48 +333,22 @@ struct MapVenueFilter {
     }
 }
 
-enum MapSheetDetent: String, CaseIterable, Equatable {
-    case peek
-    case half
-    case full
+enum MapNativeSheetPolicy {
+    static let compactHeight: CGFloat = 248
+    static let venueLimit = 100
 
-    func height(for availableHeight: CGFloat) -> CGFloat {
-        let safeHeight = max(availableHeight, 480)
-        switch self {
-        case .peek:
-            return min(230, max(188, safeHeight * 0.28))
-        case .half:
-            return min(430, max(360, safeHeight * 0.48))
-        case .full:
-            return min(safeHeight - 68, max(560, safeHeight * 0.84))
+    static var detents: Set<PresentationDetent> {
+        [.height(compactHeight), .medium, .large]
+    }
+
+    static func mapPaddingHeight(for detent: PresentationDetent) -> CGFloat {
+        if detent == .height(compactHeight) {
+            return compactHeight
         }
-    }
-
-    static func snap(to height: CGFloat, availableHeight: CGFloat) -> MapSheetDetent {
-        allCases.min {
-            abs($0.height(for: availableHeight) - height) < abs($1.height(for: availableHeight) - height)
-        } ?? .half
-    }
-}
-
-struct MapSheetDragState: Equatable {
-    let settledDetent: MapSheetDetent
-    let translation: CGFloat
-
-    var isDragging: Bool {
-        abs(translation) > 0.5
-    }
-
-    var venueLimit: Int {
-        Self.venueLimit(for: settledDetent)
-    }
-
-    static func venueLimit(for detent: MapSheetDetent) -> Int {
-        switch detent {
-        case .peek: return 2
-        case .half: return 20
-        case .full: return 60
+        if detent == .large {
+            return 620
         }
+        return 420
     }
 }
 

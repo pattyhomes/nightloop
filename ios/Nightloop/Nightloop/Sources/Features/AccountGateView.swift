@@ -192,7 +192,7 @@ private struct AgeGateView: View {
 
     var body: some View {
         ZStack {
-            OrchidBackground(animated: true, gridOpacity: 0.055)
+            OrchidBackground(animated: true, gridOpacity: 0)
 
             VStack(alignment: .leading, spacing: 24) {
                 Spacer()

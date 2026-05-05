@@ -19,10 +19,10 @@ struct AuthLandingView: View {
 
     var body: some View {
         ZStack {
-            OrchidBackground(animated: true, gridOpacity: 0.08)
+            OrchidBackground(animated: true, gridOpacity: 0)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 18) {
                     header
                     proofLine
                     authPanel
@@ -32,7 +32,7 @@ struct AuthLandingView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 72)
+                .padding(.top, 38)
                 .padding(.bottom, 34)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -49,7 +49,7 @@ struct AuthLandingView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 7) {
                 Circle()
                     .fill(NightloopTheme.rose)
@@ -68,9 +68,8 @@ struct AuthLandingView: View {
                 Capsule().stroke(NightloopTheme.rose.opacity(0.36))
             }
 
-            Text("night\nloop.")
-                .font(.system(size: 58, weight: .black, design: .rounded))
-                .lineSpacing(-10)
+            Text("Nightloop")
+                .font(.system(size: 44, weight: .black, design: .rounded))
                 .foregroundStyle(
                     LinearGradient(
                         colors: [NightloopTheme.ink, NightloopTheme.purple, NightloopTheme.rose],
@@ -79,7 +78,7 @@ struct AuthLandingView: View {
                     )
                 )
 
-            Text("A sharper way to pick the night. Source-backed venues, trusted hours, and social plans without pretending the whole city is live at noon.")
+            Text("Plan the night with real venues, trusted hours, and friends.")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(NightloopTheme.inkMuted)
                 .lineSpacing(4)

@@ -58,7 +58,7 @@ struct ProfileSetupView: View {
 
     var body: some View {
         ZStack {
-            OrchidBackground(animated: true, gridOpacity: 0.055)
+            OrchidBackground(animated: true, gridOpacity: 0)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {

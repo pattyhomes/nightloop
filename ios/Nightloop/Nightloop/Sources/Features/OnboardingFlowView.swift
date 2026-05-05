@@ -43,7 +43,7 @@ struct OnboardingFlowView: View {
                 summary
             }
         }
-        .background(OrchidBackground(animated: true, gridOpacity: 0.055))
+        .background(OrchidBackground(animated: true, gridOpacity: 0))
     }
 
     private var welcome: some View {
