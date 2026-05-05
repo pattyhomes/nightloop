@@ -26,14 +26,17 @@ struct VenueDetailView: View {
             OrchidBackground(animated: true, gridOpacity: 0.025)
 
             if let venue {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        detailHero(venue)
-                        detailContent(venue)
+                GeometryReader { geometry in
+                    ScrollView(.vertical) {
+                        VStack(spacing: 0) {
+                            detailHero(venue)
+                            detailContent(venue)
+                        }
+                        .frame(width: geometry.size.width, alignment: .top)
+                        .padding(.bottom, VenueDetailSignalPlacement.scrollBottomPadding)
                     }
-                    .padding(.bottom, VenueDetailSignalPlacement.scrollBottomPadding)
+                    .ignoresSafeArea(edges: .top)
                 }
-                .ignoresSafeArea(edges: .top)
                 .overlay(alignment: .top) {
                     topControls
                 }
