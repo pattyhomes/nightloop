@@ -11,6 +11,7 @@ export type IosReleaseConfigAuditInput = {
   phoneAuthEnabled: boolean;
   googleMapsIosApiKey: string;
   reviewerDemoEnabled: boolean;
+  rawConfigValues?: string[];
 };
 
 export type BackendRuntimeAuditInput = {
@@ -57,6 +58,10 @@ function hasValue(value: string): boolean {
   return trimmed.length > 0 && !trimmed.includes("$(") && !trimmed.toLowerCase().includes("paste_");
 }
 
+function hasBackendSecretShape(value: string): boolean {
+  return /postgresql:\/\/|service_role|sb_secret|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|GOOGLE_PLACES_API_KEY|FOURSQUARE_API_KEY|APNS_PRIVATE_KEY|-----BEGIN PRIVATE KEY-----/i.test(value);
+}
+
 export function auditIosReleaseConfig(input: IosReleaseConfigAuditInput): AuditResult {
   const failures: string[] = [];
   if (!isHttpsUrl(input.apiBaseUrl)) {
@@ -79,6 +84,12 @@ export function auditIosReleaseConfig(input: IosReleaseConfigAuditInput): AuditR
   }
   if (!input.reviewerDemoEnabled) {
     failures.push("Reviewer demo access must be enabled for the first external TestFlight build.");
+  }
+  for (const value of input.rawConfigValues ?? []) {
+    if (hasBackendSecretShape(value)) {
+      failures.push("Release iOS config must not contain backend-only secrets or database URLs.");
+      break;
+    }
   }
   return result(failures);
 }

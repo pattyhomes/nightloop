@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import request from "supertest";
+import { createApp } from "../src/app";
+import { loadConfig } from "../src/lib/config";
 import {
   auditBackendRuntime,
   auditIosReleaseConfig,
@@ -21,6 +24,22 @@ describe("TestFlight readiness audit", () => {
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("Release API_BASE_URL must be HTTPS and must not use localhost.");
     expect(result.failures).toContain("Release Sign in with Apple must be enabled for TestFlight.");
+  });
+
+  it("rejects backend-only secret shapes in Release iOS config", () => {
+    const result = auditIosReleaseConfig({
+      apiBaseUrl: "https://nightloop-staging.up.railway.app/api/v1",
+      supabaseUrl: "https://staging-project.supabase.co",
+      supabasePublishableKey: "sb_publishable_staging",
+      appleAuthEnabled: true,
+      phoneAuthEnabled: false,
+      googleMapsIosApiKey: "ios-key",
+      reviewerDemoEnabled: true,
+      rawConfigValues: ["postgresql://postgres:redacted@db.example.supabase.co:5432/postgres"]
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("Release iOS config must not contain backend-only secrets or database URLs.");
   });
 
   it("accepts staging HTTPS release config with Apple auth and no phone auth", () => {
@@ -101,5 +120,23 @@ describe("TestFlight readiness audit", () => {
     });
 
     expect(result).toEqual({ ok: true, failures: [] });
+  });
+
+  it("returns 404 for dev reset endpoints when backend runs in production mode", async () => {
+    const config = {
+      ...loadConfig(),
+      env: "production" as const
+    };
+    const app = createApp({
+      config,
+      authAdmin: {
+        createConfirmedEmailUser: async () => ({ id: "auth-user-1" })
+      }
+    });
+
+    await request(app)
+      .post("/api/v1/dev/social-crew/reset")
+      .send({ market: "san-francisco" })
+      .expect(404);
   });
 });
