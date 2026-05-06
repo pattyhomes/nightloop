@@ -4,6 +4,7 @@ import type { AccountState } from "./accountService";
 import { findMarketByIdOrSlug } from "./marketService";
 import { buildVenueLiveness } from "./livenessService";
 import { PUBLIC_VENUE_SQL, selectPublicPulse } from "./recommendationTrust";
+import { evaluateRequestTimeSchedule } from "./providerHours";
 
 export type VenueFeedRow = {
   id: string;
@@ -11,6 +12,7 @@ export type VenueFeedRow = {
   name: string;
   market_id: string;
   market_short_label: string;
+  market_timezone: string;
   venue_source?: string | null;
   venue_metadata?: Record<string, unknown> | null;
   neighborhood: string | null;
@@ -69,15 +71,15 @@ function eventTime(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function formatEventTime(value: Date): string {
+function formatEventTime(value: Date, timezone: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
+    timeZone: timezone,
     hour: "numeric",
     minute: "2-digit"
   }).format(value);
 }
 
-function eventScheduleOverride(event: Record<string, unknown> | null): {
+function eventScheduleOverride(event: Record<string, unknown> | null, timezone: string): {
   source: string;
   metadata: Record<string, unknown>;
 } | null {
@@ -94,8 +96,8 @@ function eventScheduleOverride(event: Record<string, unknown> | null): {
     metadata: {
       is_open_now: isOpenNow,
       opens_later: startsAt > now,
-      opens_at: formatEventTime(startsAt),
-      closes_at: formatEventTime(endsAt),
+      opens_at: formatEventTime(startsAt, timezone),
+      closes_at: formatEventTime(endsAt, timezone),
       event_context: {
         event_id: event.id,
         source: event.source,
@@ -123,7 +125,12 @@ function haversineMiles(
 }
 
 export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: number }) {
-  const eventOverride = eventScheduleOverride(row.current_event);
+  const requestTimeSchedule = evaluateRequestTimeSchedule({
+    weeklyHours: row.schedule_weekly_hours,
+    metadata: row.schedule_metadata,
+    timezone: row.market_timezone
+  });
+  const eventOverride = eventScheduleOverride(row.current_event, row.market_timezone);
   const publicPulse = selectPublicPulse({
     category: row.category,
     eventContext: { has_event_tonight: Boolean(row.current_event) },
@@ -139,8 +146,8 @@ export function formatVenue(row: VenueFeedRow, origin?: { lat: number; lng: numb
   const effectiveScheduleStatus = eventOverride ? "verified_hours" : row.schedule_status;
   const effectiveScheduleSource = eventOverride?.source ?? row.schedule_source;
   const effectiveScheduleMetadata = eventOverride
-    ? { ...(row.schedule_metadata ?? {}), ...eventOverride.metadata }
-    : row.schedule_metadata;
+    ? { ...requestTimeSchedule.metadata, ...eventOverride.metadata }
+    : requestTimeSchedule.metadata;
   const liveness = buildVenueLiveness({
     scheduleStatus: effectiveScheduleStatus,
     scheduleSource: effectiveScheduleSource,
@@ -249,6 +256,7 @@ export async function listVenues(query: VenueQuery) {
         v.name,
         v.market_id,
         m.short_label AS market_short_label,
+        m.timezone AS market_timezone,
         v.source AS venue_source,
         COALESCE(v.metadata, '{}'::jsonb) AS venue_metadata,
         COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS neighborhood,
@@ -470,6 +478,7 @@ export async function getVenue(idOrSlug: string, account?: AccountState) {
         v.name,
         v.market_id,
         m.short_label AS market_short_label,
+        m.timezone AS market_timezone,
         v.source AS venue_source,
         COALESCE(v.metadata, '{}'::jsonb) AS venue_metadata,
         COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS neighborhood,

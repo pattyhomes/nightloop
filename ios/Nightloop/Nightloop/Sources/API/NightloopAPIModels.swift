@@ -244,6 +244,7 @@ struct VenueLiveness: Codable, Equatable {
     let confidence: RecommendationConfidence
     let opensAt: String?
     let closesAt: String?
+    let sourceOpenNow: Bool?
     let expectedPulseLevel: Int
     let liveSignalCount: Int
     let liveUniqueUserCount: Int

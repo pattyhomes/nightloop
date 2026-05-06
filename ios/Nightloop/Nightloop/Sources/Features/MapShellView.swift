@@ -25,8 +25,9 @@ struct MapShellView: View {
     @State private var isSignalMenuOpen = false
     @State private var isShowingDetailedReport = false
     @State private var isShowingSignalLocationPrompt = false
-    @State private var sheetDetent: PresentationDetent = .medium
-    @State private var isMapSheetPresented = true
+    @State private var panelDetent: MapPanelDetent = .medium
+    @GestureState private var panelDragTranslation: CGFloat = 0
+    @State private var detailVenueID: String?
     @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
     @State private var currentMapZoom = 12.2
     @State private var didLoad = false
@@ -74,14 +75,30 @@ struct MapShellView: View {
                 }
             }
         }
+        .navigationDestination(item: $detailVenueID) { venueID in
+            VenueDetailView(
+                apiClient: apiClient,
+                authStore: authStore,
+                venueID: venueID,
+                initialVenue: venues.first { $0.id == venueID },
+                onAccountChanged: onAccountChanged
+            )
+        }
     }
 
     private var mapContent: some View {
         GeometryReader { proxy in
-            let overlayLayout = MapOverlayLayout(sheetHeight: MapNativeSheetPolicy.compactHeight)
+            let panelLayout = MapPanelLayoutPolicy.layout(availableHeight: proxy.size.height)
+            let panelHeight = MapPanelLayoutPolicy.visualHeight(
+                settledDetent: panelDetent,
+                dragTranslation: panelDragTranslation,
+                layout: panelLayout
+            )
+            let overlayLayout = MapOverlayLayout(sheetHeight: panelHeight)
+            let isCompact = panelHeight <= panelLayout.compactHeight + 16
 
             ZStack(alignment: .bottom) {
-                mapView(bottomSheetHeight: MapNativeSheetPolicy.mapPaddingHeight(for: sheetDetent))
+                mapView(bottomSheetHeight: panelHeight)
                     .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 12) {
@@ -158,22 +175,13 @@ struct MapShellView: View {
                         .padding(.bottom, overlayLayout.signalMenuBottomPadding)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
+
+                mapBottomPanel(isCompact: isCompact, layout: panelLayout)
+                    .frame(height: panelHeight)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.84), value: panelDetent)
             }
             .background(NightloopTheme.background)
-            .sheet(isPresented: $isMapSheetPresented) {
-                mapBottomSheet
-                    .presentationDetents(MapNativeSheetPolicy.detents, selection: $sheetDetent)
-                    .presentationDragIndicator(.visible)
-                    .presentationContentInteraction(.scrolls)
-                    .presentationBackgroundInteraction(.enabled(upThrough: .height(MapNativeSheetPolicy.compactHeight)))
-                    .presentationCornerRadius(24)
-                    .interactiveDismissDisabled()
-            }
-            .onChange(of: isMapSheetPresented) { _, isPresented in
-                if !isPresented {
-                    isMapSheetPresented = true
-                }
-            }
         }
     }
 
@@ -274,10 +282,9 @@ struct MapShellView: View {
         }
     }
 
-    private var mapBottomSheet: some View {
+    private func mapBottomPanel(isCompact: Bool, layout: MapPanelLayout) -> some View {
         VStack(spacing: 0) {
-            Color.clear
-                .frame(height: 10)
+            panelDragHandle(layout: layout)
 
             if isLoading && venues.isEmpty {
                 LoadingStateView(title: "Loading the map")
@@ -293,8 +300,11 @@ struct MapShellView: View {
                         authStore: authStore,
                         onAccountChanged: onAccountChanged,
                         isSubmittingSignal: isSubmittingSignal,
-                        isCompact: sheetDetent == .height(MapNativeSheetPolicy.compactHeight),
+                        isCompact: isCompact,
                         primaryActionTitle: selectedVenuePrimaryActionTitle,
+                        openDetails: {
+                            openVenueDetails(selectedVenue)
+                        },
                         submitPacked: {
                             Task { await submitSelectedVenuePrimaryAction() }
                         }
@@ -310,10 +320,13 @@ struct MapShellView: View {
 
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(Array(rankedVenues.prefix(MapNativeSheetPolicy.venueLimit))) { venue in
+                        ForEach(Array(rankedVenues.prefix(MapPanelLayoutPolicy.venueLimit))) { venue in
                             MapRankedVenueRow(
                                 venue: venue,
-                                isSelected: venue.id == selectedVenueID
+                                isSelected: venue.id == selectedVenueID,
+                                openDetails: {
+                                    openVenueDetails(venue)
+                                }
                             ) {
                                 select(venue)
                             }
@@ -321,7 +334,7 @@ struct MapShellView: View {
                     }
                     .padding(.horizontal, 18)
                     .padding(.top, 8)
-                    .padding(.bottom, BottomContentInsets.scrollBottomPadding())
+                    .padding(.bottom, MapPanelLayoutPolicy.listBottomPadding)
                 }
             }
         }
@@ -333,11 +346,45 @@ struct MapShellView: View {
                 endPoint: .bottom
             )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous))
         .overlay(alignment: .top) {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
                 .stroke(NightloopTheme.hairline)
         }
+    }
+
+    private func panelDragHandle(layout: MapPanelLayout) -> some View {
+        VStack(spacing: 7) {
+            Capsule()
+                .fill(NightloopTheme.inkMuted.opacity(0.42))
+                .frame(width: 44, height: 4)
+            HStack(spacing: 6) {
+                ForEach(MapPanelDetent.allCases, id: \.rawValue) { detent in
+                    Capsule()
+                        .fill(detent == panelDetent ? NightloopTheme.purple : NightloopTheme.inkMuted.opacity(0.24))
+                        .frame(width: detent == panelDetent ? 18 : 8, height: 3)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+        .gesture(panelDragGesture(layout: layout))
+        .accessibilityLabel("Map panel drag handle")
+    }
+
+    private func panelDragGesture(layout: MapPanelLayout) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .updating($panelDragTranslation) { value, state, _ in
+                state = value.translation.height
+            }
+            .onEnded { value in
+                panelDetent = MapPanelLayoutPolicy.targetDetent(
+                    current: panelDetent,
+                    predictedEndTranslation: value.predictedEndTranslation.height,
+                    layout: layout
+                )
+            }
     }
 
     private func mapPreviewTitle(_ filter: PreviewFilterPolicy) -> String {
@@ -522,6 +569,11 @@ struct MapShellView: View {
     private func select(_ venue: VenueItem) {
         selectedVenueID = venue.id
         updateViewport(for: venue, market: marketConfig?.market)
+    }
+
+    private func openVenueDetails(_ venue: VenueItem) {
+        _ = MapVenueNavigationTarget.details(for: venue)
+        detailVenueID = venue.id
     }
 
     private func updateViewport(for venue: VenueItem?, market: Market?) {
@@ -1018,6 +1070,7 @@ private struct SelectedVenueMapCard: View {
     let isSubmittingSignal: Bool
     let isCompact: Bool
     let primaryActionTitle: String
+    let openDetails: () -> Void
     let submitPacked: () -> Void
 
     var body: some View {
@@ -1033,15 +1086,19 @@ private struct SelectedVenueMapCard: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(venue.name)
-                        .font(.system(size: isCompact ? 22 : 26, weight: .black))
-                        .foregroundStyle(NightloopTheme.ink)
-                        .lineLimit(1)
-                    Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(NightloopTheme.inkMuted)
+                Button(action: openDetails) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(venue.name)
+                            .font(.system(size: isCompact ? 22 : 26, weight: .black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(1)
+                        Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                    }
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(venue.name) details")
                 Spacer()
                 EnergyScorePill(score: venue.pulse.score)
             }
@@ -1058,15 +1115,7 @@ private struct SelectedVenueMapCard: View {
                 }
 
                 HStack(spacing: 10) {
-                    NavigationLink {
-                        VenueDetailView(
-                            apiClient: apiClient,
-                            authStore: authStore,
-                            venueID: venue.id,
-                            initialVenue: venue,
-                            onAccountChanged: onAccountChanged
-                        )
-                    } label: {
+                    Button(action: openDetails) {
                         Text("Details")
                             .font(.subheadline.weight(.black))
                             .foregroundStyle(NightloopTheme.ink)
@@ -1076,6 +1125,7 @@ private struct SelectedVenueMapCard: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(venue.name) details")
 
                     Button(action: submitPacked) {
                         Label(primaryActionTitle, systemImage: primaryActionTitle == "I'm going" ? "figure.walk" : "flame.fill")
@@ -1114,42 +1164,57 @@ private struct MapFactPill: View {
 private struct MapRankedVenueRow: View {
     let venue: VenueItem
     let isSelected: Bool
+    let openDetails: () -> Void
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                LivenessChip(liveness: venue.liveness, compact: true)
+        HStack(spacing: 8) {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    LivenessChip(liveness: venue.liveness, compact: true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(venue.name)
-                        .font(.subheadline.weight(.bold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(venue.name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(1)
+                        Text("\(venue.neighborhood) · \(venue.waitMinutes.map { "\($0)m wait" } ?? "line unknown")")
+                            .font(.caption)
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+                    SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
+                        .frame(width: 56, height: 20)
+                    Text("\(venue.signalCount)")
+                        .font(.caption.weight(.black))
                         .foregroundStyle(NightloopTheme.ink)
-                        .lineLimit(1)
-                    Text("\(venue.neighborhood) · \(venue.waitMinutes.map { "\($0)m wait" } ?? "line unknown")")
-                        .font(.caption)
-                        .foregroundStyle(NightloopTheme.inkMuted)
-                        .lineLimit(1)
+                        .frame(minWidth: 26, alignment: .trailing)
                 }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Select \(venue.name)")
 
-                Spacer()
-                SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
-                    .frame(width: 56, height: 20)
-                Text("\(venue.signalCount)")
-                    .font(.caption.weight(.black))
+            Button(action: openDetails) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .black))
                     .foregroundStyle(NightloopTheme.ink)
-                    .frame(minWidth: 26, alignment: .trailing)
+                    .frame(width: 32, height: 36)
+                    .background(Color.white.opacity(0.055))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(isSelected ? NightloopTheme.purple.opacity(0.15) : Color.white.opacity(0.035))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isSelected ? NightloopTheme.purpleEdge : .clear)
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(venue.name) details")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(isSelected ? NightloopTheme.purple.opacity(0.15) : Color.white.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isSelected ? NightloopTheme.purpleEdge : .clear)
+        }
     }
 }
 

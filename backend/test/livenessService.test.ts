@@ -28,7 +28,13 @@ describe("buildVenueLiveness", () => {
       liveSignalCount: 3,
       liveUniqueUserCount: 1
     });
-    expect(oneUser.state).toBe("unknown");
+    expect(oneUser).toMatchObject({
+      state: "unknown",
+      source_open_now: true,
+      copy: {
+        label: "Open now"
+      }
+    });
 
     const enoughDensity = buildVenueLiveness({
       scheduleStatus: "verified_hours",
@@ -42,6 +48,7 @@ describe("buildVenueLiveness", () => {
       state: "live",
       hours_state: "source_verified",
       confidence: "high",
+      source_open_now: true,
       closes_at: "2:00 AM"
     });
   });
@@ -55,6 +62,7 @@ describe("buildVenueLiveness", () => {
       })
     ).toMatchObject({
       state: "opens_later",
+      source_open_now: false,
       opens_at: "10:00 PM"
     });
 
@@ -67,6 +75,31 @@ describe("buildVenueLiveness", () => {
     ).toMatchObject({
       state: "closed_today",
       hours_state: "source_verified"
+    });
+  });
+
+  it("does not let stale opens-later metadata override source-open hours", () => {
+    const liveness = buildVenueLiveness({
+      scheduleStatus: "verified_hours",
+      scheduleSource: "provider:google_places",
+      scheduleConfidence: 0.9,
+      scheduleMetadata: {
+        is_open_now: true,
+        opens_later: true,
+        opens_at: "5:00 PM",
+        closes_at: "2:00 AM"
+      },
+      liveSignalCount: 0,
+      liveUniqueUserCount: 0
+    });
+
+    expect(liveness).toMatchObject({
+      state: "unknown",
+      source_open_now: true,
+      opens_at: "5:00 PM",
+      copy: {
+        label: "Open now"
+      }
     });
   });
 

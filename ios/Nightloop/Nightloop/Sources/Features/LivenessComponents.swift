@@ -10,6 +10,9 @@ extension VenueLiveness {
         case .closedToday:
             return "Closed today"
         case .unknown:
+            if sourceOpenNow == true && hoursState == .sourceVerified {
+                return "Open now"
+            }
             return hoursState == .sourceVerified ? "Tonight preview" : "Hours unknown"
         }
     }
@@ -24,6 +27,9 @@ extension VenueLiveness {
             case .closedToday:
                 return "Source-backed hours say it is not available tonight."
             case .unknown:
+                if sourceOpenNow == true && hoursState == .sourceVerified {
+                    return "Source-backed hours say it is open, but live crowd claims need more verified reports."
+                }
                 return "Nightloop will not infer live status without verified hours and enough recent reports."
             }
         }()
@@ -145,6 +151,7 @@ struct HoursStatusBlock: View {
             confidence: .low,
             opensAt: venue.hours?.opensAt,
             closesAt: venue.hours?.closesAt,
+            sourceOpenNow: false,
             expectedPulseLevel: venue.pulse.level,
             liveSignalCount: venue.recentSignalCount,
             liveUniqueUserCount: 0,

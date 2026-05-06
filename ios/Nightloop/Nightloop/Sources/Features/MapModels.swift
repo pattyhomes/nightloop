@@ -333,22 +333,76 @@ struct MapVenueFilter {
     }
 }
 
-enum MapNativeSheetPolicy {
+enum MapPanelDetent: String, CaseIterable, Equatable {
+    case compact
+    case medium
+    case expanded
+}
+
+struct MapPanelLayout: Equatable {
+    let compactHeight: CGFloat
+    let mediumHeight: CGFloat
+    let expandedHeight: CGFloat
+
+    func height(for detent: MapPanelDetent) -> CGFloat {
+        switch detent {
+        case .compact:
+            return compactHeight
+        case .medium:
+            return mediumHeight
+        case .expanded:
+            return expandedHeight
+        }
+    }
+}
+
+enum MapPanelLayoutPolicy {
     static let compactHeight: CGFloat = 248
     static let venueLimit = 100
+    static let listBottomPadding: CGFloat = 28
+    static let topClearance: CGFloat = 92
 
-    static var detents: Set<PresentationDetent> {
-        [.height(compactHeight), .medium, .large]
+    static func layout(availableHeight: CGFloat) -> MapPanelLayout {
+        let expanded = max(compactHeight, availableHeight - topClearance)
+        let medium = min(expanded, max(360, availableHeight * 0.54))
+        return MapPanelLayout(
+            compactHeight: compactHeight,
+            mediumHeight: medium,
+            expandedHeight: expanded
+        )
     }
 
-    static func mapPaddingHeight(for detent: PresentationDetent) -> CGFloat {
-        if detent == .height(compactHeight) {
-            return compactHeight
-        }
-        if detent == .large {
-            return 620
-        }
-        return 420
+    static func visualHeight(
+        settledDetent: MapPanelDetent,
+        dragTranslation: CGFloat,
+        layout: MapPanelLayout
+    ) -> CGFloat {
+        let settled = layout.height(for: settledDetent)
+        let proposed = settled - dragTranslation
+        return min(layout.expandedHeight, max(layout.compactHeight, proposed))
+    }
+
+    static func targetDetent(
+        current: MapPanelDetent,
+        predictedEndTranslation: CGFloat,
+        layout: MapPanelLayout
+    ) -> MapPanelDetent {
+        let projected = visualHeight(
+            settledDetent: current,
+            dragTranslation: predictedEndTranslation,
+            layout: layout
+        )
+        return MapPanelDetent.allCases.min {
+            abs(layout.height(for: $0) - projected) < abs(layout.height(for: $1) - projected)
+        } ?? current
+    }
+}
+
+enum MapVenueNavigationTarget: Equatable {
+    case details(String)
+
+    static func details(for venue: VenueItem) -> MapVenueNavigationTarget {
+        .details(venue.id)
     }
 }
 

@@ -21,6 +21,7 @@ export type VenueLiveness = {
   confidence: RecommendationConfidence;
   opens_at: string | null;
   closes_at: string | null;
+  source_open_now: boolean;
   expected_pulse_level: number;
   live_signal_count: number;
   live_unique_user_count: number;
@@ -125,6 +126,7 @@ function copyFor(input: {
   source: string;
   opensAt: string | null;
   closesAt: string | null;
+  sourceOpenNow: boolean;
   liveSignalCount: number;
   liveUniqueUserCount: number;
 }): VenueLiveness["copy"] {
@@ -151,6 +153,14 @@ function copyFor(input: {
       supporting_text: input.opensAt
         ? `Source-backed hours say it opens at ${input.opensAt}.`
         : "Source-backed hours are available for tonight.",
+      provenance
+    };
+  }
+
+  if (input.sourceOpenNow && input.hoursState === "source_verified") {
+    return {
+      label: "Open now",
+      supporting_text: "Source-backed hours say it is open, but live crowd claims need more verified reports.",
       provenance
     };
   }
@@ -190,7 +200,8 @@ export function buildVenueLiveness(input: VenueLivenessInput): VenueLiveness {
   const closesAt = metadataString(metadata, "closes_at", "next_close_at", "tonight_closes_at", "close_time");
   const isOpenNow = metadataBoolean(metadata, "is_open_now", "open_now", "claims_open_now") === true;
   const isClosedToday = metadataBoolean(metadata, "is_closed_today", "closed_today") === true;
-  const opensLater = metadataBoolean(metadata, "opens_later") === true || (!isOpenNow && Boolean(opensAt));
+  const sourceOpenNow = stateFromHours === "source_verified" && isOpenNow;
+  const opensLater = !isOpenNow && (metadataBoolean(metadata, "opens_later") === true || Boolean(opensAt));
 
   let state: VenueLivenessState = "unknown";
   if (stateFromHours === "temporary_closed" || isClosedToday) {
@@ -220,6 +231,7 @@ export function buildVenueLiveness(input: VenueLivenessInput): VenueLiveness {
     confidence,
     opens_at: opensAt,
     closes_at: closesAt,
+    source_open_now: sourceOpenNow,
     expected_pulse_level: expectedPulseLevel,
     live_signal_count: liveSignalCount,
     live_unique_user_count: liveUniqueUserCount,
@@ -229,6 +241,7 @@ export function buildVenueLiveness(input: VenueLivenessInput): VenueLiveness {
       source,
       opensAt,
       closesAt,
+      sourceOpenNow,
       liveSignalCount,
       liveUniqueUserCount
     }),

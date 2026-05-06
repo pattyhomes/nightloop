@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FOURSQUARE_PRO_FIELD_MASK } from "../src/lib/foursquareHttp";
 import {
   GOOGLE_HOURS_FIELD_MASK,
+  evaluateRequestTimeSchedule,
   normalizeFoursquarePlaceHours,
   normalizeGooglePlaceHours,
   normalizeOpenStreetMapHours,
@@ -18,6 +19,63 @@ const candidate = {
 };
 
 describe("Phase 5.8 provider hours normalization", () => {
+  it("re-evaluates normalized weekly hours at request time in the market timezone", () => {
+    const weeklyHours = {
+      normalized_periods: [
+        {
+          day: 2,
+          open_hour: 17,
+          open_minute: 0,
+          close_day: 3,
+          close_hour: 2,
+          close_minute: 0
+        }
+      ]
+    };
+
+    const beforeOpen = evaluateRequestTimeSchedule({
+      weeklyHours,
+      metadata: { is_open_now: false, opens_later: true, opens_at: "5:00 PM" },
+      timezone: "America/Los_Angeles",
+      now: new Date("2026-05-05T16:00:00-07:00")
+    });
+    expect(beforeOpen.metadata).toMatchObject({
+      is_open_now: false,
+      opens_later: true,
+      closed_today: false,
+      opens_at: "5:00 PM",
+      closes_at: "2:00 AM"
+    });
+
+    const openNow = evaluateRequestTimeSchedule({
+      weeklyHours,
+      metadata: { is_open_now: false, opens_later: true, opens_at: "5:00 PM" },
+      timezone: "America/Los_Angeles",
+      now: new Date("2026-05-05T20:45:00-07:00")
+    });
+    expect(openNow.metadata).toMatchObject({
+      is_open_now: true,
+      opens_later: false,
+      closed_today: false,
+      opens_at: "5:00 PM",
+      closes_at: "2:00 AM"
+    });
+
+    const afterClose = evaluateRequestTimeSchedule({
+      weeklyHours,
+      metadata: { is_open_now: true, opens_later: false },
+      timezone: "America/Los_Angeles",
+      now: new Date("2026-05-06T03:30:00-07:00")
+    });
+    expect(afterClose.metadata).toMatchObject({
+      is_open_now: false,
+      opens_later: false,
+      closed_today: true,
+      opens_at: "5:00 PM",
+      closes_at: "2:00 AM"
+    });
+  });
+
   it("requests Google secondary hours and stores 30-day TTL/provenance", () => {
     expect(GOOGLE_HOURS_FIELD_MASK).toContain("regularSecondaryOpeningHours");
     expect(GOOGLE_HOURS_FIELD_MASK).toContain("currentSecondaryOpeningHours");

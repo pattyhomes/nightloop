@@ -866,15 +866,84 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(NightloopBottomNavMetrics.standardIconSize, 18)
     }
 
-    func testMapNativeSheetPolicyUsesSystemDetentsAndDoesNotCollapseVenueLimit() {
-        XCTAssertEqual(MapNativeSheetPolicy.compactHeight, 248)
-        XCTAssertTrue(MapNativeSheetPolicy.detents.contains(.height(MapNativeSheetPolicy.compactHeight)))
-        XCTAssertTrue(MapNativeSheetPolicy.detents.contains(.medium))
-        XCTAssertTrue(MapNativeSheetPolicy.detents.contains(.large))
-        XCTAssertEqual(MapNativeSheetPolicy.venueLimit, 100)
-        XCTAssertGreaterThan(MapNativeSheetPolicy.venueLimit, 2)
-        XCTAssertEqual(MapNativeSheetPolicy.mapPaddingHeight(for: .height(MapNativeSheetPolicy.compactHeight)), 248)
-        XCTAssertGreaterThan(MapNativeSheetPolicy.mapPaddingHeight(for: .large), MapNativeSheetPolicy.mapPaddingHeight(for: .medium))
+    func testMapPanelLayoutUsesEmbeddedDetentsAndDoesNotCollapseVenueLimit() {
+        let layout = MapPanelLayoutPolicy.layout(availableHeight: 760)
+
+        XCTAssertEqual(MapPanelLayoutPolicy.compactHeight, 248)
+        XCTAssertEqual(MapPanelLayoutPolicy.venueLimit, 100)
+        XCTAssertGreaterThan(MapPanelLayoutPolicy.venueLimit, 2)
+        XCTAssertEqual(layout.height(for: .compact), 248)
+        XCTAssertGreaterThan(layout.height(for: .medium), layout.height(for: .compact))
+        XCTAssertGreaterThan(layout.height(for: .expanded), layout.height(for: .medium))
+        XCTAssertLessThan(MapPanelLayoutPolicy.listBottomPadding, BottomContentInsets.scrollBottomPadding())
+        XCTAssertEqual(
+            MapPanelLayoutPolicy.visualHeight(settledDetent: .medium, dragTranslation: 80, layout: layout),
+            layout.mediumHeight - 80
+        )
+    }
+
+    func testMapPanelSettlesFromPredictedDragWithoutJumpingRows() {
+        let layout = MapPanelLayoutPolicy.layout(availableHeight: 760)
+
+        XCTAssertEqual(
+            MapPanelLayoutPolicy.targetDetent(current: .medium, predictedEndTranslation: -260, layout: layout),
+            .expanded
+        )
+        XCTAssertEqual(
+            MapPanelLayoutPolicy.targetDetent(current: .medium, predictedEndTranslation: 260, layout: layout),
+            .compact
+        )
+        XCTAssertEqual(
+            MapPanelLayoutPolicy.targetDetent(current: .medium, predictedEndTranslation: 8, layout: layout),
+            .medium
+        )
+    }
+
+    func testMapVenueNavigationTargetUsesVenueDetails() {
+        let venue = Self.venueFixture(
+            id: "venue-details-1",
+            name: "Details Room",
+            latitude: 37.76,
+            longitude: -122.42,
+            score: 72,
+            level: 2
+        )
+
+        XCTAssertEqual(MapVenueNavigationTarget.details(for: venue), .details("venue-details-1"))
+    }
+
+    func testLivenessBadgeDistinguishesOpenNowFromLiveNowAndOpensLater() {
+        let openNow = VenueLiveness(
+            state: .unknown,
+            hoursState: .sourceVerified,
+            confidence: .high,
+            opensAt: "5:00 PM",
+            closesAt: "2:00 AM",
+            sourceOpenNow: true,
+            expectedPulseLevel: 2,
+            liveSignalCount: 1,
+            liveUniqueUserCount: 1,
+            copy: nil,
+            provenance: nil
+        )
+        let liveNow = Self.livenessFixture(state: .live, hoursState: .sourceVerified, confidence: .high)
+        let opensLater = Self.livenessFixture(state: .opensLater, hoursState: .sourceVerified, confidence: .medium)
+        let unknown = Self.livenessFixture(state: .unknown, hoursState: .unknown, confidence: .low)
+
+        XCTAssertEqual(openNow.badgeTitle, "Open now")
+        XCTAssertEqual(liveNow.badgeTitle, "Live now")
+        XCTAssertEqual(opensLater.badgeTitle, "Opens 10:00 PM")
+        XCTAssertEqual(unknown.badgeTitle, "Hours unknown")
+    }
+
+    func testProjectBuildNumberIsFour() throws {
+        let projectURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("project.yml")
+        let contents = try String(contentsOf: projectURL)
+
+        XCTAssertTrue(contents.contains("CURRENT_PROJECT_VERSION: \"4\""))
     }
 
     func testMapOverlayLayoutFollowsSheetHeight() {
@@ -2347,6 +2416,7 @@ final class NightloopTests: XCTestCase {
             confidence: confidence,
             opensAt: state == .opensLater ? "10:00 PM" : nil,
             closesAt: state == .live ? "2:00 AM" : nil,
+            sourceOpenNow: state == .live,
             expectedPulseLevel: 3,
             liveSignalCount: state == .live ? 3 : 0,
             liveUniqueUserCount: state == .live ? 2 : 0,

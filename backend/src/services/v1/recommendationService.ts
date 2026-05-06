@@ -5,6 +5,7 @@ import { requireEligible } from "./accountService";
 import { findMarketByIdOrSlug, type MarketRow } from "./marketService";
 import { formatVenue, type VenueFeedRow } from "./venueService";
 import { buildVenueLiveness, type VenueLiveness } from "./livenessService";
+import { evaluateRequestTimeSchedule } from "./providerHours";
 import {
   calculateExpectedPulse,
   PUBLIC_VENUE_SQL,
@@ -154,15 +155,15 @@ function eventTime(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function formatEventTime(value: Date): string {
+function formatEventTime(value: Date, timezone: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
+    timeZone: timezone,
     hour: "numeric",
     minute: "2-digit"
   }).format(value);
 }
 
-function eventScheduleOverride(event: Record<string, unknown> | null): {
+function eventScheduleOverride(event: Record<string, unknown> | null, timezone: string): {
   source: string;
   metadata: Record<string, unknown>;
 } | null {
@@ -178,8 +179,8 @@ function eventScheduleOverride(event: Record<string, unknown> | null): {
     metadata: {
       is_open_now: startsAt <= now && endsAt > now,
       opens_later: startsAt > now,
-      opens_at: formatEventTime(startsAt),
-      closes_at: formatEventTime(endsAt),
+      opens_at: formatEventTime(startsAt, timezone),
+      closes_at: formatEventTime(endsAt, timezone),
       event_context: {
         event_id: event.id,
         source: event.source,
@@ -237,7 +238,12 @@ function scoreRecommendation(
   mode: ScoredRecommendation["mode"]
 ): ScoredRecommendation {
   const hasPreferences = Object.values(account.preferences).some((values) => values.length > 0);
-  const eventOverride = eventScheduleOverride(row.current_event);
+  const requestTimeSchedule = evaluateRequestTimeSchedule({
+    weeklyHours: row.schedule_weekly_hours,
+    metadata: row.schedule_metadata,
+    timezone: row.market_timezone
+  });
+  const eventOverride = eventScheduleOverride(row.current_event, row.market_timezone);
   const factors = {
     venue_quality: sourceQuality(row),
     preference_match: preferenceMatch(row, account.preferences),
@@ -264,7 +270,7 @@ function scoreRecommendation(
     scheduleConfidence: row.schedule_confidence,
     scheduleVerifiedAt: row.schedule_verified_at,
     scheduleFetchedAt: row.schedule_fetched_at,
-    scheduleMetadata: eventOverride ? { ...(row.schedule_metadata ?? {}), ...eventOverride.metadata } : row.schedule_metadata,
+    scheduleMetadata: eventOverride ? { ...requestTimeSchedule.metadata, ...eventOverride.metadata } : requestTimeSchedule.metadata,
     pulseLevel: publicPulse.level,
     recentSignalCount: row.recent_signal_count,
     liveSignalCount: row.live_signal_count,
@@ -337,6 +343,7 @@ export async function listRecommendations(query: RecommendationQuery) {
         v.name,
         v.market_id,
         m.short_label AS market_short_label,
+        m.timezone AS market_timezone,
         COALESCE(v.metadata->>'neighborhood', v.metadata->>'district') AS neighborhood,
         COALESCE(v.canonical_type, v.metadata->>'category') AS category,
         v.latitude,

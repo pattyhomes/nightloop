@@ -140,7 +140,7 @@ type LocalParts = {
   minute: number;
 };
 
-type NormalizedPeriod = {
+export type NormalizedPeriod = {
   day: number;
   open_hour: number;
   open_minute: number;
@@ -149,12 +149,17 @@ type NormalizedPeriod = {
   close_minute: number;
 };
 
-type WindowEvaluation = {
+export type WindowEvaluation = {
   is_open_now: boolean | null;
   opens_later?: boolean;
   closed_today?: boolean;
   opens_at?: string;
   closes_at?: string;
+};
+
+export type RequestTimeScheduleEvaluation = {
+  metadata: Record<string, unknown>;
+  window: WindowEvaluation | null;
 };
 
 const weekdayMap: Record<string, number> = {
@@ -454,7 +459,7 @@ function closeDayOffset(period: NormalizedPeriod): number {
   return 0;
 }
 
-function evaluateNightlifeWindow(periods: NormalizedPeriod[], timezone: string, now: Date): WindowEvaluation {
+export function evaluateNightlifeWindow(periods: NormalizedPeriod[], timezone: string, now: Date): WindowEvaluation {
   if (periods.length === 0) return { is_open_now: null };
 
   const local = getLocalParts(now, timezone);
@@ -525,6 +530,55 @@ function evaluateNightlifeWindow(periods: NormalizedPeriod[], timezone: string, 
     opens_at: formatLocalTime(windows[0].period.open_hour, windows[0].period.open_minute),
     closes_at: formatLocalTime(windows[0].period.close_hour, windows[0].period.close_minute)
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizedPeriod(value: unknown): NormalizedPeriod | null {
+  if (!isRecord(value)) return null;
+  const period = {
+    day: Number(value.day),
+    open_hour: Number(value.open_hour),
+    open_minute: Number(value.open_minute ?? 0),
+    close_day: Number(value.close_day),
+    close_hour: Number(value.close_hour),
+    close_minute: Number(value.close_minute ?? 0)
+  };
+  return Object.values(period).every(Number.isFinite) ? period : null;
+}
+
+function normalizedPeriodsFromWeeklyHours(weeklyHours: Record<string, unknown> | null | undefined): NormalizedPeriod[] {
+  const raw = weeklyHours?.normalized_periods;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizedPeriod).filter((period): period is NormalizedPeriod => Boolean(period));
+}
+
+export function evaluateRequestTimeSchedule(
+  input: {
+    weeklyHours?: Record<string, unknown> | null;
+    metadata?: Record<string, unknown> | null;
+    timezone: string;
+    now?: Date;
+  }
+): RequestTimeScheduleEvaluation {
+  const now = input.now ?? new Date();
+  const metadata = { ...(input.metadata ?? {}) };
+  const periods = normalizedPeriodsFromWeeklyHours(input.weeklyHours);
+  if (periods.length === 0) {
+    return { metadata, window: null };
+  }
+
+  const window = evaluateNightlifeWindow(periods, input.timezone, now);
+  metadata.is_open_now = window.is_open_now;
+  metadata.opens_at = window.opens_at ?? null;
+  metadata.closes_at = window.closes_at ?? null;
+  metadata.opens_later = window.opens_later === true;
+  metadata.closed_today = window.closed_today === true;
+  metadata.request_time_evaluated_at = now.toISOString();
+  metadata.request_time_timezone = input.timezone;
+  return { metadata, window };
 }
 
 function hasGoogleHours(place: GooglePlaceHours): boolean {
