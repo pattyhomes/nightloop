@@ -1,0 +1,1578 @@
+import CoreLocation
+import FloatingPanel
+import GoogleMaps
+import SwiftUI
+
+struct MapShellView: View {
+    let apiClient: NightloopAPIClient
+    @ObservedObject var authStore: AuthStore
+    let me: MeResponse
+    let onAccountChanged: (MeResponse) -> Void
+
+    @StateObject private var locationManager = NightloopLocationManager()
+    @AppStorage("nightloop.map.locationPromptSeen") private var locationPromptSeen = false
+
+    @State private var marketConfig: MarketConfigResponse?
+    @State private var venues: [VenueItem] = []
+    @State private var counts: VenueCounts?
+    @State private var selectedPulse: MapPulseFilter = .all
+    @State private var selectedPreviewFilter: PreviewFilterPolicy = .all
+    @State private var selectedVenueID: String?
+    @State private var camera: GoogleMapCamera = .sanFrancisco
+    @State private var errorMessage: String?
+    @State private var signalMessage: String?
+    @State private var isLoading = true
+    @State private var isSubmittingSignal = false
+    @State private var isSignalMenuOpen = false
+    @State private var isShowingDetailedReport = false
+    @State private var isShowingSignalLocationPrompt = false
+    @State private var panelState: FloatingPanelState? = .half
+    @State private var detailVenueID: String?
+    @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
+    @State private var currentMapZoom = 12.2
+    @State private var didLoad = false
+
+    private var selectedVenue: VenueItem? {
+        venues.first { $0.id == selectedVenueID } ?? venues.first
+    }
+
+    private var markers: [VenueMapMarker] {
+        VenueMapMarker.visibleMarkers(from: venues, selectedVenueID: selectedVenueID)
+    }
+
+    private var rankedVenues: [VenueItem] {
+        let base = isTonightPreviewNow ? venues.filter { selectedPreviewFilter.matches($0) } : venues
+        return MapVenueFilter.rankedVenues(from: base)
+    }
+
+    private var settledPanelDetent: MapPanelDetent {
+        MapPanelDetent(floatingPanelState: panelState)
+    }
+
+    var body: some View {
+        ZStack {
+            if authStore.config.isGoogleMapsConfigured {
+                mapContent
+            } else {
+                MissingGoogleMapsConfigView()
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .task {
+            guard !didLoad else { return }
+            didLoad = true
+            await load()
+        }
+        .onChange(of: selectedPulse) { _, _ in
+            Task { await load() }
+        }
+        .onChange(of: locationManager.userCoordinate) { _, coordinate in
+            guard coordinate != nil else { return }
+            Task { await load() }
+        }
+        .sheet(isPresented: $isShowingDetailedReport) {
+            if let selectedVenue {
+                DetailedSignalSheet(venue: selectedVenue) { kind, details in
+                    isShowingDetailedReport = false
+                    Task { await submitSignal(kind: kind, details: details) }
+                }
+            }
+        }
+        .navigationDestination(item: $detailVenueID) { venueID in
+            VenueDetailView(
+                apiClient: apiClient,
+                authStore: authStore,
+                venueID: venueID,
+                initialVenue: venues.first { $0.id == venueID },
+                onAccountChanged: onAccountChanged
+            )
+        }
+    }
+
+    private var mapContent: some View {
+        GeometryReader { proxy in
+            let panelLayout = MapPanelLayoutPolicy.layout(availableHeight: proxy.size.height)
+            let settledPanelDetent = settledPanelDetent
+            let settledPanelHeight = MapPanelLayoutPolicy.mapPaddingHeight(
+                settledDetent: settledPanelDetent,
+                layout: panelLayout
+            )
+            let overlayLayout = MapOverlayLayout(sheetHeight: settledPanelHeight)
+            let isCompact = MapPanelLayoutPolicy.isCompact(settledDetent: settledPanelDetent)
+
+            ZStack(alignment: .bottom) {
+                mapView(bottomSheetHeight: settledPanelHeight)
+                    .ignoresSafeArea(edges: .top)
+
+                VStack(spacing: 12) {
+                    mapHeader
+                    filterStrip
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, MapChromeLayout.headerTopPadding(safeAreaTop: proxy.safeAreaInsets.top))
+
+                zoomControls
+                    .padding(.top, MapChromeLayout.zoomTopPadding(safeAreaTop: proxy.safeAreaInsets.top))
+                    .padding(.trailing, 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+
+                if shouldShowLocationPrompt {
+                    LocationPromptCard(
+                        isDenied: locationManager.isDenied,
+                        errorMessage: locationManager.locationError,
+                        share: {
+                            locationPromptSeen = true
+                            locationManager.requestLocationAccess()
+                        },
+                        dismiss: {
+                            locationPromptSeen = true
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, overlayLayout.promptBottomPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                if isShowingSignalLocationPrompt, let selectedVenue {
+                    SignalLocationPromptCard(
+                        venueName: selectedVenue.name,
+                        isDenied: locationManager.isDenied,
+                        errorMessage: locationManager.locationError,
+                        share: {
+                            isShowingSignalLocationPrompt = false
+                            locationPromptSeen = true
+                            locationManager.requestLocationAccess()
+                        },
+                        dismiss: {
+                            isShowingSignalLocationPrompt = false
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, overlayLayout.promptBottomPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                if let errorMessage {
+                        ErrorToast(message: errorMessage) {
+                            Task { await load() }
+                        }
+                        .padding(.horizontal, 16)
+                    .padding(.bottom, overlayLayout.toastBottomPadding)
+                }
+
+                if let signalMessage {
+                    SignalToast(message: signalMessage)
+                        .padding(.bottom, overlayLayout.toastBottomPadding)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                if isCompact {
+                    signalFAB
+                        .padding(.trailing, 20)
+                        .padding(.bottom, overlayLayout.fabBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+                if isCompact && isSignalMenuOpen {
+                    signalMenu
+                        .padding(.trailing, 20)
+                        .padding(.bottom, overlayLayout.signalMenuBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+            }
+            .floatingPanel(
+                coordinator: NightloopMapPanelCoordinator.self,
+                onEvent: handlePanelEvent
+            ) { floatingPanelProxy in
+                mapBottomPanel(
+                    isCompact: isCompact,
+                    layout: panelLayout,
+                    floatingPanelProxy: floatingPanelProxy
+                )
+            }
+            .floatingPanelState($panelState)
+            .floatingPanelLayout(NightloopMapFloatingPanelLayout(layout: panelLayout))
+            .floatingPanelBehavior(NightloopMapFloatingPanelBehavior())
+            .floatingPanelContentMode(.fitToBounds)
+            .floatingPanelContentInsetAdjustmentBehavior(.never)
+            .floatingPanelSurfaceAppearance(.transparent(cornerRadius: 24, shadows: []))
+            .background(NightloopTheme.background)
+        }
+    }
+
+    private func mapView(bottomSheetHeight: CGFloat) -> some View {
+        GoogleNightloopMapView(
+            markers: markers,
+            selectedVenueID: selectedVenueID,
+            camera: $camera,
+            mapID: authStore.config.googleMapID,
+            bottomSheetHeight: bottomSheetHeight,
+            cameraDidIdle: rememberCameraState,
+            selectVenue: select
+        )
+        .overlay {
+            LinearGradient(
+                colors: [NightloopTheme.background.opacity(0.22), .clear, NightloopTheme.background.opacity(0.56)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false)
+        }
+    }
+
+    private var zoomControls: some View {
+        VStack(spacing: 8) {
+            Button {
+                adjustZoom(by: 0.8)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .black))
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Zoom in")
+
+            Button {
+                adjustZoom(by: -0.8)
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 13, weight: .black))
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("Zoom out")
+        }
+        .foregroundStyle(NightloopTheme.ink)
+        .background(NightloopTheme.surface.opacity(0.78))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 14, x: 0, y: 8)
+    }
+
+    private var mapHeader: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(NightloopTheme.good)
+                .frame(width: 8, height: 8)
+                .shadow(color: NightloopTheme.good.opacity(0.8), radius: 8)
+            Text("Tonight · \(marketConfig?.market.displayName ?? me.profile?.selectedMarketId.map { _ in "San Francisco" } ?? "San Francisco")")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(NightloopTheme.ink)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(NightloopTheme.surface.opacity(0.82))
+        .clipShape(Capsule())
+        .overlay { Capsule().stroke(NightloopTheme.hairline) }
+    }
+
+    private var filterStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if isTonightPreviewNow {
+                    ForEach(PreviewFilterPolicy.allCases) { filter in
+                        MapPreviewPill(
+                            title: mapPreviewTitle(filter),
+                            isSelected: selectedPreviewFilter == filter
+                        ) {
+                            selectedPreviewFilter = filter
+                        }
+                    }
+                } else {
+                    ForEach(MapPulseFilter.allCases) { filter in
+                        MapFilterPill(
+                            title: filter.label,
+                            count: filter.count(from: counts),
+                            color: filter.color,
+                            isSelected: selectedPulse == filter
+                        ) {
+                            selectedPulse = filter
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func mapBottomPanel(
+        isCompact: Bool,
+        layout: MapPanelLayout,
+        floatingPanelProxy: FloatingPanelProxy
+    ) -> some View {
+        VStack(spacing: 0) {
+            panelDragHandle()
+
+            if isLoading && venues.isEmpty {
+                LoadingStateView(title: "Loading the map")
+                    .frame(maxWidth: .infinity, minHeight: 180)
+            } else if venues.isEmpty {
+                EmptyMapState(retry: { Task { await load() } })
+                    .frame(maxWidth: .infinity, minHeight: 180)
+            } else {
+                if let selectedVenue {
+                    SelectedVenueMapCard(
+                        venue: selectedVenue,
+                        apiClient: apiClient,
+                        authStore: authStore,
+                        onAccountChanged: onAccountChanged,
+                        isSubmittingSignal: isSubmittingSignal,
+                        isCompact: isCompact,
+                        primaryActionTitle: selectedVenuePrimaryActionTitle,
+                        openDetails: {
+                            openVenueDetails(selectedVenue)
+                        },
+                        submitPacked: {
+                            Task { await submitSelectedVenuePrimaryAction() }
+                        }
+                    )
+                    .padding(.horizontal, 18)
+                    .contentShape(Rectangle())
+                }
+
+                HStack {
+                    NightloopSectionHeader(title: "Ranked · Tonight", trailing: "\(rankedVenues.count) venues")
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .contentShape(Rectangle())
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(Array(rankedVenues.prefix(MapPanelLayoutPolicy.venueLimit))) { venue in
+                            MapRankedVenueRow(
+                                venue: venue,
+                                isSelected: venue.id == selectedVenueID,
+                                openDetails: {
+                                    openVenueDetails(venue)
+                                }
+                            ) {
+                                select(venue)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 8)
+                    .padding(.bottom, MapPanelLayoutPolicy.listBottomPadding)
+                }
+                .floatingPanelScrollTracking(proxy: floatingPanelProxy)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                colors: [NightloopTheme.surface.opacity(0.98), NightloopTheme.background],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous))
+        .overlay(alignment: .top) {
+            UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+    }
+
+    private func panelDragHandle() -> some View {
+        VStack(spacing: 7) {
+            Capsule()
+                .fill(NightloopTheme.inkMuted.opacity(0.42))
+                .frame(width: 44, height: 4)
+            HStack(spacing: 6) {
+                ForEach(MapPanelDetent.allCases, id: \.rawValue) { detent in
+                    Capsule()
+                        .fill(detent == settledPanelDetent ? NightloopTheme.purple : NightloopTheme.inkMuted.opacity(0.24))
+                        .frame(width: detent == settledPanelDetent ? 18 : 8, height: 3)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 36)
+        .background(Color.black.opacity(0.001))
+        .contentShape(Rectangle())
+        .accessibilityLabel("Map panel drag handle")
+    }
+
+    private func mapPreviewTitle(_ filter: PreviewFilterPolicy) -> String {
+        switch filter {
+        case .all:
+            return filter.label
+        case .expected, .opensLater, .sourceBacked:
+            return "\(filter.count(in: venues)) \(filter.label)"
+        }
+    }
+
+    private func handlePanelEvent(_ event: NightloopMapPanelCoordinator.Event) {
+        switch event {
+        case .didChangeState(let state):
+            panelState = state
+        }
+    }
+
+    @ViewBuilder
+    private var signalFAB: some View {
+        if selectedVenueRequiresGoingAction {
+            goingFAB
+        } else {
+            Button {
+                guard selectedVenue != nil else { return }
+                guard canSignalSelectedVenue else {
+                    verifySelectedVenueForSignal()
+                    return
+                }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    isSignalMenuOpen.toggle()
+                }
+            } label: {
+                Image(systemName: isSignalMenuOpen ? "xmark" : "plus")
+                    .font(.system(size: 22, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 60, height: 60)
+                    .background(NightloopTheme.fab)
+                    .clipShape(Circle())
+                    .shadow(color: NightloopTheme.fabGlow, radius: 26, x: 0, y: 10)
+                    .overlay {
+                        Circle()
+                            .stroke(NightloopTheme.fab.opacity(0.28), lineWidth: 8)
+                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedVenue == nil)
+            .opacity(selectedVenue == nil ? 0.5 : 1)
+            .accessibilityLabel("Report a signal for the selected venue")
+        }
+    }
+
+    private var goingFAB: some View {
+        Button {
+            Task { await submitGoingForSelectedVenue() }
+        } label: {
+            Label("I'm going", systemImage: "figure.walk")
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                .background(NightloopTheme.fab)
+                .clipShape(Capsule())
+                .shadow(color: NightloopTheme.fabGlow, radius: 22, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedVenue == nil || isSubmittingSignal)
+        .opacity(selectedVenue == nil ? 0.5 : 1)
+        .accessibilityLabel("Mark selected venue as I'm going")
+    }
+
+    private var signalMenu: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Report selected venue")
+                .font(.caption2.weight(.black))
+                .tracking(1.2)
+                .foregroundStyle(NightloopTheme.inkMuted)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+
+            ForEach(SignalKind.allCases) { kind in
+                Button {
+                    Task { await submitSignal(kind: kind) }
+                } label: {
+                    HStack {
+                        Image(systemName: kind.symbol)
+                            .frame(width: 22)
+                        Text(kind.label)
+                            .font(.footnote.weight(.bold))
+                        Spacer()
+                        Text("+\(points(for: kind))")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(NightloopTheme.good)
+                    }
+                    .foregroundStyle(NightloopTheme.ink)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSubmittingSignal || !canSignalSelectedVenue)
+            }
+
+            Button {
+                isShowingDetailedReport = true
+                isSignalMenuOpen = false
+            } label: {
+                HStack {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(width: 22)
+                    Text("More details")
+                        .font(.footnote.weight(.bold))
+                    Spacer()
+                }
+                .foregroundStyle(NightloopTheme.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmittingSignal || !canSignalSelectedVenue)
+        }
+        .padding(8)
+        .frame(width: 230)
+        .background(NightloopTheme.surface.opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.34), radius: 20, x: 0, y: 10)
+    }
+
+    private var shouldShowLocationPrompt: Bool {
+        !locationPromptSeen && locationManager.userCoordinate == nil && !locationManager.isDenied && !isLoading
+    }
+
+    private var isTonightPreviewNow: Bool {
+        NightlifePreviewPolicy.isPreview(
+            now: Date(),
+            timeZoneIdentifier: marketConfig?.market.timezone ?? "America/Los_Angeles"
+        )
+    }
+
+    private func load() async {
+        guard authStore.config.isGoogleMapsConfigured else {
+            isLoading = false
+            return
+        }
+        guard let token = authStore.accessToken else {
+            errorMessage = "Your session is missing."
+            isLoading = false
+            return
+        }
+        guard let marketID = me.profile?.selectedMarketId else {
+            errorMessage = "No selected market found."
+            isLoading = false
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            async let configTask = apiClient.marketConfig(id: marketID)
+            async let venuesTask = apiClient.venues(
+                marketID: marketID,
+                bearerToken: token,
+                limit: 100,
+                pulse: isTonightPreviewNow ? nil : selectedPulse.apiValue,
+                userCoordinate: locationManager.userCoordinate
+            )
+
+            let (config, response) = try await (configTask, venuesTask)
+            marketConfig = config
+            counts = response.counts
+            venues = response.items
+            selectedVenueID = MapVenueFilter.selectedVenueID(current: selectedVenueID, venues: response.items)
+            updateViewport(for: selectedVenue ?? response.items.first, market: config.market)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isLoading = false
+    }
+
+    private func select(_ venue: VenueItem) {
+        selectedVenueID = venue.id
+        updateViewport(for: venue, market: marketConfig?.market)
+    }
+
+    private func openVenueDetails(_ venue: VenueItem) {
+        _ = MapVenueNavigationTarget.details(for: venue)
+        detailVenueID = venue.id
+    }
+
+    private func updateViewport(for venue: VenueItem?, market: Market?) {
+        let center: CLLocationCoordinate2D
+        let zoom: Double
+        if let venue {
+            center = CLLocationCoordinate2D(
+                latitude: venue.coordinate.latitude,
+                longitude: venue.coordinate.longitude
+            )
+            zoom = max(market?.defaultZoom ?? 12.8, 13.4)
+        } else if let market {
+            center = CLLocationCoordinate2D(
+                latitude: market.center.latitude,
+                longitude: market.center.longitude
+            )
+            zoom = market.defaultZoom ?? 12.2
+        } else {
+            return
+        }
+
+        withAnimation(.easeInOut(duration: 0.25)) {
+            currentMapCenter = center
+            currentMapZoom = zoom
+            camera = GoogleMapCamera(center: center, zoom: zoom)
+        }
+    }
+
+    private func rememberCameraState(_ cameraState: GoogleMapCamera) {
+        let center = cameraState.center
+        let zoom = cameraState.zoom
+        guard abs(zoom - currentMapZoom) > 0.05 ||
+            abs(center.latitude - currentMapCenter.latitude) > 0.0005 ||
+            abs(center.longitude - currentMapCenter.longitude) > 0.0005 else {
+            return
+        }
+
+        currentMapCenter = center
+        currentMapZoom = zoom
+    }
+
+    private func adjustZoom(by delta: Double) {
+        let nextZoom = MapZoomControl.nextZoom(current: currentMapZoom, delta: delta)
+        currentMapZoom = nextZoom
+        withAnimation(.easeInOut(duration: 0.2)) {
+            camera = GoogleMapCamera(center: currentMapCenter, zoom: nextZoom)
+        }
+    }
+
+    private func submitSignal(kind: SignalKind, details: SignalDetails? = nil) async {
+        guard let selectedVenue, let token = authStore.accessToken else { return }
+        guard !isSubmittingSignal else { return }
+        guard VenueActionPolicy.allowsLiveSignal(for: selectedVenue) else {
+            signalMessage = VenueActionPolicy.offHoursSignalCopy
+            isSignalMenuOpen = false
+            return
+        }
+        guard let userCoordinate = locationManager.userCoordinate else {
+            verifySelectedVenueForSignal()
+            return
+        }
+        guard SignalProximity.status(
+            userCoordinate: userCoordinate,
+            venueCoordinate: selectedVenue.coordinate
+        ) == .verified else {
+            signalMessage = "Signals unlock when you're at the venue."
+            isSignalMenuOpen = false
+            return
+        }
+
+        isSubmittingSignal = true
+        do {
+            let result = try await apiClient.submitSignal(
+                venueID: selectedVenue.id,
+                kind: kind,
+                bearerToken: token,
+                userCoordinate: userCoordinate,
+                details: details
+            )
+            signalMessage = "Signal sent · +\(result.pointsAwarded) pts"
+            NightloopHaptics.success()
+            isSignalMenuOpen = false
+            await load()
+            if let updatedMe = try? await apiClient.me(bearerToken: token) {
+                onAccountChanged(updatedMe)
+            }
+        } catch {
+            signalMessage = error.localizedDescription
+        }
+        isSubmittingSignal = false
+
+        Task {
+            try? await Task.sleep(nanoseconds: 1_900_000_000)
+            await MainActor.run {
+                signalMessage = nil
+            }
+        }
+    }
+
+    private func points(for kind: SignalKind) -> Int {
+        switch kind {
+        case .packed: return 3
+        case .shortLine, .longLine: return 2
+        case .dead: return 1
+        case .eventLive: return 4
+        }
+    }
+
+    private var canSignalSelectedVenue: Bool {
+        guard let selectedVenue else { return false }
+        guard VenueActionPolicy.allowsLiveSignal(for: selectedVenue) else { return false }
+        return SignalProximity.status(
+            userCoordinate: locationManager.userCoordinate,
+            venueCoordinate: selectedVenue.coordinate
+        ) == .verified
+    }
+
+    private func verifySelectedVenueForSignal() {
+        guard let selectedVenue else { return }
+        guard VenueActionPolicy.allowsLiveSignal(for: selectedVenue) else {
+            signalMessage = VenueActionPolicy.offHoursSignalCopy
+            isSignalMenuOpen = false
+            return
+        }
+        switch SignalProximity.status(userCoordinate: locationManager.userCoordinate, venueCoordinate: selectedVenue.coordinate) {
+        case .needsLocation:
+            signalMessage = nil
+            isShowingSignalLocationPrompt = true
+            locationPromptSeen = true
+        case .tooFar:
+            signalMessage = "Signals unlock when you're at the venue."
+            isSignalMenuOpen = false
+        case .verified:
+            break
+        }
+    }
+
+    private var selectedVenueRequiresGoingAction: Bool {
+        guard let selectedVenue else { return false }
+        if case .going = VenueActionPolicy.primaryAction(for: selectedVenue, isTonightPreview: isTonightPreviewNow) {
+            return true
+        }
+        return false
+    }
+
+    private var selectedVenuePrimaryActionTitle: String {
+        guard let selectedVenue else { return "Packed" }
+        switch VenueActionPolicy.primaryAction(for: selectedVenue, isTonightPreview: isTonightPreviewNow) {
+        case .signal:
+            return "Packed"
+        case .going(let title):
+            return title
+        case .unavailable:
+            return "Signals later"
+        }
+    }
+
+    private func submitSelectedVenuePrimaryAction() async {
+        guard let selectedVenue else { return }
+        switch VenueActionPolicy.primaryAction(for: selectedVenue, isTonightPreview: isTonightPreviewNow) {
+        case .signal:
+            await submitSignal(kind: .packed)
+        case .going:
+            await submitGoingForSelectedVenue()
+        case .unavailable(let message):
+            signalMessage = message
+        }
+    }
+
+    private func submitGoingForSelectedVenue() async {
+        guard let selectedVenue, let token = authStore.accessToken else { return }
+        guard !isSubmittingSignal else { return }
+
+        isSubmittingSignal = true
+        do {
+            _ = try await apiClient.toggleComing(venueID: selectedVenue.id, isComing: true, bearerToken: token)
+            signalMessage = "You're going"
+            NightloopHaptics.success()
+            isSignalMenuOpen = false
+        } catch {
+            signalMessage = error.localizedDescription
+        }
+        isSubmittingSignal = false
+    }
+}
+
+private extension MapPanelDetent {
+    init(floatingPanelState: FloatingPanelState?) {
+        switch floatingPanelState {
+        case .some(.full):
+            self = .expanded
+        case .some(.tip):
+            self = .compact
+        case .some(.half), .none:
+            self = .medium
+        default:
+            self = .medium
+        }
+    }
+}
+
+private final class NightloopMapFloatingPanelLayout: NSObject, FloatingPanelLayout {
+    private let layout: MapPanelLayout
+
+    init(layout: MapPanelLayout) {
+        self.layout = layout
+        super.init()
+    }
+
+    var position: FloatingPanelPosition {
+        .bottom
+    }
+
+    var initialState: FloatingPanelState {
+        .half
+    }
+
+    var anchors: [FloatingPanelState: FloatingPanelLayoutAnchoring] {
+        [
+            .full: FloatingPanelLayoutAnchor(
+                absoluteInset: MapPanelLayoutPolicy.topClearance,
+                edge: .top,
+                referenceGuide: .safeArea
+            ),
+            .half: FloatingPanelLayoutAnchor(
+                absoluteInset: MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .medium, layout: layout),
+                edge: .bottom,
+                referenceGuide: .safeArea
+            ),
+            .tip: FloatingPanelLayoutAnchor(
+                absoluteInset: MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .compact, layout: layout),
+                edge: .bottom,
+                referenceGuide: .safeArea
+            )
+        ]
+    }
+
+    func prepareLayout(surfaceView: UIView, in view: UIView) -> [NSLayoutConstraint] {
+        [
+            surfaceView.leftAnchor.constraint(equalTo: view.leftAnchor),
+            surfaceView.rightAnchor.constraint(equalTo: view.rightAnchor)
+        ]
+    }
+
+    func backdropAlpha(for state: FloatingPanelState) -> CGFloat {
+        0
+    }
+}
+
+private final class NightloopMapFloatingPanelBehavior: FloatingPanelBehavior {
+    var springDecelerationRate: CGFloat {
+        UIScrollView.DecelerationRate.fast.rawValue + 0.001
+    }
+
+    var springResponseTime: CGFloat {
+        0.34
+    }
+
+    var momentumProjectionRate: CGFloat {
+        UIScrollView.DecelerationRate.normal.rawValue
+    }
+
+    func shouldProjectMomentum(_ fpc: FloatingPanelController, to proposedState: FloatingPanelState) -> Bool {
+        true
+    }
+
+    func allowsRubberBanding(for edge: UIRectEdge) -> Bool {
+        false
+    }
+}
+
+private final class NightloopMapPanelCoordinator: NSObject, FloatingPanelCoordinator {
+    enum Event {
+        case didChangeState(FloatingPanelState)
+    }
+
+    let action: (Event) -> Void
+    let proxy: FloatingPanelProxy
+    lazy var delegate: FloatingPanelControllerDelegate? = self
+    private var lastEmittedState: FloatingPanelState?
+
+    init(action: @escaping (Event) -> Void) {
+        self.action = action
+        self.proxy = FloatingPanelProxy(controller: FloatingPanelController())
+        super.init()
+    }
+
+    func setupFloatingPanel<Main: View, Content: View>(
+        mainHostingController: UIHostingController<Main>,
+        contentHostingController: UIHostingController<Content>
+    ) {
+        contentHostingController.view.backgroundColor = .clear
+        controller.set(contentViewController: contentHostingController)
+        controller.delegate = delegate
+        controller.surfaceView.grabberHandle.isHidden = true
+        controller.surfaceView.grabberAreaOffset = 64
+        controller.isRemovalInteractionEnabled = false
+        controller.addPanel(toParent: mainHostingController, animated: false)
+    }
+
+    func onUpdate<Representable>(
+        context: UIViewControllerRepresentableContext<Representable>
+    ) where Representable: UIViewControllerRepresentable {}
+}
+
+extension NightloopMapPanelCoordinator: FloatingPanelControllerDelegate {
+    func floatingPanelDidChangeState(_ fpc: FloatingPanelController) {
+        emitStateIfNeeded(fpc.state)
+    }
+
+    func floatingPanelDidMove(_ fpc: FloatingPanelController) {
+        emitStateIfNeeded(fpc.state)
+    }
+
+    func floatingPanelDidEndAttracting(_ fpc: FloatingPanelController) {
+        emitStateIfNeeded(fpc.state)
+    }
+
+    private func emitStateIfNeeded(_ state: FloatingPanelState) {
+        guard state != lastEmittedState else { return }
+        lastEmittedState = state
+        action(.didChangeState(state))
+    }
+}
+
+private struct GoogleNightloopMapView: UIViewRepresentable {
+    let markers: [VenueMapMarker]
+    let selectedVenueID: String?
+    @Binding var camera: GoogleMapCamera
+    let mapID: String?
+    let bottomSheetHeight: CGFloat
+    let cameraDidIdle: (GoogleMapCamera) -> Void
+    let selectVenue: (VenueItem) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(camera: $camera, cameraDidIdle: cameraDidIdle, selectVenue: selectVenue)
+    }
+
+    func makeUIView(context: Context) -> GMSMapView {
+        let options = GMSMapViewOptions()
+        options.camera = GMSCameraPosition(
+            latitude: camera.center.latitude,
+            longitude: camera.center.longitude,
+            zoom: Float(camera.zoom)
+        )
+        if GoogleMapStyleSource.shouldUseCloudMapID(
+            localStyleIsBundled: NightloopGoogleMapStyle.isBundled(),
+            configuredMapID: mapID
+        ), let mapID {
+            options.mapID = GMSMapID(identifier: mapID)
+        }
+
+        let mapView = GMSMapView(options: options)
+        mapView.delegate = context.coordinator
+        mapView.settings.compassButton = false
+        mapView.settings.myLocationButton = false
+        mapView.settings.rotateGestures = false
+        mapView.isBuildingsEnabled = false
+        context.coordinator.applyLocalStyle(to: mapView)
+        context.coordinator.applyPadding(bottomSheetHeight: bottomSheetHeight, to: mapView)
+        context.coordinator.appliedCamera = camera
+        context.coordinator.syncMarkers(markers, selectedVenueID: selectedVenueID, on: mapView)
+        return mapView
+    }
+
+    func updateUIView(_ mapView: GMSMapView, context: Context) {
+        context.coordinator.cameraDidIdle = cameraDidIdle
+        context.coordinator.selectVenue = selectVenue
+        context.coordinator.applyPadding(bottomSheetHeight: bottomSheetHeight, to: mapView)
+        if context.coordinator.appliedCamera != camera {
+            context.coordinator.appliedCamera = camera
+            mapView.animate(to: GMSCameraPosition(
+                latitude: camera.center.latitude,
+                longitude: camera.center.longitude,
+                zoom: Float(camera.zoom)
+            ))
+        }
+        context.coordinator.syncMarkers(markers, selectedVenueID: selectedVenueID, on: mapView)
+    }
+
+    final class Coordinator: NSObject, GMSMapViewDelegate {
+        @Binding var camera: GoogleMapCamera
+        var cameraDidIdle: (GoogleMapCamera) -> Void
+        var selectVenue: (VenueItem) -> Void
+        private var activeMarkers: [String: GMSMarker] = [:]
+        private var markerStates: [String: MarkerState] = [:]
+        var appliedCamera: GoogleMapCamera?
+        private var appliedBottomSheetHeight: CGFloat?
+        private var didApplyLocalStyle = false
+
+        init(
+            camera: Binding<GoogleMapCamera>,
+            cameraDidIdle: @escaping (GoogleMapCamera) -> Void,
+            selectVenue: @escaping (VenueItem) -> Void
+        ) {
+            _camera = camera
+            self.cameraDidIdle = cameraDidIdle
+            self.selectVenue = selectVenue
+        }
+
+        func applyLocalStyle(to mapView: GMSMapView) {
+            guard !didApplyLocalStyle else { return }
+            mapView.mapStyle = try? NightloopGoogleMapStyle.makeStyle()
+            didApplyLocalStyle = true
+        }
+
+        func applyPadding(bottomSheetHeight: CGFloat, to mapView: GMSMapView) {
+            guard appliedBottomSheetHeight.map({ abs($0 - bottomSheetHeight) > 0.5 }) ?? true else {
+                return
+            }
+            appliedBottomSheetHeight = bottomSheetHeight
+            mapView.padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: bottomSheetHeight)
+        }
+
+        func syncMarkers(_ markers: [VenueMapMarker], selectedVenueID: String?, on mapView: GMSMapView) {
+            let newIDs = Set(markers.map(\.id))
+            for (id, marker) in activeMarkers where !newIDs.contains(id) {
+                marker.map = nil
+                activeMarkers[id] = nil
+                markerStates[id] = nil
+            }
+
+            for markerModel in markers {
+                let marker = activeMarkers[markerModel.id] ?? GMSMarker()
+                let isSelected = markerModel.id == selectedVenueID
+                let nextState = MarkerState(marker: markerModel, isSelected: isSelected)
+                let shouldRefreshIcon = markerStates[markerModel.id] != nextState
+                marker.position = markerModel.coordinate
+                marker.userData = markerModel.venue
+                marker.groundAnchor = CGPoint(x: 0.5, y: 0.5)
+                marker.zIndex = isSelected ? 2 : 1
+                if shouldRefreshIcon {
+                    marker.iconView = PulseMarkerView(
+                        marker: markerModel,
+                        isSelected: isSelected
+                    )
+                    markerStates[markerModel.id] = nextState
+                }
+                marker.map = mapView
+                activeMarkers[markerModel.id] = marker
+            }
+        }
+
+        func mapView(_ mapView: GMSMapView, didTap marker: GMSMarker) -> Bool {
+            if let venue = marker.userData as? VenueItem {
+                selectVenue(venue)
+                return true
+            }
+            return false
+        }
+
+        func mapView(_ mapView: GMSMapView, idleAt position: GMSCameraPosition) {
+            let nextCamera = GoogleMapCamera(
+                center: position.target,
+                zoom: Double(position.zoom)
+            )
+            appliedCamera = nextCamera
+            camera = nextCamera
+            cameraDidIdle(nextCamera)
+        }
+    }
+}
+
+private struct MarkerState: Equatable {
+    let id: String
+    let latitude: Double
+    let longitude: Double
+    let score: Int
+    let livenessState: VenueLivenessState?
+    let isSelected: Bool
+
+    init(marker: VenueMapMarker, isSelected: Bool) {
+        id = marker.id
+        latitude = marker.coordinate.latitude
+        longitude = marker.coordinate.longitude
+        score = marker.score
+        livenessState = marker.venue.liveness?.state
+        self.isSelected = isSelected
+    }
+}
+
+private final class PulseMarkerView: UIView {
+    init(marker: VenueMapMarker, isSelected: Bool) {
+        let visuals = MapMarkerVisuals.style(liveness: marker.venue.liveness, score: marker.score, isSelected: isSelected)
+        let size = visuals.haloSize
+        super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+
+        let color = markerColor(visuals: visuals, fallback: marker.tone.color)
+        switch visuals.shape {
+        case .filledBloom:
+            addCircle(size: visuals.haloSize, color: color.withAlphaComponent(visuals.haloOpacity), blur: visuals.glowRadius / 2)
+            addCircle(size: visuals.middleSize, color: color.withAlphaComponent(visuals.middleOpacity), blur: 0)
+            let dot = addCircle(size: visuals.dotSize, color: color, blur: visuals.glowRadius / 3)
+            dot.layer.borderWidth = isSelected ? 2 : 1.2
+            dot.layer.borderColor = UIColor.white.withAlphaComponent(0.86).cgColor
+        case .hollowRing:
+            addCircle(size: visuals.haloSize, color: color.withAlphaComponent(visuals.haloOpacity), blur: visuals.glowRadius)
+            addRing(size: visuals.middleSize, color: color, lineWidth: isSelected ? 3 : 2, dashed: false)
+            addCircle(size: 5, color: color.withAlphaComponent(0.85), blur: visuals.glowRadius / 2)
+        case .dashedRing:
+            addRing(size: visuals.middleSize, color: color, lineWidth: isSelected ? 2.4 : 1.8, dashed: true)
+        case .outline:
+            addRing(size: visuals.middleSize, color: color.withAlphaComponent(0.78), lineWidth: isSelected ? 2.2 : 1.5, dashed: false)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @discardableResult
+    private func addCircle(size: CGFloat, color: UIColor, blur: CGFloat) -> UIView {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        view.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        view.backgroundColor = color
+        view.layer.cornerRadius = size / 2
+        if blur > 0 {
+            view.layer.shadowColor = color.cgColor
+            view.layer.shadowOpacity = 0.8
+            view.layer.shadowRadius = blur
+            view.layer.shadowOffset = .zero
+        }
+        addSubview(view)
+        return view
+    }
+
+    private func addRing(size: CGFloat, color: UIColor, lineWidth: CGFloat, dashed: Bool) {
+        let shape = CAShapeLayer()
+        let rect = CGRect(
+            x: bounds.midX - size / 2,
+            y: bounds.midY - size / 2,
+            width: size,
+            height: size
+        )
+        shape.path = UIBezierPath(ovalIn: rect).cgPath
+        shape.fillColor = UIColor.clear.cgColor
+        shape.strokeColor = color.cgColor
+        shape.lineWidth = lineWidth
+        if dashed {
+            shape.lineDashPattern = [3, 3]
+        }
+        if lineWidth > 1.8 {
+            shape.shadowColor = color.cgColor
+            shape.shadowOpacity = 0.45
+            shape.shadowRadius = 6
+            shape.shadowOffset = .zero
+        }
+        layer.addSublayer(shape)
+    }
+
+    private func markerColor(visuals: MapMarkerVisuals, fallback: Color) -> UIColor {
+        switch visuals.colorRole {
+        case .energy:
+            return UIColor(fallback)
+        case .purple:
+            return UIColor(NightloopTheme.purple)
+        case .amber:
+            return UIColor(NightloopTheme.amber)
+        case .gray:
+            return UIColor(NightloopTheme.inkDim)
+        }
+    }
+}
+
+private struct MapFilterPill: View {
+    let title: String
+    let count: Int
+    let color: Color
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if title != "All" {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 7, height: 7)
+                }
+                Text(MapPulseFilterLabel.text(title: title, count: count))
+            }
+            .font(.caption.weight(.bold))
+            .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(isSelected ? .white : NightloopTheme.surface.opacity(0.82))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(isSelected ? .white.opacity(0.8) : NightloopTheme.hairline)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct MapPreviewPill: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isSelected ? NightloopTheme.rose : NightloopTheme.purple)
+                    .frame(width: 6, height: 6)
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(isSelected ? .white : NightloopTheme.surface.opacity(0.82))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(isSelected ? .white.opacity(0.8) : NightloopTheme.hairline)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SelectedVenueMapCard: View {
+    let venue: VenueItem
+    let apiClient: NightloopAPIClient
+    @ObservedObject var authStore: AuthStore
+    let onAccountChanged: (MeResponse) -> Void
+    let isSubmittingSignal: Bool
+    let isCompact: Bool
+    let primaryActionTitle: String
+    let openDetails: () -> Void
+    let submitPacked: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: isCompact ? 7 : 10) {
+            HStack(spacing: 8) {
+                LivenessChip(liveness: venue.liveness, compact: true)
+                ConfidencePips(confidence: venue.liveness?.confidence)
+                Text("·")
+                    .foregroundStyle(NightloopTheme.inkDim)
+                Text("\(venue.liveness?.liveSignalCount ?? venue.recentSignalCount) recent reports")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+            }
+
+            HStack(alignment: .firstTextBaseline) {
+                Button(action: openDetails) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(venue.name)
+                            .font(.system(size: isCompact ? 22 : 26, weight: .black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(1)
+                        Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(venue.name) details")
+                Spacer()
+                EnergyScorePill(score: venue.pulse.score)
+            }
+
+            if !isCompact {
+                HStack(spacing: 7) {
+                    MapFactPill(systemName: "clock.fill", text: venue.liveness?.badgeTitle ?? "hours unknown")
+                    if let distance = venue.distanceMiles {
+                        MapFactPill(systemName: "location.fill", text: String(format: "%.1f mi", distance))
+                    }
+                    if venue.event != nil {
+                        MapFactPill(systemName: "music.note", text: "event")
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button(action: openDetails) {
+                        Text("Details")
+                            .font(.subheadline.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(venue.name) details")
+
+                    Button(action: submitPacked) {
+                        Label(primaryActionTitle, systemImage: primaryActionTitle == "I'm going" ? "figure.walk" : "flame.fill")
+                            .font(.subheadline.weight(.black))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(NightloopTheme.fab)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isSubmittingSignal)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct MapFactPill: View {
+    let systemName: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: systemName)
+            .font(.caption.weight(.bold))
+            .foregroundStyle(NightloopTheme.inkMuted)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.055))
+            .clipShape(Capsule())
+    }
+}
+
+private struct MapRankedVenueRow: View {
+    let venue: VenueItem
+    let isSelected: Bool
+    let openDetails: () -> Void
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    LivenessChip(liveness: venue.liveness, compact: true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(venue.name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .lineLimit(1)
+                        Text("\(venue.neighborhood) · \(venue.waitMinutes.map { "\($0)m wait" } ?? "line unknown")")
+                            .font(.caption)
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+                    SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
+                        .frame(width: 56, height: 20)
+                    Text("\(venue.signalCount)")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+                        .frame(minWidth: 26, alignment: .trailing)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Select \(venue.name)")
+
+            Button(action: openDetails) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .black))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .frame(width: 32, height: 36)
+                    .background(Color.white.opacity(0.055))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(venue.name) details")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(isSelected ? NightloopTheme.purple.opacity(0.15) : Color.white.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isSelected ? NightloopTheme.purpleEdge : .clear)
+        }
+    }
+}
+
+private struct MissingGoogleMapsConfigView: View {
+    var body: some View {
+        ZStack {
+            OrchidBackground(animated: true, gridOpacity: 0.045)
+            NightloopCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Google Maps setup needed", systemImage: "map.fill")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(NightloopTheme.ink)
+                    Text("Add `GOOGLE_MAPS_IOS_API_KEY` and `GOOGLE_MAP_ID` to the ignored iOS config file to turn on the live map.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkMuted)
+                    Text("No Google Places server key, Foursquare key, database URL, or Supabase service-role key belongs in the iOS app.")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NightloopTheme.inkDim)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(20)
+        }
+    }
+}
+
+private struct LocationPromptCard: View {
+    let isDenied: Bool
+    let errorMessage: String?
+    let share: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.good)
+                    .frame(width: 22, height: 22)
+                    .background(NightloopTheme.good.opacity(0.12))
+                    .clipShape(Circle())
+                Text("Sort by nearby")
+                    .font(.caption.weight(.black))
+                    .tracking(0.4)
+                    .foregroundStyle(NightloopTheme.ink)
+                Spacer()
+            }
+
+            Text(errorMessage ?? "Use location while the app is open. Precise location is only sent for this venue search and is not stored.")
+                .font(.caption2.weight(.semibold))
+                .lineSpacing(2)
+                .foregroundStyle(NightloopTheme.inkMuted)
+
+            HStack(spacing: 8) {
+                Button("Not now", action: dismiss)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                Button(isDenied ? "Unavailable" : "Share") {
+                    share()
+                }
+                .font(.caption.weight(.black))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(isDenied ? Color.white.opacity(0.08) : NightloopTheme.purple)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .disabled(isDenied)
+            }
+        }
+        .padding(12)
+        .background(NightloopTheme.surface.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 8)
+    }
+}
+
+enum MapPulseFilterLabel {
+    static func text(title: String, count: Int) -> String {
+        title == "All" ? title : "\(title) \(count)"
+    }
+}
+
+enum NightlifePreviewPolicy {
+    static func isPreview(now: Date, timeZoneIdentifier: String) -> Bool {
+        let timeZone = TimeZone(identifier: timeZoneIdentifier) ?? TimeZone(identifier: "America/Los_Angeles") ?? .current
+        let hour = Calendar(identifier: .gregorian).dateComponents(in: timeZone, from: now).hour ?? 12
+        return hour >= 3 && hour < 18
+    }
+}
+
+private struct SignalLocationPromptCard: View {
+    let venueName: String
+    let isDenied: Bool
+    let errorMessage: String?
+    let share: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.fill")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(NightloopTheme.amber)
+                    .frame(width: 22, height: 22)
+                    .background(NightloopTheme.amber.opacity(0.14))
+                    .clipShape(Circle())
+                Text("Verify at \(venueName)")
+                    .font(.caption.weight(.black))
+                    .tracking(0.4)
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+                Spacer()
+            }
+
+            Text(errorMessage ?? "Share location while the app is open. Nightloop checks proximity for this signal and does not store your precise coordinates.")
+                .font(.caption2.weight(.semibold))
+                .lineSpacing(2)
+                .foregroundStyle(NightloopTheme.inkMuted)
+
+            HStack(spacing: 8) {
+                Button("Not now", action: dismiss)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                Button(isDenied ? "Unavailable" : "Share") {
+                    share()
+                }
+                .font(.caption.weight(.black))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(isDenied ? Color.white.opacity(0.08) : NightloopTheme.fab)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .disabled(isDenied)
+            }
+        }
+        .padding(12)
+        .background(NightloopTheme.surface.opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+        .shadow(color: .black.opacity(0.3), radius: 18, x: 0, y: 8)
+    }
+}
+
+private struct EmptyMapState: View {
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "map")
+                .font(.title2.weight(.black))
+                .foregroundStyle(NightloopTheme.inkMuted)
+            Text("No venues for this filter yet.")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(NightloopTheme.ink)
+            Button("Try again", action: retry)
+                .font(.caption.weight(.black))
+                .foregroundStyle(NightloopTheme.ink)
+        }
+    }
+}
+
+private struct ErrorToast: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(NightloopTheme.amber)
+            Text(message)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NightloopTheme.ink)
+                .lineLimit(2)
+            Spacer()
+            Button("Retry", action: retry)
+                .font(.caption.weight(.black))
+                .foregroundStyle(NightloopTheme.purple)
+        }
+        .padding(12)
+        .background(NightloopTheme.surface.opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+    }
+}

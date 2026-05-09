@@ -11,7 +11,7 @@
  *
  * Required environment
  * ────────────────────
- *   FOURSQUARE_API_KEY  — your Foursquare Places API v3 key.
+ *   FOURSQUARE_API_KEY  — your Foursquare Places API service key.
  *                         Obtain at https://foursquare.com/developers/app
  *                         Copy backend/.env.example → backend/.env.local
  *                         and fill in the value.
@@ -72,13 +72,11 @@ async function main(): Promise<void> {
   if (summary.results.length > 0) {
     console.log("\n[fsq-enrich] Matched venues:");
     for (const r of summary.results) {
-      const pop = r.popularity !== undefined ? ` pop=${r.popularity.toFixed(2)}` : "";
-      const open = r.openNow !== undefined ? (r.openNow ? " open=yes" : " open=no") : "";
       const stored = r.stored ? "✓ stored" : "⚠ not stored (no DB UUID found)";
       console.log(
         `  [${r.matchType}] ${r.venueName.padEnd(35)} → ${r.fsqId}` +
         `  [${r.categories.join(", ") || "no categories"}]` +
-        `${pop}${open}  ${stored}`
+        `  ${stored}`
       );
     }
   }

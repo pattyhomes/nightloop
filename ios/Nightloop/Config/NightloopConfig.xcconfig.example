@@ -1,0 +1,29 @@
+// Copy this file to NightloopConfig.xcconfig and fill in local values.
+// Keep NightloopConfig.xcconfig untracked. Never place backend-only secrets here.
+
+API_BASE_URL = http:/$()/127.0.0.1:4000/api/v1
+SUPABASE_URL = https:/$()/vvpfgxpxsxuhgbqeosqg.supabase.co
+SUPABASE_PUBLISHABLE_KEY = paste_publishable_or_anon_key_here
+
+// Phase 5.5 Google Maps. Use an iOS-restricted Maps SDK key only.
+// Never put Google Places server keys, Foursquare keys, service-role keys, or
+// database URLs in the iOS project.
+GOOGLE_MAPS_IOS_API_KEY = paste_google_maps_ios_key_here
+GOOGLE_MAP_ID = paste_google_cloud_map_id_here
+
+// Flip these only after the matching Supabase/Apple/Twilio setup is complete.
+// Keeping them off makes the app show honest setup-pending states instead of
+// attempting live auth providers that are not configured yet.
+AUTH_APPLE_ENABLED = NO
+AUTH_PHONE_ENABLED = NO
+
+// TestFlight/App Review only. Enables a release-safe reviewer credential entry
+// point. Do not put reviewer passwords in this file.
+REVIEWER_DEMO_ENABLED = NO
+REVIEWER_DEMO_EMAIL_HINT =
+
+// Optional DEBUG-only phone auth test helper values.
+// Use only Supabase dashboard test numbers or a controlled development number.
+// Never put a real user's phone number or one-time code in git.
+DEBUG_PHONE_TEST_NUMBER =
+DEBUG_PHONE_TEST_CODE =

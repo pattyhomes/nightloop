@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 export const metadata = {
   title: "Nightloop",
-  description: "Nightloop frontend starter scaffold"
+  description: "Nightloop beta support and nightlife planning pages"
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

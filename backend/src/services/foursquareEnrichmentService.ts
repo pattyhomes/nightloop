@@ -1,13 +1,14 @@
 /**
  * Foursquare venue enrichment service.
  *
- * Fetches place data from the Foursquare Places API v3 for each known
+ * Fetches place data from the Foursquare Places API for each known
  * Nightloop venue and stores the results in the `venue_enrichments` table.
  *
  * API used
  * ────────
- *   Base URL : https://api.foursquare.com/v3
- *   Auth     : Authorization: <API_KEY>  (header, no "Bearer" prefix)
+ *   Base URL : https://places-api.foursquare.com
+ *   Auth     : Authorization: Bearer <API_KEY>
+ *   Version  : X-Places-Api-Version: 2025-06-17
  *   Docs     : https://docs.foursquare.com/developer/reference/place-search
  *
  * Environment variable
@@ -30,18 +31,19 @@
 
 import { MOCK_VENUES } from "../data/mockVenues";
 import { upsertVenueEnrichment, resolveVenueIdBySeedId } from "../dataAccess/venueEnrichmentRepository";
+import { FOURSQUARE_PLACES_API_BASE_URL, FOURSQUARE_PRO_FIELD_MASK, foursquareHeaders } from "../lib/foursquareHttp";
 import type { FoursquareEnrichmentData } from "../types/venueEnrichment";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const FSQ_BASE = "https://api.foursquare.com/v3";
+const FSQ_BASE = FOURSQUARE_PLACES_API_BASE_URL;
 const FSQ_SOURCE = "foursquare";
 
 /** Radius in metres used for the name+coordinate search. */
 const SEARCH_RADIUS_M = 300;
 
 /** Detail fields requested from the Places API. */
-const DETAIL_FIELDS = "name,location,categories,hours,popularity,rating,stats,verified,website";
+const DETAIL_FIELDS = FOURSQUARE_PRO_FIELD_MASK;
 
 /** Minimum score to accept a Foursquare candidate as a match. */
 const MATCH_THRESHOLD = 0.55;
@@ -56,17 +58,6 @@ interface FsqCategory {
   name: string;
 }
 
-interface FsqHours {
-  display?: string;
-  open_now?: boolean;
-}
-
-interface FsqStats {
-  total_photos?: number;
-  total_ratings?: number;
-  total_tips?: number;
-}
-
 interface FsqLocation {
   address?: string;
   neighborhood?: string;
@@ -74,16 +65,21 @@ interface FsqLocation {
   formatted_address?: string;
 }
 
+interface FsqSocialMedia {
+  instagram?: string;
+  twitter?: string;
+}
+
 interface FsqPlace {
-  fsq_id: string;
+  fsq_id?: string;
+  fsq_place_id?: string;
   name: string;
   location?: FsqLocation;
   categories?: FsqCategory[];
-  hours?: FsqHours;
-  popularity?: number;
-  rating?: number;
-  stats?: FsqStats;
+  tel?: string;
   website?: string;
+  social_media?: FsqSocialMedia;
+  related_places?: unknown;
   verified?: boolean;
 }
 
@@ -147,10 +143,7 @@ async function fsqFetch<T>(path: string, apiKey: string, params: Record<string, 
   }
 
   const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: apiKey,
-      Accept: "application/json"
-    }
+    headers: foursquareHeaders(apiKey)
   });
 
   if (!response.ok) {
@@ -159,6 +152,10 @@ async function fsqFetch<T>(path: string, apiKey: string, params: Record<string, 
   }
 
   return response.json() as Promise<T>;
+}
+
+function fsqPlaceId(place: FsqPlace): string | null {
+  return place.fsq_place_id ?? place.fsq_id ?? null;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -171,16 +168,14 @@ function mapToEnrichmentData(place: FsqPlace): FoursquareEnrichmentData {
   const categories = (place.categories ?? []).map((c) => c.name).filter(Boolean);
 
   return {
-    fsqId: place.fsq_id,
+    fsqId: fsqPlaceId(place) ?? "",
     matchedName: place.name,
     categories,
-    hoursDisplay: place.hours?.display,
-    openNow: place.hours?.open_now,
-    popularity: typeof place.popularity === "number" ? place.popularity : undefined,
-    rating: typeof place.rating === "number" ? place.rating : undefined,
-    totalRatings: place.stats?.total_ratings,
-    totalTips: place.stats?.total_tips,
+    phone: place.tel,
     website: place.website,
+    instagram: place.social_media?.instagram,
+    twitter: place.social_media?.twitter,
+    relatedPlaces: place.related_places,
     address: place.location?.address ?? place.location?.formatted_address,
     neighborhood: place.location?.neighborhood,
     verified: place.verified
@@ -195,8 +190,6 @@ export interface FoursquareEnrichmentResult {
   fsqId: string;
   matchType: string;
   score: number;
-  openNow?: boolean;
-  popularity?: number;
   categories: string[];
   stored: boolean;
 }
@@ -254,10 +247,17 @@ export async function enrichAllVenues(apiKey: string): Promise<FoursquareEnrichm
       summary.matched += 1;
 
       // Step 2 — fetch full place details.
+      const bestFoursquareId = fsqPlaceId(best.place);
+      if (!bestFoursquareId) {
+        summary.skipped += 1;
+        continue;
+      }
+
       await sleep(RATE_LIMIT_DELAY_MS);
-      const detail = await fsqFetch<FsqPlace>(`/places/${best.place.fsq_id}`, apiKey, {
+      const detail = await fsqFetch<FsqPlace>(`/places/${bestFoursquareId}`, apiKey, {
         fields: DETAIL_FIELDS
       });
+      const detailFoursquareId = fsqPlaceId(detail) ?? bestFoursquareId;
 
       const enrichmentData = mapToEnrichmentData(detail);
 
@@ -269,7 +269,7 @@ export async function enrichAllVenues(apiKey: string): Promise<FoursquareEnrichm
           await upsertVenueEnrichment({
             venueId: dbVenueId,
             source: FSQ_SOURCE,
-            externalId: detail.fsq_id,
+            externalId: detailFoursquareId,
             enrichmentData
           });
           stored = true;
@@ -287,11 +287,9 @@ export async function enrichAllVenues(apiKey: string): Promise<FoursquareEnrichm
       summary.results.push({
         venueId: venue.id,
         venueName: venue.name,
-        fsqId: detail.fsq_id,
+        fsqId: detailFoursquareId,
         matchType: best.matchType,
         score: best.score,
-        openNow: enrichmentData.openNow,
-        popularity: enrichmentData.popularity,
         categories: enrichmentData.categories,
         stored
       });

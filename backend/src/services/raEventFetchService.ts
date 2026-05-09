@@ -6,8 +6,9 @@
  * normalizing venue names, and ingests matched events as `event_report` signals
  * via the existing signalIngestionService pipeline.
  *
- * No API key required — RA's GraphQL endpoint is publicly accessible for basic
- * event listing queries.
+ * Phase 2 note: automated RA ingestion is disabled by default and is never
+ * allowed in production. Only run it locally with explicit permission/licensed
+ * access by setting ENABLE_RA_DEV_IMPORT=true.
  *
  * Signal semantics:
  *   signal_type : "event_report" — contributes to `activity` in snapshot scoring
@@ -31,6 +32,14 @@ const RA_SF_AREA_ID = 218; // RA area: "San Francisco/Oakland"
  */
 const FETCH_WINDOW_DAYS = 7;
 const MAX_EVENTS = 20;
+
+function assertRADevImportEnabled(): void {
+  if (process.env.NODE_ENV === "production" || process.env.ENABLE_RA_DEV_IMPORT !== "true") {
+    throw new Error(
+      "Resident Advisor automated ingestion is disabled. Set ENABLE_RA_DEV_IMPORT=true only for approved local/licensed testing."
+    );
+  }
+}
 
 // ─── RA response types ─────────────────────────────────────────────────────
 
@@ -250,6 +259,7 @@ export interface RAIngestionSummary {
  * represent real SF venues not yet in Nightloop's mock data.
  */
 export async function fetchAndIngestRAEvents(): Promise<RAIngestionSummary> {
+  assertRADevImportEnabled();
   const events = await fetchSFEventsFromRA();
 
   const ingested: IngestSignalResult[] = [];

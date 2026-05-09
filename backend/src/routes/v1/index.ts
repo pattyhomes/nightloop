@@ -1,0 +1,1250 @@
+import { randomUUID } from "crypto";
+import { Router, type NextFunction, type Request, type Response } from "express";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
+import type { AppConfig } from "../../lib/config";
+import { ApiError, asyncHandler, toValidationError } from "../../lib/apiError";
+import type { AuthAdminClient } from "../../lib/authAdmin";
+import { createAuthMiddleware } from "../../middleware/auth";
+import {
+  attestAge,
+  deleteAccount,
+  ensureAccountForAuthUser,
+  getPreferences,
+  patchProfile,
+  patchSettings,
+  replacePreferences,
+  requireEligible,
+  toMeResponse,
+  type AccountState,
+  REQUIRED_PREFERENCE_CATEGORIES
+} from "../../services/v1/accountService";
+import { getMarketConfig, listMarkets } from "../../services/v1/marketService";
+import { getLandingMetrics } from "../../services/v1/landingMetricsService";
+import { getVenue, listVenues } from "../../services/v1/venueService";
+import { listRecommendations } from "../../services/v1/recommendationService";
+import { listUserRecentSignals, submitUserSignal } from "../../services/v1/signalService";
+import { seedDevSocialCrew } from "../../services/v1/devSocialCrewService";
+import {
+  addDecisionSessionMessage,
+  advanceDecisionSessionShortlist,
+  createDecisionSession,
+  endDecisionSession,
+  finalizeDecisionSession,
+  getDecisionSession,
+  joinDecisionSession,
+  joinDecisionSessionByCode,
+  listDecisionSessions,
+  removeDecisionCandidate,
+  reportDecisionSessionMessage,
+  rewindDecisionSession,
+  revokeDecisionSessionCode,
+  searchDecisionSessionVenues,
+  suggestDecisionCandidate,
+  voteDecisionSession,
+  voteDecisionSessionShortlist
+} from "../../services/v1/decisionService";
+import {
+  decisionRoomEventBus,
+  type DecisionRoomEvent,
+  writeSseEvent
+} from "../../services/v1/decisionRoomEvents";
+import {
+  enqueueRoomNotification,
+  getNotificationPreferences,
+  registerDeviceToken,
+  revokeDeviceToken,
+  roomNotificationCopy,
+  updateNotificationPreferences
+} from "../../services/v1/notificationService";
+import {
+  acceptFriendInvite,
+  acceptFriendRequest,
+  addActivityReply,
+  blockUser,
+  cancelFriendRequest,
+  createFriendInvite,
+  declineFriendRequest,
+  listBlocks,
+  listFriendActivity,
+  listFriendsTonight,
+  listFriends,
+  reportActivity,
+  reportProfile,
+  revokeFriendInvite,
+  searchProfiles,
+  sendFriendRequest,
+  toggleComing,
+  unblockUser,
+  unfriend
+} from "../../services/v1/socialService";
+import { createAdminRouter } from "./admin";
+
+declare global {
+  namespace Express {
+    interface Request {
+      account?: AccountState;
+    }
+  }
+}
+
+const AgeAttestationSchema = z.object({
+  is_21_or_over: z.boolean()
+});
+
+const ProfilePatchSchema = z
+  .object({
+    display_name: z.string().trim().min(1).max(40).optional(),
+    username: z.string().regex(/^[a-z0-9_]{3,24}$/).optional(),
+    selected_market_id: z.string().uuid().optional(),
+    bio: z.string().trim().max(160).nullable().optional()
+  })
+  .strict();
+
+const SettingsPatchSchema = z
+  .object({
+    ghost_mode: z.boolean().optional(),
+    map_show_neighborhood_labels: z.boolean().optional(),
+    map_show_street_grid: z.boolean().optional(),
+    push_social_enabled: z.boolean().optional(),
+    push_decision_enabled: z.boolean().optional(),
+    push_favorite_venue_alerts_enabled: z.boolean().optional()
+  })
+  .strict();
+
+const PreferenceKeySchema = z.string().trim().regex(/^[a-z0-9_-]{2,40}$/);
+const PreferencesSchema = z
+  .record(z.string(), z.array(PreferenceKeySchema))
+  .superRefine((value, ctx) => {
+    for (const category of REQUIRED_PREFERENCE_CATEGORIES) {
+      const unique = new Set(value[category] ?? []);
+      if (unique.size < 3) {
+        ctx.addIssue({
+          code: "custom",
+          path: [category],
+          message: "At least three picks are required."
+        });
+      }
+    }
+  });
+
+const VenueQuerySchema = z.object({
+  market_id: z.string().min(1),
+  lat: z.coerce.number().min(-90).max(90).optional(),
+  lng: z.coerce.number().min(-180).max(180).optional(),
+  radius_km: z.coerce.number().positive().max(100).optional(),
+  pulse: z.enum(["chill", "active", "packed"]).optional(),
+  q: z.string().trim().min(1).max(80).optional(),
+  limit: z.coerce.number().int().positive().max(100).optional()
+});
+
+const RecommendationQuerySchema = z.object({
+  market_id: z.string().min(1),
+  pulse: z.enum(["chill", "active", "packed"]).optional(),
+  limit: z.coerce.number().int().positive().max(60).optional()
+});
+
+const StructuredTagSchema = z.string().trim().regex(/^[a-z0-9_-]{2,40}$/);
+const SignalDetailsSchema = z
+  .object({
+    wait_minutes: z.coerce.number().int().min(0).max(180).optional(),
+    cover_amount_dollars: z.coerce.number().int().min(0).max(500).optional(),
+    crowd_level: z.enum(["empty", "chill", "active", "packed"]).optional(),
+    vibe_tags: z.array(StructuredTagSchema).max(8).optional(),
+    music_tags: z.array(StructuredTagSchema).max(8).optional(),
+    event_live: z.boolean().optional()
+  })
+  .strict();
+
+const SignalSchema = z
+  .object({
+    venue_id: z.string().uuid(),
+    kind: z.enum(["packed", "short_line", "long_line", "dead", "event_live"]),
+    location: z
+      .object({
+        latitude: z.coerce.number().min(-90).max(90),
+        longitude: z.coerce.number().min(-180).max(180)
+      })
+      .optional(),
+    observed_at: z.string().datetime().optional(),
+    details: SignalDetailsSchema.optional(),
+    metadata: z.record(z.string(), z.unknown()).optional()
+  })
+  .strict();
+
+const DevConfirmedAuthUserSchema = z
+  .object({
+    email: z.string().trim().email(),
+    password: z.string().min(8).max(128)
+  })
+  .strict();
+
+const DevSocialCrewResetSchema = z
+  .object({
+    market: z.string().trim().min(1).max(80).default("san-francisco")
+  })
+  .strict();
+
+const RecentSignalsQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).optional()
+});
+
+const DeviceTokenSchema = z
+  .object({
+    token: z.string().trim().min(32).max(512),
+    apns_environment: z.enum(["sandbox", "production"]).optional(),
+    app_version: z.string().trim().min(1).max(40).optional(),
+    build_number: z.string().trim().min(1).max(40).optional()
+  })
+  .strict();
+
+const DeviceTokenDeleteSchema = z
+  .object({
+    token: z.string().trim().min(32).max(512)
+  })
+  .strict();
+
+const NotificationPreferencesPatchSchema = z
+  .object({
+    room_invites_enabled: z.boolean().optional(),
+    shortlist_ready_enabled: z.boolean().optional(),
+    final_plan_locked_enabled: z.boolean().optional(),
+    room_messages_enabled: z.boolean().optional()
+  })
+  .strict();
+
+const RoomNotificationCategorySchema = z.enum([
+  "room_invite",
+  "shortlist_ready",
+  "final_plan_locked",
+  "room_message"
+]);
+
+const DevRoomNotificationSchema = z
+  .object({
+    session_id: z.string().uuid(),
+    category: RoomNotificationCategorySchema,
+    actor_display_name: z.string().trim().min(1).max(40).optional()
+  })
+  .strict();
+
+const FriendSearchQuerySchema = z.object({
+  q: z.string().trim().min(2).max(80),
+  limit: z.coerce.number().int().positive().max(30).optional()
+});
+
+const FriendActivityQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).optional()
+});
+
+const UserIdBodySchema = z
+  .object({
+    user_id: z.string().uuid()
+  })
+  .strict();
+
+const InviteAcceptSchema = z
+  .object({
+    code: z.string().trim().min(6).max(40)
+  })
+  .strict();
+
+const ComingBodySchema = z
+  .object({
+    is_coming: z.boolean().default(true)
+  })
+  .strict();
+
+const ActivityReplySchema = z
+  .object({
+    kind: z.enum(["comment", "emoji_signal"]),
+    text: z.string().trim().min(1).max(140).optional(),
+    signal_kind: z.enum(["packed", "short_line", "long_line", "dead", "event_live"]).optional(),
+    details: z.record(z.string(), z.unknown()).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.kind === "comment" && !value.text) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "Text is required for comment replies."
+      });
+    }
+    if (value.kind === "emoji_signal" && !value.signal_kind) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["signal_kind"],
+        message: "signal_kind is required for emoji signal replies."
+      });
+    }
+  });
+
+const SocialReportSchema = z
+  .object({
+    reason: z.string().trim().min(2).max(80),
+    details: z.record(z.string(), z.unknown()).optional()
+  })
+  .strict();
+
+const DecisionFiltersSchema = z
+  .object({
+    neighborhood: z.string().trim().min(1).max(80).optional(),
+    category: z.string().trim().min(1).max(40).optional(),
+    pulse: z.enum(["chill", "active", "packed"]).optional()
+  })
+  .strict();
+
+const DecisionCreateSchema = z
+  .object({
+    market_id: z.string().min(1),
+    invited_user_ids: z.array(z.string().uuid()).max(20).optional(),
+    filters: DecisionFiltersSchema.optional()
+  })
+  .strict();
+
+const DecisionJoinSchema = z
+  .object({
+    code: z.string().trim().min(6).max(40).optional()
+  })
+  .strict();
+
+const DecisionJoinByCodeSchema = z
+  .object({
+    code: z.string().trim().min(6).max(40)
+  })
+  .strict();
+
+const DecisionVoteSchema = z
+  .object({
+    candidate_id: z.string().uuid().optional(),
+    venue_id: z.string().uuid().optional(),
+    vote: z.enum(["in", "skip"])
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!value.candidate_id && !value.venue_id) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["candidate_id"],
+        message: "candidate_id or venue_id is required."
+      });
+    }
+  });
+
+const DecisionShortlistVoteSchema = z
+  .object({
+    candidate_id: z.string().uuid()
+  })
+  .strict();
+
+const DecisionVenueSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(80),
+  limit: z.coerce.number().int().positive().max(20).optional()
+});
+
+const DecisionCandidateSchema = z
+  .object({
+    venue_id: z.string().uuid()
+  })
+  .strict();
+
+const DecisionFinalizeSchema = z
+  .object({
+    candidate_id: z.string().uuid(),
+    final_meetup_at: z.string().datetime().nullable().optional(),
+    final_note: z.string().trim().max(140).nullable().optional()
+  })
+  .strict();
+
+const DecisionMessageSchema = z
+  .object({
+    type: z.enum(["text", "emoji"]),
+    text: z.string().trim().min(1).max(140).optional(),
+    emoji: z.enum(["fire", "eyes", "thumbs_up", "thinking", "down"]).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.type === "text" && !value.text) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "Text is required for room text messages."
+      });
+    }
+    if (value.type === "emoji" && !value.emoji) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["emoji"],
+        message: "emoji is required for room emoji messages."
+      });
+    }
+  });
+
+function accountFromRequest(req: Request): AccountState {
+  if (!req.account) {
+    throw new ApiError(500, "ACCOUNT_CONTEXT_MISSING", "Account context is missing.");
+  }
+  return req.account;
+}
+
+function requireEligibleMiddleware(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    requireEligible(accountFromRequest(req));
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function createWriteLimiter(config: AppConfig, limit: number, prefix: string) {
+  return rateLimit({
+    windowMs: config.rateLimitWindowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `${prefix}:${req.auth?.authUserId ?? "anonymous"}`,
+    handler: (_req, res) => {
+      res.status(429).json({
+        error: {
+          code: "RATE_LIMITED",
+          message: "Too many requests. Please try again shortly."
+        }
+      });
+    }
+  });
+}
+
+function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    throw toValidationError(result.error);
+  }
+  return result.data;
+}
+
+function parseQuery<T>(schema: z.ZodType<T>, query: unknown): T {
+  const result = schema.safeParse(query);
+  if (!result.success) {
+    throw toValidationError(result.error);
+  }
+  return result.data;
+}
+
+export function createV1Router(config: AppConfig, authAdmin: AuthAdminClient): Router {
+  const router = Router();
+  const auth = createAuthMiddleware(config);
+  const accountWriteLimiter = createWriteLimiter(config, config.accountWriteLimit, "account");
+  const signalWriteLimiter = createWriteLimiter(config, config.signalWriteLimit, "signal");
+
+  router.get(
+    "/markets",
+    asyncHandler(async (_req, res) => {
+      res.json(await listMarkets());
+    })
+  );
+
+  router.get(
+    "/markets/:id/config",
+    asyncHandler(async (req, res) => {
+      res.json(await getMarketConfig(req.params.id));
+    })
+  );
+
+  router.get(
+    "/landing-metrics",
+    asyncHandler(async (req, res) => {
+      const market = typeof req.query.market === "string" ? req.query.market : "san-francisco";
+      res.json(await getLandingMetrics(market));
+    })
+  );
+
+  router.post(
+    "/dev/confirmed-auth-user",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      if (config.env === "production") {
+        throw new ApiError(404, "NOT_FOUND", "Resource not found.");
+      }
+      if (!authAdmin.createConfirmedEmailUser) {
+        throw new ApiError(500, "AUTH_ADMIN_UNAVAILABLE", "Supabase auth admin user creation is unavailable.");
+      }
+
+      const body = parseBody(DevConfirmedAuthUserSchema, req.body);
+      const user = await authAdmin.createConfirmedEmailUser(body);
+      res.status(201).json({
+        user,
+        message: "Confirmed local development auth user is ready."
+      });
+    })
+  );
+
+  router.post(
+    "/dev/social-crew/reset",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      if (config.env === "production") {
+        throw new ApiError(404, "NOT_FOUND", "Resource not found.");
+      }
+      if (!authAdmin.createConfirmedEmailUser) {
+        throw new ApiError(500, "AUTH_ADMIN_UNAVAILABLE", "Supabase auth admin user creation is unavailable.");
+      }
+
+      const body = parseBody(DevSocialCrewResetSchema, req.body);
+      try {
+        res.json(
+          await seedDevSocialCrew({
+            market: body.market,
+            reset: true,
+            authAdmin
+          })
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown reset failure.";
+        throw new ApiError(500, "DEV_SOCIAL_CREW_RESET_FAILED", `Dev social crew reset failed: ${message}`);
+      }
+    })
+  );
+
+  router.use(auth);
+  router.use(
+    asyncHandler(async (req, _res, next) => {
+      if (!req.auth) {
+        throw new ApiError(401, "AUTH_REQUIRED", "Authorization bearer token is required.");
+      }
+      req.account = await ensureAccountForAuthUser(req.auth.authUserId);
+      next();
+    })
+  );
+
+  router.get(
+    "/me",
+    asyncHandler(async (req, res) => {
+      res.json(toMeResponse(accountFromRequest(req)));
+    })
+  );
+
+  router.post(
+    "/me/age-attestation",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(AgeAttestationSchema, req.body);
+      const account = await attestAge(accountFromRequest(req), body.is_21_or_over);
+      res.json(toMeResponse(account));
+    })
+  );
+
+  router.patch(
+    "/me/profile",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(ProfilePatchSchema, req.body);
+      const account = await patchProfile(accountFromRequest(req), {
+        displayName: body.display_name,
+        username: body.username,
+        selectedMarketId: body.selected_market_id,
+        bio: body.bio
+      });
+      res.json(toMeResponse(account));
+    })
+  );
+
+  router.patch(
+    "/me/settings",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SettingsPatchSchema, req.body);
+      const account = await patchSettings(accountFromRequest(req), body);
+      res.json(toMeResponse(account));
+    })
+  );
+
+  router.get(
+    "/me/preferences",
+    asyncHandler(async (req, res) => {
+      res.json({ preferences: await getPreferences(accountFromRequest(req)) });
+    })
+  );
+
+  router.get(
+    "/me/signals",
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(RecentSignalsQuerySchema, req.query);
+      res.json(await listUserRecentSignals({ account: accountFromRequest(req), limit: query.limit }));
+    })
+  );
+
+  router.put(
+    "/me/preferences",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(PreferencesSchema, req.body);
+      const normalized = Object.fromEntries(
+        Object.entries(body).map(([category, keys]) => [category, [...new Set(keys)]])
+      );
+      res.json({ preferences: await replacePreferences(accountFromRequest(req), normalized) });
+    })
+  );
+
+  router.post(
+    "/me/device-tokens",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DeviceTokenSchema, req.body);
+      res.status(201).json({
+        device_token: await registerDeviceToken(
+          accountFromRequest(req),
+          body.token,
+          body.apns_environment ?? config.apnsEnvironment,
+          body.app_version,
+          body.build_number
+        )
+      });
+    })
+  );
+
+  router.delete(
+    "/me/device-tokens",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DeviceTokenDeleteSchema, req.body);
+      res.json(await revokeDeviceToken(accountFromRequest(req), body.token));
+    })
+  );
+
+  router.get(
+    "/me/notification-preferences",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json({ preferences: await getNotificationPreferences(accountFromRequest(req)) });
+    })
+  );
+
+  router.patch(
+    "/me/notification-preferences",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(NotificationPreferencesPatchSchema, req.body);
+      res.json({ preferences: await updateNotificationPreferences(accountFromRequest(req), body) });
+    })
+  );
+
+  router.delete(
+    "/me/account",
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      await deleteAccount(accountFromRequest(req), authAdmin);
+      res.status(202).json({
+        status: "accepted",
+        message: "Account deletion has started."
+      });
+    })
+  );
+
+  router.post(
+    "/dev/notifications/room-test",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      if (config.env === "production") {
+        throw new ApiError(404, "NOT_FOUND", "Resource not found.");
+      }
+      const body = parseBody(DevRoomNotificationSchema, req.body);
+      await getDecisionSession(accountFromRequest(req), body.session_id);
+      const copy = roomNotificationCopy(body.category, body.actor_display_name ?? accountFromRequest(req).profile.display_name);
+      const enqueue = await enqueueRoomNotification(
+        body.session_id,
+        accountFromRequest(req).user.id,
+        body.category,
+        body.actor_display_name ?? accountFromRequest(req).profile.display_name,
+        { ...config, notificationDeliveryMode: "mock" }
+      );
+      res.json({
+        notification: {
+          category: body.category,
+          copy,
+          route: {
+            type: "decision_session",
+            session_id: body.session_id
+          },
+          queued_count: enqueue.queued_count,
+          delivery_mode: "mock"
+        }
+      });
+    })
+  );
+
+  router.get(
+    "/friends",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await listFriends(accountFromRequest(req)));
+    })
+  );
+
+  router.get(
+    "/friends/search",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(FriendSearchQuerySchema, req.query);
+      res.json(await searchProfiles({ account: accountFromRequest(req), q: query.q, limit: query.limit }));
+    })
+  );
+
+  router.post(
+    "/friends/requests",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(UserIdBodySchema, req.body);
+      const result = await sendFriendRequest(accountFromRequest(req), body.user_id);
+      res.status(result.created ? 201 : 200).json(result);
+    })
+  );
+
+  router.post(
+    "/friends/requests/:id/accept",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await acceptFriendRequest(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/friends/requests/:id/decline",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await declineFriendRequest(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.delete(
+    "/friends/requests/:id",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await cancelFriendRequest(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.delete(
+    "/friends/:userId",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await unfriend(accountFromRequest(req), req.params.userId));
+    })
+  );
+
+  router.get(
+    "/friends/blocks",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await listBlocks(accountFromRequest(req)));
+    })
+  );
+
+  router.post(
+    "/friends/blocks",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(UserIdBodySchema, req.body);
+      const result = await blockUser(accountFromRequest(req), body.user_id);
+      res.status(201).json(result);
+    })
+  );
+
+  router.delete(
+    "/friends/blocks/:userId",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await unblockUser(accountFromRequest(req), req.params.userId));
+    })
+  );
+
+  router.post(
+    "/friends/invites",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.status(201).json(await createFriendInvite(accountFromRequest(req)));
+    })
+  );
+
+  router.delete(
+    "/friends/invites/:id",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await revokeFriendInvite(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/friends/invites/accept",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(InviteAcceptSchema, req.body);
+      res.json(await acceptFriendInvite(accountFromRequest(req), body.code));
+    })
+  );
+
+  router.get(
+    "/friends/activity",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(FriendActivityQuerySchema, req.query);
+      res.json(await listFriendActivity({ account: accountFromRequest(req), limit: query.limit }));
+    })
+  );
+
+  router.get(
+    "/friends/tonight",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(FriendActivityQuerySchema, req.query);
+      res.json(await listFriendsTonight({ account: accountFromRequest(req), limit: query.limit }));
+    })
+  );
+
+  router.post(
+    "/friends/venues/:venueId/coming",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(ComingBodySchema, req.body);
+      const result = await toggleComing({
+        account: accountFromRequest(req),
+        venueId: req.params.venueId,
+        isComing: body.is_coming
+      });
+      res.status(body.is_coming ? 201 : 200).json(result);
+    })
+  );
+
+  router.post(
+    "/friends/activity/:id/replies",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(ActivityReplySchema, req.body);
+      res.status(201).json(
+        await addActivityReply({
+          account: accountFromRequest(req),
+          activityId: req.params.id,
+          kind: body.kind,
+          text: body.text,
+          signalKind: body.signal_kind,
+          details: body.details
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/friends/activity/:id/report",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SocialReportSchema, req.body);
+      res.status(201).json(
+        await reportActivity({
+          account: accountFromRequest(req),
+          activityId: req.params.id,
+          reason: body.reason,
+          details: body.details
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/friends/profiles/:userId/report",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SocialReportSchema, req.body);
+      res.status(201).json(
+        await reportProfile({
+          account: accountFromRequest(req),
+          userId: req.params.userId,
+          reason: body.reason,
+          details: body.details
+        })
+      );
+    })
+  );
+
+  router.get(
+    "/decision-sessions",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await listDecisionSessions(accountFromRequest(req)));
+    })
+  );
+
+  router.post(
+    "/decision-sessions",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionCreateSchema, req.body);
+      res.status(201).json(
+        await createDecisionSession({
+          account: accountFromRequest(req),
+          marketId: body.market_id,
+          invitedUserIds: body.invited_user_ids,
+          filters: body.filters
+        })
+      );
+    })
+  );
+
+  router.get(
+    "/decision-sessions/:id/events",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const session = await getDecisionSession(accountFromRequest(req), req.params.id);
+      if (session.session.status !== "active") {
+        throw new ApiError(409, "DECISION_SESSION_CLOSED", "This decision session is no longer active.");
+      }
+      if (session.session.viewer_status !== "joined") {
+        throw new ApiError(403, "SESSION_JOIN_REQUIRED", "Join the decision session first.");
+      }
+
+      res.status(200);
+      res.set({
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive"
+      });
+      res.flushHeaders?.();
+
+      const initialEvent: DecisionRoomEvent = {
+        id: randomUUID(),
+        session_id: session.session.id,
+        type: "room_snapshot_invalidated",
+        created_at: new Date().toISOString()
+      };
+      writeSseEvent(res, initialEvent);
+
+      if (config.env === "test" && req.query.once === "1") {
+        res.end();
+        return;
+      }
+
+      const unsubscribe = decisionRoomEventBus.subscribe(req.params.id, (event) => {
+        writeSseEvent(res, event);
+      });
+      const heartbeat = setInterval(() => {
+        res.write(": heartbeat\n\n");
+      }, 25_000);
+
+      req.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    })
+  );
+
+  router.get(
+    "/decision-sessions/:id",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await getDecisionSession(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.get(
+    "/decision-sessions/:id/venue-search",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(DecisionVenueSearchQuerySchema, req.query);
+      res.json(
+        await searchDecisionSessionVenues({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          q: query.q,
+          limit: query.limit
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/join",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionJoinByCodeSchema, req.body);
+      res.json(
+        await joinDecisionSessionByCode({
+          account: accountFromRequest(req),
+          code: body.code
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/join",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionJoinSchema, req.body);
+      res.json(
+        await joinDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          code: body.code
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/votes",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionVoteSchema, req.body);
+      res.json(
+        await voteDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: body.candidate_id,
+          venueId: body.venue_id,
+          vote: body.vote
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/rewind",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(
+        await rewindDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/advance-shortlist",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(
+        await advanceDecisionSessionShortlist({
+          account: accountFromRequest(req),
+          sessionId: req.params.id
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/shortlist-votes",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionShortlistVoteSchema, req.body);
+      res.json(
+        await voteDecisionSessionShortlist({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: body.candidate_id
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/candidates",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionCandidateSchema, req.body);
+      res.status(201).json(
+        await suggestDecisionCandidate({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          venueId: body.venue_id
+        })
+      );
+    })
+  );
+
+  router.delete(
+    "/decision-sessions/:id/candidates/:candidateId",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(
+        await removeDecisionCandidate({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: req.params.candidateId
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/finalize",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionFinalizeSchema, req.body);
+      res.json(
+        await finalizeDecisionSession({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          candidateId: body.candidate_id,
+          finalMeetupAt: body.final_meetup_at,
+          finalNote: body.final_note
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/messages",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(DecisionMessageSchema, req.body);
+      res.status(201).json(
+        await addDecisionSessionMessage({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          type: body.type,
+          text: body.text,
+          emoji: body.emoji
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/messages/:messageId/report",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SocialReportSchema, req.body);
+      res.status(201).json(
+        await reportDecisionSessionMessage({
+          account: accountFromRequest(req),
+          sessionId: req.params.id,
+          messageId: req.params.messageId,
+          reason: body.reason,
+          details: body.details
+        })
+      );
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/revoke-code",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await revokeDecisionSessionCode(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.post(
+    "/decision-sessions/:id/end",
+    requireEligibleMiddleware,
+    accountWriteLimiter,
+    asyncHandler(async (req, res) => {
+      res.json(await endDecisionSession(accountFromRequest(req), req.params.id));
+    })
+  );
+
+  router.use("/admin", createAdminRouter(config));
+
+  router.get(
+    "/recommendations",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(RecommendationQuerySchema, req.query);
+      res.json(
+        await listRecommendations({
+          account: accountFromRequest(req),
+          marketId: query.market_id,
+          pulse: query.pulse,
+          limit: query.limit
+        })
+      );
+    })
+  );
+
+  router.get(
+    "/venues",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      const query = parseQuery(VenueQuerySchema, req.query);
+      res.json(
+        await listVenues({
+          account: accountFromRequest(req),
+          marketId: query.market_id,
+          lat: query.lat,
+          lng: query.lng,
+          radiusKm: query.radius_km,
+          pulse: query.pulse,
+          q: query.q,
+          limit: query.limit
+        })
+      );
+    })
+  );
+
+  router.get(
+    "/venues/:id",
+    requireEligibleMiddleware,
+    asyncHandler(async (req, res) => {
+      res.json(await getVenue(req.params.id, accountFromRequest(req)));
+    })
+  );
+
+  router.post(
+    "/signals",
+    requireEligibleMiddleware,
+    signalWriteLimiter,
+    asyncHandler(async (req, res) => {
+      const body = parseBody(SignalSchema, req.body);
+      const result = await submitUserSignal({
+        account: accountFromRequest(req),
+        venueId: body.venue_id,
+        kind: body.kind,
+        location: body.location,
+        observedAt: body.observed_at,
+        metadata: body.metadata,
+        details: body.details
+      });
+
+      res.status(201).json({
+        signal_id: result.signalId,
+        venue_id: result.venueId,
+        points_awarded: result.pointsAwarded,
+        new_signal_scout_points: result.newSignalScoutPoints
+      });
+    })
+  );
+
+  return router;
+}

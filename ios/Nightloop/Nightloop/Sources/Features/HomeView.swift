@@ -1,0 +1,678 @@
+import SwiftUI
+
+struct HomeView: View {
+    let apiClient: NightloopAPIClient
+    @ObservedObject var authStore: AuthStore
+    let me: MeResponse
+    let preferences: [String: [String]]
+    let onAccountChanged: (MeResponse) -> Void
+
+    @State private var markets: [Market] = []
+    @State private var selectedMarketID: String?
+    @State private var selectedPulse: PulseFilter?
+    @State private var selectedPreviewFilter: PreviewFilterPolicy = .all
+    @State private var recommendationFeed: RecommendationListResponse?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var signalMessage: String?
+    @State private var isShowingMarketSheet = false
+    @State private var savedReminderVenueIDs: Set<String> = []
+
+    private var activeMarketID: String? {
+        selectedMarketID ?? me.profile?.selectedMarketId ?? markets.first?.id
+    }
+
+    private var activeMarket: Market? {
+        markets.first { $0.id == activeMarketID } ?? markets.first
+    }
+
+    private var heroRecommendation: RecommendationItem? {
+        displayedRecommendationItems.first { $0.venue.liveness?.state != .closedToday }
+    }
+
+    private var displayedRecommendationItems: [RecommendationItem] {
+        guard let recommendationFeed else { return [] }
+        guard recommendationFeed.mode == "tonight_preview" else { return recommendationFeed.items }
+        return recommendationFeed.items.filter { selectedPreviewFilter.matches($0) }
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            OrchidBackground(animated: true, gridOpacity: 0.035)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+
+                    if let recommendationFeed {
+                        trustPulseStrip(feed: recommendationFeed)
+                        filterStrip(feed: recommendationFeed)
+
+                        if let heroRecommendation {
+                            heroCard(heroRecommendation.venue, recommendation: heroRecommendation)
+                        }
+
+                        recommendationSections(feed: recommendationFeed)
+                    } else if isLoading {
+                        LoadingStateView(title: "Loading SF venues")
+                    } else if let errorMessage {
+                        ErrorStateView(title: "Home feed unavailable", message: errorMessage) {
+                            Task { await load() }
+                        }
+                    } else {
+                        EmptyStateView(title: "No venues yet", message: "The backend returned an empty feed for this market.")
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, BottomContentInsets.scrollBottomPadding())
+            }
+
+            if let signalMessage {
+                SignalToast(message: signalMessage, isError: isToastError(signalMessage))
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .task { await load() }
+        .sheet(isPresented: $isShowingMarketSheet) {
+            MarketPickerSheet(markets: markets, selectedMarketID: activeMarketID) { market in
+                selectedMarketID = market.id
+                isShowingMarketSheet = false
+                Task { await load() }
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(currentNightLabel.uppercased())
+                    .font(.caption2.weight(.black))
+                    .tracking(1.6)
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                Button {
+                    isShowingMarketSheet = true
+                } label: {
+                    HStack(spacing: 7) {
+                        Text("Tonight in \(activeMarket?.shortLabel ?? "SF")")
+                            .font(.system(size: 28, weight: .black, design: .rounded))
+                            .foregroundStyle(NightloopTheme.ink)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            GlassIconButton(systemName: "arrow.clockwise") {
+                Task { await load() }
+            }
+        }
+    }
+
+    private var currentNightLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE · MMMM d"
+        return formatter.string(from: Date())
+    }
+
+    private func isToastError(_ message: String) -> Bool {
+        !message.contains("+") &&
+            message != "Reminders coming soon" &&
+            message != "Reminder saved for tonight" &&
+            !message.localizedCaseInsensitiveContains("open details")
+    }
+
+    private func trustPulseStrip(feed: RecommendationListResponse) -> some View {
+        let liveCount = feed.items.filter { $0.venue.liveness?.state == .live }.count
+        let isLive = liveCount > 0
+        return HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill((isLive ? NightloopTheme.rose : NightloopTheme.purple).opacity(0.35))
+                    .frame(width: 30, height: 30)
+                    .shadow(color: (isLive ? NightloopTheme.rose : NightloopTheme.purple).opacity(0.65), radius: 14)
+                Circle()
+                    .fill(isLive ? .white : .clear)
+                    .overlay {
+                        if !isLive {
+                            Circle().stroke(.white.opacity(0.9), lineWidth: 2)
+                        }
+                    }
+                    .frame(width: 10, height: 10)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isLive ? "LIVE PULSE" : "TONIGHT PREVIEW")
+                    .font(.caption2.weight(.black))
+                    .tracking(1.5)
+                    .foregroundStyle(Color(hex: "#e9d5ff"))
+                Text(isLive
+                     ? "\(liveCount) live · \(feed.counts.active) active · \(feed.counts.chill) chill"
+                     : "Source-backed picks for tonight · no unverified live claims")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(NightloopTheme.ink)
+            }
+
+            Spacer()
+
+            Text(Date().formatted(date: .omitted, time: .shortened))
+                .font(.caption.monospaced().weight(.semibold))
+                .foregroundStyle(NightloopTheme.inkMuted)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            LinearGradient(
+                colors: [NightloopTheme.purpleSoft, NightloopTheme.rose.opacity(0.08)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous)
+                .stroke(NightloopTheme.purpleEdge)
+        }
+    }
+
+    @ViewBuilder
+    private func filterStrip(feed: RecommendationListResponse) -> some View {
+        if feed.mode == "tonight_preview" {
+            previewStrip(feed: feed)
+        } else {
+            pulseFilterStrip(counts: feed.counts)
+        }
+    }
+
+    private func previewStrip(feed: RecommendationListResponse) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(PreviewFilterPolicy.allCases) { filter in
+                    PreviewPill(
+                        title: previewTitle(filter, feed: feed),
+                        isSelected: selectedPreviewFilter == filter
+                    ) {
+                        selectedPreviewFilter = filter
+                    }
+                }
+            }
+        }
+    }
+
+    private func previewTitle(_ filter: PreviewFilterPolicy, feed: RecommendationListResponse) -> String {
+        switch filter {
+        case .all:
+            return filter.label
+        case .expected, .opensLater, .sourceBacked:
+            return "\(filter.count(in: feed.items)) \(filter.label)"
+        }
+    }
+
+    private func pulseFilterStrip(counts: VenueCounts) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                FilterPill(title: "All", count: counts.all, isSelected: selectedPulse == nil, color: NightloopTheme.purple) {
+                    selectedPulse = nil
+                    Task { await load() }
+                }
+                FilterPill(title: "Packed", count: counts.packed, isSelected: selectedPulse == .packed, color: NightloopTheme.rose) {
+                    selectedPulse = .packed
+                    Task { await load() }
+                }
+                FilterPill(title: "Active", count: counts.active, isSelected: selectedPulse == .active, color: NightloopTheme.amber) {
+                    selectedPulse = .active
+                    Task { await load() }
+                }
+                FilterPill(title: "Chill", count: counts.chill, isSelected: selectedPulse == .chill, color: NightloopTheme.cool) {
+                    selectedPulse = .chill
+                    Task { await load() }
+                }
+            }
+        }
+    }
+
+    private func heroCard(_ venue: VenueItem, recommendation: RecommendationItem?) -> some View {
+        NavigationLink {
+            VenueDetailView(
+                apiClient: apiClient,
+                authStore: authStore,
+                venueID: venue.id,
+                initialVenue: venue,
+                onAccountChanged: onAccountChanged
+            )
+        } label: {
+            VStack(spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    VenueArtView(venue: venue, height: 200, cornerRadius: 0, placement: .hero)
+                    HStack(spacing: 6) {
+                        LivenessChip(liveness: venue.liveness)
+                        Text("#1 tonight")
+                            .font(.caption2.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.42))
+                            .clipShape(Capsule())
+                    }
+                    .padding(14)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            NightloopSectionHeader(title: "\(venue.pulse.label) · \(venue.trend)", trailing: "\(venue.signalCount) signals")
+                            ConfidencePips(confidence: venue.liveness?.confidence)
+                        }
+                        Text(venue.name)
+                            .font(.title.weight(.black))
+                            .foregroundStyle(NightloopTheme.ink)
+                        Text("\(venue.neighborhood) · \(venue.category.replacingOccurrences(of: "_", with: " "))")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(NightloopTheme.inkMuted)
+                        if venue.pulse.isExpected == true, let copy = venue.pulse.copy {
+                            Text(copy)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(NightloopTheme.inkDim)
+                                .lineLimit(2)
+                        }
+                    }
+
+                    SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
+
+                    Text(recommendation?.reason ?? VenuePreferenceTuner.reason(for: venue, preferences: preferences))
+                        .font(.footnote)
+                        .foregroundStyle(NightloopTheme.inkMuted)
+
+                    HStack(spacing: 10) {
+                        SignalButton(title: "Verify at venue", systemImage: "location.fill") {
+                            signalMessage = "Open details or the map to verify you're there before signaling."
+                        }
+                        SignalButton(
+                            title: savedReminderVenueIDs.contains(venue.id) ? "Reminder saved" : "Remind me",
+                            systemImage: savedReminderVenueIDs.contains(venue.id) ? "bell.badge.fill" : "bell.fill"
+                        ) {
+                            NightloopHaptics.success()
+                            savedReminderVenueIDs.insert(venue.id)
+                            signalMessage = "Reminder saved for tonight"
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(NightloopTheme.surface.opacity(0.88))
+            .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerLarge, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: NightloopTheme.cornerLarge, style: .continuous)
+                    .stroke(NightloopTheme.hairline)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func recommendationSections(feed: RecommendationListResponse) -> some View {
+        let heroID = heroRecommendation?.venue.id
+        let remaining = displayedRecommendationItems.filter { $0.venue.id != heroID }
+        let high = remaining.filter { $0.confidence == .high && $0.venue.liveness?.state != .closedToday }
+        let medium = remaining.filter { ($0.confidence ?? $0.venue.liveness?.confidence) == .medium && $0.venue.liveness?.state != .closedToday }
+        let review = remaining.filter {
+            let state = $0.venue.liveness?.state ?? .unknown
+            return state == .unknown || state == .closedToday || ($0.confidence ?? $0.venue.liveness?.confidence) == .low
+        }
+
+        if remaining.isEmpty {
+            EmptyStateView(title: "Tonight preview is sparse", message: "Nightloop needs more source-backed venues before making more recommendations.")
+        } else {
+            RecommendationSection(
+                title: "High-confidence tonight",
+                items: high,
+                apiClient: apiClient,
+                authStore: authStore,
+                onAccountChanged: onAccountChanged
+            )
+            RecommendationSection(
+                title: "Worth watching",
+                items: medium,
+                apiClient: apiClient,
+                authStore: authStore,
+                onAccountChanged: onAccountChanged
+            )
+            RecommendationSection(
+                title: "Closed or unverified",
+                items: review,
+                apiClient: apiClient,
+                authStore: authStore,
+                onAccountChanged: onAccountChanged
+            )
+        }
+    }
+
+    private func load() async {
+        guard let token = authStore.accessToken else {
+            errorMessage = "Your session is missing. Please sign in again."
+            isLoading = false
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+        recommendationFeed = nil
+        do {
+            let marketResponse = try await apiClient.markets()
+            markets = marketResponse.items
+            if selectedMarketID == nil {
+                selectedMarketID = me.profile?.selectedMarketId ?? marketResponse.items.first?.id
+            }
+            guard let marketID = activeMarketID else {
+                throw NightloopAPIError.transport(statusCode: 0, message: "No active market is configured.")
+            }
+            recommendationFeed = try await apiClient.recommendations(
+                marketID: marketID,
+                bearerToken: token,
+                pulse: selectedPulse?.rawValue
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+}
+
+private enum PulseFilter: String, Equatable {
+    case chill
+    case active
+    case packed
+}
+
+private struct FilterPill: View {
+    let title: String
+    let count: Int
+    let isSelected: Bool
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: color.opacity(0.8), radius: 8)
+                Text(HomePulseFilterLabel.text(title: title, count: count))
+                    .font(.caption2.weight(.bold))
+            }
+            .foregroundStyle(NightloopTheme.ink)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(isSelected ? color.opacity(0.22) : Color.white.opacity(0.05))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(isSelected ? color.opacity(0.55) : NightloopTheme.hairline)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PreviewPill: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isSelected ? NightloopTheme.rose : NightloopTheme.purple)
+                    .frame(width: 6, height: 6)
+                Text(title)
+                    .font(.caption2.weight(.bold))
+                    .textCase(.lowercase)
+            }
+            .foregroundStyle(isSelected ? Color(hex: "#1a1611") : NightloopTheme.ink)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(isSelected ? .white : Color.white.opacity(0.055))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(isSelected ? .white.opacity(0.8) : NightloopTheme.hairline)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+enum HomePulseFilterLabel {
+    static func text(title: String, count: Int) -> String {
+        title == "All" ? title : "\(title) · \(count)"
+    }
+}
+
+struct VenueArtView: View {
+    let venue: VenueItem
+    var height: CGFloat = 132
+    var cornerRadius: CGFloat = NightloopTheme.cornerMedium
+    var placement: VenueArtPlacement = .card
+
+    private var presentation: VenueArtPresentation {
+        VenueArtPolicy.presentation(placement: placement, asset: venue.image)
+    }
+
+    var body: some View {
+        if !presentation.shouldPreferFallback, let urlString = venue.image?.url, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: height)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                        .overlay(alignment: .bottomLeading) {
+                            if presentation.shouldShowCredit, let credit = venue.image?.creditText, !credit.isEmpty {
+                                Text(credit)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(NightloopTheme.inkMuted)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(Color.black.opacity(0.32), in: Capsule())
+                                    .padding(8)
+                            }
+                        }
+                default:
+                    fallback
+                }
+            }
+        } else {
+            fallback
+        }
+    }
+
+    private var fallback: some View {
+        ZStack(alignment: .bottomLeading) {
+            VenueFallbackArt(
+                title: venue.name,
+                subtitle: venue.neighborhood,
+                score: venue.pulse.score,
+                height: height,
+                cornerRadius: cornerRadius,
+                symbol: symbol(for: venue.category)
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    private func symbol(for category: String) -> String {
+        if category.contains("club") { return "music.quarternote.3" }
+        if category.contains("live") { return "guitars.fill" }
+        if category.contains("lounge") { return "sparkles" }
+        return "wineglass.fill"
+    }
+}
+
+private struct MarketPickerSheet: View {
+    let markets: [Market]
+    let selectedMarketID: String?
+    let select: (Market) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(markets) { market in
+                Button {
+                    select(market)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(market.displayName)
+                                .font(.headline)
+                            Text(market.launchStatus.capitalized)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if selectedMarketID == market.id {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(NightloopTheme.good)
+                        }
+                    }
+                }
+                .disabled(market.launchStatus != "active")
+            }
+            .navigationTitle("Choose market")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+private struct VenueRow: View {
+    let venue: VenueItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if venue.image?.url != nil {
+                VenueArtView(venue: venue, height: 58, cornerRadius: 10, placement: .row)
+                    .frame(width: 58, height: 58)
+                    .clipped()
+            } else {
+                VenuePulseTile(venue: venue)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    LivenessChip(liveness: venue.liveness, compact: true)
+                    ConfidencePips(confidence: venue.liveness?.confidence)
+                }
+
+                Text(venue.name)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(NightloopTheme.ink)
+                    .lineLimit(1)
+                Text("\(venue.neighborhood) · \(venue.trend.capitalized)")
+                    .font(.caption)
+                    .foregroundStyle(NightloopTheme.inkMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 5) {
+                SparklinePlaceholder(color: EnergyTone.from(score: venue.pulse.score).color)
+                    .frame(width: 54, height: 20)
+                EnergyScorePill(score: venue.pulse.score, showLabel: false)
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: NightloopTheme.cornerMedium, style: .continuous)
+                .stroke(NightloopTheme.hairline)
+        }
+    }
+}
+
+private struct RecommendationSection: View {
+    let title: String
+    let items: [RecommendationItem]
+    let apiClient: NightloopAPIClient
+    @ObservedObject var authStore: AuthStore
+    let onAccountChanged: (MeResponse) -> Void
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                NightloopSectionHeader(title: title, trailing: "\(items.count)")
+                ForEach(items) { item in
+                    NavigationLink {
+                        VenueDetailView(
+                            apiClient: apiClient,
+                            authStore: authStore,
+                            venueID: item.venue.id,
+                            initialVenue: item.venue,
+                            onAccountChanged: onAccountChanged
+                        )
+                    } label: {
+                        VenueRow(venue: item.venue)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+private struct VenuePulseTile: View {
+    let venue: VenueItem
+
+    private var tone: EnergyTone {
+        EnergyTone.from(score: venue.pulse.score)
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [tone.color.opacity(0.55), NightloopTheme.purple.opacity(0.22), NightloopTheme.surfaceElevated],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            Circle()
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                .frame(width: 34, height: 34)
+
+            Image(systemName: symbol(for: venue.category))
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white.opacity(0.92))
+                .shadow(color: tone.color.opacity(0.7), radius: 8)
+        }
+        .frame(width: 58, height: 58)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(tone.color.opacity(0.3))
+        }
+    }
+
+    private func symbol(for category: String) -> String {
+        if category.contains("club") { return "music.quarternote.3" }
+        if category.contains("live") { return "guitars.fill" }
+        if category.contains("lounge") { return "sparkles" }
+        if category.contains("karaoke") { return "mic.fill" }
+        return "wineglass.fill"
+    }
+}

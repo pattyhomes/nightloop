@@ -13,6 +13,15 @@ This folder contains the baseline PostgreSQL schema for Nightloop.
 psql "$DATABASE_URL" -f db/schema.sql
 ```
 
+Apply versioned migrations in order from `db/migrations`. Phase 4 adds
+`005_phase4_security_advisor_cleanup.sql` for Supabase Advisor cleanup. It keeps
+Nightloop backend-mediated, fixes `public.set_updated_at` with an explicit
+`search_path`, and denies direct API access to `public.spatial_ref_sys` when the
+migration role owns that extension-created table. On Supabase-hosted projects,
+`spatial_ref_sys` may be owned by `supabase_admin`; in that case the migration
+warns and leaves the item for a supported extension cleanup path instead of
+opening broad PostgREST policies.
+
 ## Seed San Francisco venues (MVP)
 
 ```bash

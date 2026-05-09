@@ -7,6 +7,14 @@
 *.log
 logs/
 
+# Environment files
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
 # Python
 __pycache__/
 *.pyc
@@ -20,3 +28,8 @@ dist/
 *.tmp
 data/raw/
 data/processed/
+
+# iOS / Xcode
+ios/Nightloop/Nightloop.xcodeproj/
+ios/Nightloop/DerivedData/
+ios/Nightloop/Config/NightloopConfig.xcconfig

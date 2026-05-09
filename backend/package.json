@@ -8,19 +8,53 @@
     "dev:local": "npm run dev",
     "dev:watch": "npm run dev",
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
     "start": "node dist/server.js",
     "ingest:ra": "tsx src/scripts/fetchRAEvents.ts",
-    "enrich:foursquare": "tsx src/scripts/enrichVenuesFoursquare.ts"
+    "enrich:foursquare": "tsx src/scripts/enrichVenuesFoursquare.ts",
+    "review:google-qa": "tsx src/scripts/reviewGooglePlacesQa.ts",
+    "import:sf-notable": "tsx src/scripts/importSfNotableVenues.ts",
+    "import:datasf-poe": "tsx src/scripts/importDatasfPoeVenues.ts",
+    "import:nyc-sla": "tsx src/scripts/importNycSlaVenues.ts",
+    "audit:venue-provenance": "tsx src/scripts/auditVenueProvenance.ts",
+    "audit:sf-trust": "tsx src/scripts/auditSfTrust.ts",
+    "hours:google": "tsx src/scripts/syncGoogleHours.ts",
+    "hours:foursquare": "tsx src/scripts/syncFoursquareHours.ts",
+    "evidence:foursquare": "tsx src/scripts/syncFoursquareEvidence.ts",
+    "hours:osm": "tsx src/scripts/syncOpenStreetMapHours.ts",
+    "hours:website": "tsx src/scripts/syncVenueWebsiteHours.ts",
+    "hours:mark-unknown": "tsx src/scripts/markUnknownVenueHours.ts",
+    "events:bootstrap-websites": "tsx src/scripts/bootstrapVenueEventSources.ts",
+    "events:discover-sources": "tsx src/scripts/discoverVenueEventSources.ts",
+    "events:sync": "tsx src/scripts/syncVenueEvents.ts",
+    "media:discover": "tsx src/scripts/discoverVenueMedia.ts",
+    "media:discover:core10": "tsx src/scripts/discoverVenueMedia.ts --market=san-francisco --core10 --dry-run",
+    "neighborhoods:sf": "tsx src/scripts/normalizeSfNeighborhoods.ts",
+    "recommendations:refresh-inputs": "tsx src/scripts/refreshRecommendationInputs.ts",
+    "phase6:readiness": "tsx src/scripts/auditPhase6Readiness.ts",
+    "testflight:readiness": "tsx src/scripts/auditTestFlightReadiness.ts",
+    "phase6:social-smoke": "tsx src/scripts/seedPhase6SocialSmoke.ts",
+    "phase6:social-smoke:audit": "tsx src/scripts/auditPhase6SocialSmoke.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.104.1",
     "@types/pg": "^8.18.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
-    "pg": "^8.20.0"
+    "express-rate-limit": "^8.4.0",
+    "helmet": "^8.1.0",
+    "jose": "^6.2.2",
+    "pg": "^8.20.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.13.10",
+    "@types/supertest": "^7.2.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.5"
   }
 }

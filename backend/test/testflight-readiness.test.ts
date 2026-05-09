@@ -1,0 +1,142 @@
+import { describe, expect, it } from "vitest";
+import request from "supertest";
+import { createApp } from "../src/app";
+import { loadConfig } from "../src/lib/config";
+import {
+  auditBackendRuntime,
+  auditIosReleaseConfig,
+  auditNotificationDeliveryModeEnv,
+  auditPublicUrls
+} from "../src/services/v1/testflightReadinessService";
+
+describe("TestFlight readiness audit", () => {
+  it("rejects localhost and disabled Apple auth in Release iOS config", () => {
+    const result = auditIosReleaseConfig({
+      apiBaseUrl: "http://127.0.0.1:4000/api/v1",
+      supabaseUrl: "https://staging.supabase.co",
+      supabasePublishableKey: "sb_publishable_staging",
+      appleAuthEnabled: false,
+      phoneAuthEnabled: false,
+      googleMapsIosApiKey: "ios-key",
+      reviewerDemoEnabled: true
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("Release API_BASE_URL must be HTTPS and must not use localhost.");
+    expect(result.failures).toContain("Release Sign in with Apple must be enabled for TestFlight.");
+  });
+
+  it("rejects backend-only secret shapes in Release iOS config", () => {
+    const result = auditIosReleaseConfig({
+      apiBaseUrl: "https://nightloop-staging.up.railway.app/api/v1",
+      supabaseUrl: "https://staging-project.supabase.co",
+      supabasePublishableKey: "sb_publishable_staging",
+      appleAuthEnabled: true,
+      phoneAuthEnabled: false,
+      googleMapsIosApiKey: "ios-key",
+      reviewerDemoEnabled: true,
+      rawConfigValues: ["postgresql://postgres:redacted@db.example.supabase.co:5432/postgres"]
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("Release iOS config must not contain backend-only secrets or database URLs.");
+  });
+
+  it("accepts staging HTTPS release config with Apple auth and no phone auth", () => {
+    const result = auditIosReleaseConfig({
+      apiBaseUrl: "https://nightloop-staging.up.railway.app/api/v1",
+      supabaseUrl: "https://staging-project.supabase.co",
+      supabasePublishableKey: "sb_publishable_staging",
+      appleAuthEnabled: true,
+      phoneAuthEnabled: false,
+      googleMapsIosApiKey: "ios-key",
+      reviewerDemoEnabled: true
+    });
+
+    expect(result).toEqual({ ok: true, failures: [] });
+  });
+
+  it("rejects production runtime without required staging backend values", () => {
+    const result = auditBackendRuntime({
+      nodeEnv: "production",
+      databaseUrlSet: true,
+      supabaseProjectUrlSet: true,
+      supabaseJwksUrlSet: true,
+      supabaseServiceRoleSet: true,
+      notificationDeliveryMode: "apns",
+      apnsConfigured: false
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("APNs delivery mode requires APNs credentials.");
+  });
+
+  it("requires notification delivery mode env presence for CLI readiness", () => {
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "" })).toEqual({
+      ok: false,
+      failures: ["NOTIFICATION_DELIVERY_MODE is required."],
+      mode: "mock"
+    });
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "mock" })).toEqual({
+      ok: true,
+      failures: [],
+      mode: "mock"
+    });
+  });
+
+  it("rejects invalid notification delivery mode env values", () => {
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "email" })).toEqual({
+      ok: false,
+      failures: ["NOTIFICATION_DELIVERY_MODE must be mock or apns."],
+      mode: "mock"
+    });
+    expect(auditNotificationDeliveryModeEnv({ notificationDeliveryMode: "apns" })).toEqual({
+      ok: true,
+      failures: [],
+      mode: "apns"
+    });
+  });
+
+  it("requires public legal and support URLs", () => {
+    const result = auditPublicUrls({
+      privacyUrl: "https://nightloop.vercel.app/privacy",
+      termsUrl: "https://nightloop.vercel.app/terms",
+      supportUrl: "",
+      deleteAccountUrl: "https://nightloop.vercel.app/delete-account",
+      accessibilityUrl: "https://nightloop.vercel.app/accessibility"
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("Support URL is required.");
+  });
+
+  it("treats non-empty public URLs as present without validating URL shape", () => {
+    const result = auditPublicUrls({
+      privacyUrl: "http://example.com/privacy",
+      termsUrl: "terms-page",
+      supportUrl: "localhost/support",
+      deleteAccountUrl: "delete-account",
+      accessibilityUrl: "accessibility"
+    });
+
+    expect(result).toEqual({ ok: true, failures: [] });
+  });
+
+  it("returns 404 for dev reset endpoints when backend runs in production mode", async () => {
+    const config = {
+      ...loadConfig(),
+      env: "production" as const
+    };
+    const app = createApp({
+      config,
+      authAdmin: {
+        createConfirmedEmailUser: async () => ({ id: "auth-user-1" })
+      }
+    });
+
+    await request(app)
+      .post("/api/v1/dev/social-crew/reset")
+      .send({ market: "san-francisco" })
+      .expect(404);
+  });
+});
