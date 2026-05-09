@@ -25,6 +25,9 @@ packages:
   GoogleMaps:
     url: https://github.com/googlemaps/ios-maps-sdk.git
     from: "9.2.0"
+  FloatingPanel:
+    url: https://github.com/scenee/FloatingPanel.git
+    from: "3.2.2"
 
 targets:
   Nightloop:
@@ -63,6 +66,8 @@ targets:
         product: Supabase
       - package: GoogleMaps
         product: GoogleMaps
+      - package: FloatingPanel
+        product: FloatingPanel
 
   NightloopTests:
     type: bundle.unit-test

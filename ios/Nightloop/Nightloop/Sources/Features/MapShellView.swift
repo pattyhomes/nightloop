@@ -1,4 +1,5 @@
 import CoreLocation
+import FloatingPanel
 import GoogleMaps
 import SwiftUI
 
@@ -25,8 +26,7 @@ struct MapShellView: View {
     @State private var isSignalMenuOpen = false
     @State private var isShowingDetailedReport = false
     @State private var isShowingSignalLocationPrompt = false
-    @State private var panelDetent: MapPanelDetent = .medium
-    @GestureState private var panelDragTranslation: CGFloat = 0
+    @State private var panelState: FloatingPanelState? = .half
     @State private var detailVenueID: String?
     @State private var currentMapCenter = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194)
     @State private var currentMapZoom = 12.2
@@ -43,6 +43,10 @@ struct MapShellView: View {
     private var rankedVenues: [VenueItem] {
         let base = isTonightPreviewNow ? venues.filter { selectedPreviewFilter.matches($0) } : venues
         return MapVenueFilter.rankedVenues(from: base)
+    }
+
+    private var settledPanelDetent: MapPanelDetent {
+        MapPanelDetent(floatingPanelState: panelState)
     }
 
     var body: some View {
@@ -89,16 +93,16 @@ struct MapShellView: View {
     private var mapContent: some View {
         GeometryReader { proxy in
             let panelLayout = MapPanelLayoutPolicy.layout(availableHeight: proxy.size.height)
-            let panelHeight = MapPanelLayoutPolicy.visualHeight(
-                settledDetent: panelDetent,
-                dragTranslation: panelDragTranslation,
+            let settledPanelDetent = settledPanelDetent
+            let settledPanelHeight = MapPanelLayoutPolicy.mapPaddingHeight(
+                settledDetent: settledPanelDetent,
                 layout: panelLayout
             )
-            let overlayLayout = MapOverlayLayout(sheetHeight: panelHeight)
-            let isCompact = panelHeight <= panelLayout.compactHeight + 16
+            let overlayLayout = MapOverlayLayout(sheetHeight: settledPanelHeight)
+            let isCompact = MapPanelLayoutPolicy.isCompact(settledDetent: settledPanelDetent)
 
             ZStack(alignment: .bottom) {
-                mapView(bottomSheetHeight: panelHeight)
+                mapView(bottomSheetHeight: settledPanelHeight)
                     .ignoresSafeArea(edges: .top)
 
                 VStack(spacing: 12) {
@@ -164,23 +168,37 @@ struct MapShellView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                signalFAB
-                    .padding(.trailing, 20)
-                    .padding(.bottom, overlayLayout.fabBottomPadding)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                if isCompact {
+                    signalFAB
+                        .padding(.trailing, 20)
+                        .padding(.bottom, overlayLayout.fabBottomPadding)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
 
-                if isSignalMenuOpen {
+                if isCompact && isSignalMenuOpen {
                     signalMenu
                         .padding(.trailing, 20)
                         .padding(.bottom, overlayLayout.signalMenuBottomPadding)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
-                mapBottomPanel(isCompact: isCompact, layout: panelLayout)
-                    .frame(height: panelHeight)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.84), value: panelDetent)
             }
+            .floatingPanel(
+                coordinator: NightloopMapPanelCoordinator.self,
+                onEvent: handlePanelEvent
+            ) { floatingPanelProxy in
+                mapBottomPanel(
+                    isCompact: isCompact,
+                    layout: panelLayout,
+                    floatingPanelProxy: floatingPanelProxy
+                )
+            }
+            .floatingPanelState($panelState)
+            .floatingPanelLayout(NightloopMapFloatingPanelLayout(layout: panelLayout))
+            .floatingPanelBehavior(NightloopMapFloatingPanelBehavior())
+            .floatingPanelContentMode(.fitToBounds)
+            .floatingPanelContentInsetAdjustmentBehavior(.never)
+            .floatingPanelSurfaceAppearance(.transparent(cornerRadius: 24, shadows: []))
             .background(NightloopTheme.background)
         }
     }
@@ -282,9 +300,13 @@ struct MapShellView: View {
         }
     }
 
-    private func mapBottomPanel(isCompact: Bool, layout: MapPanelLayout) -> some View {
+    private func mapBottomPanel(
+        isCompact: Bool,
+        layout: MapPanelLayout,
+        floatingPanelProxy: FloatingPanelProxy
+    ) -> some View {
         VStack(spacing: 0) {
-            panelDragHandle(layout: layout)
+            panelDragHandle()
 
             if isLoading && venues.isEmpty {
                 LoadingStateView(title: "Loading the map")
@@ -310,6 +332,7 @@ struct MapShellView: View {
                         }
                     )
                     .padding(.horizontal, 18)
+                    .contentShape(Rectangle())
                 }
 
                 HStack {
@@ -317,6 +340,7 @@ struct MapShellView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
+                .contentShape(Rectangle())
 
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -336,6 +360,7 @@ struct MapShellView: View {
                     .padding(.top, 8)
                     .padding(.bottom, MapPanelLayoutPolicy.listBottomPadding)
                 }
+                .floatingPanelScrollTracking(proxy: floatingPanelProxy)
             }
         }
         .frame(maxWidth: .infinity)
@@ -353,7 +378,7 @@ struct MapShellView: View {
         }
     }
 
-    private func panelDragHandle(layout: MapPanelLayout) -> some View {
+    private func panelDragHandle() -> some View {
         VStack(spacing: 7) {
             Capsule()
                 .fill(NightloopTheme.inkMuted.opacity(0.42))
@@ -361,30 +386,16 @@ struct MapShellView: View {
             HStack(spacing: 6) {
                 ForEach(MapPanelDetent.allCases, id: \.rawValue) { detent in
                     Capsule()
-                        .fill(detent == panelDetent ? NightloopTheme.purple : NightloopTheme.inkMuted.opacity(0.24))
-                        .frame(width: detent == panelDetent ? 18 : 8, height: 3)
+                        .fill(detent == settledPanelDetent ? NightloopTheme.purple : NightloopTheme.inkMuted.opacity(0.24))
+                        .frame(width: detent == settledPanelDetent ? 18 : 8, height: 3)
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 30)
+        .frame(height: 36)
+        .background(Color.black.opacity(0.001))
         .contentShape(Rectangle())
-        .gesture(panelDragGesture(layout: layout))
         .accessibilityLabel("Map panel drag handle")
-    }
-
-    private func panelDragGesture(layout: MapPanelLayout) -> some Gesture {
-        DragGesture(minimumDistance: 6)
-            .updating($panelDragTranslation) { value, state, _ in
-                state = value.translation.height
-            }
-            .onEnded { value in
-                panelDetent = MapPanelLayoutPolicy.targetDetent(
-                    current: panelDetent,
-                    predictedEndTranslation: value.predictedEndTranslation.height,
-                    layout: layout
-                )
-            }
     }
 
     private func mapPreviewTitle(_ filter: PreviewFilterPolicy) -> String {
@@ -393,6 +404,13 @@ struct MapShellView: View {
             return filter.label
         case .expected, .opensLater, .sourceBacked:
             return "\(filter.count(in: venues)) \(filter.label)"
+        }
+    }
+
+    private func handlePanelEvent(_ event: NightloopMapPanelCoordinator.Event) {
+        switch event {
+        case .didChangeState(let state):
+            panelState = state
         }
     }
 
@@ -760,6 +778,145 @@ struct MapShellView: View {
     }
 }
 
+private extension MapPanelDetent {
+    init(floatingPanelState: FloatingPanelState?) {
+        switch floatingPanelState {
+        case .some(.full):
+            self = .expanded
+        case .some(.tip):
+            self = .compact
+        case .some(.half), .none:
+            self = .medium
+        default:
+            self = .medium
+        }
+    }
+}
+
+private final class NightloopMapFloatingPanelLayout: NSObject, FloatingPanelLayout {
+    private let layout: MapPanelLayout
+
+    init(layout: MapPanelLayout) {
+        self.layout = layout
+        super.init()
+    }
+
+    var position: FloatingPanelPosition {
+        .bottom
+    }
+
+    var initialState: FloatingPanelState {
+        .half
+    }
+
+    var anchors: [FloatingPanelState: FloatingPanelLayoutAnchoring] {
+        [
+            .full: FloatingPanelLayoutAnchor(
+                absoluteInset: MapPanelLayoutPolicy.topClearance,
+                edge: .top,
+                referenceGuide: .safeArea
+            ),
+            .half: FloatingPanelLayoutAnchor(
+                absoluteInset: MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .medium, layout: layout),
+                edge: .bottom,
+                referenceGuide: .safeArea
+            ),
+            .tip: FloatingPanelLayoutAnchor(
+                absoluteInset: MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .compact, layout: layout),
+                edge: .bottom,
+                referenceGuide: .safeArea
+            )
+        ]
+    }
+
+    func prepareLayout(surfaceView: UIView, in view: UIView) -> [NSLayoutConstraint] {
+        [
+            surfaceView.leftAnchor.constraint(equalTo: view.leftAnchor),
+            surfaceView.rightAnchor.constraint(equalTo: view.rightAnchor)
+        ]
+    }
+
+    func backdropAlpha(for state: FloatingPanelState) -> CGFloat {
+        0
+    }
+}
+
+private final class NightloopMapFloatingPanelBehavior: FloatingPanelBehavior {
+    var springDecelerationRate: CGFloat {
+        UIScrollView.DecelerationRate.fast.rawValue + 0.001
+    }
+
+    var springResponseTime: CGFloat {
+        0.34
+    }
+
+    var momentumProjectionRate: CGFloat {
+        UIScrollView.DecelerationRate.normal.rawValue
+    }
+
+    func shouldProjectMomentum(_ fpc: FloatingPanelController, to proposedState: FloatingPanelState) -> Bool {
+        true
+    }
+
+    func allowsRubberBanding(for edge: UIRectEdge) -> Bool {
+        false
+    }
+}
+
+private final class NightloopMapPanelCoordinator: NSObject, FloatingPanelCoordinator {
+    enum Event {
+        case didChangeState(FloatingPanelState)
+    }
+
+    let action: (Event) -> Void
+    let proxy: FloatingPanelProxy
+    lazy var delegate: FloatingPanelControllerDelegate? = self
+    private var lastEmittedState: FloatingPanelState?
+
+    init(action: @escaping (Event) -> Void) {
+        self.action = action
+        self.proxy = FloatingPanelProxy(controller: FloatingPanelController())
+        super.init()
+    }
+
+    func setupFloatingPanel<Main: View, Content: View>(
+        mainHostingController: UIHostingController<Main>,
+        contentHostingController: UIHostingController<Content>
+    ) {
+        contentHostingController.view.backgroundColor = .clear
+        controller.set(contentViewController: contentHostingController)
+        controller.delegate = delegate
+        controller.surfaceView.grabberHandle.isHidden = true
+        controller.surfaceView.grabberAreaOffset = 64
+        controller.isRemovalInteractionEnabled = false
+        controller.addPanel(toParent: mainHostingController, animated: false)
+    }
+
+    func onUpdate<Representable>(
+        context: UIViewControllerRepresentableContext<Representable>
+    ) where Representable: UIViewControllerRepresentable {}
+}
+
+extension NightloopMapPanelCoordinator: FloatingPanelControllerDelegate {
+    func floatingPanelDidChangeState(_ fpc: FloatingPanelController) {
+        emitStateIfNeeded(fpc.state)
+    }
+
+    func floatingPanelDidMove(_ fpc: FloatingPanelController) {
+        emitStateIfNeeded(fpc.state)
+    }
+
+    func floatingPanelDidEndAttracting(_ fpc: FloatingPanelController) {
+        emitStateIfNeeded(fpc.state)
+    }
+
+    private func emitStateIfNeeded(_ state: FloatingPanelState) {
+        guard state != lastEmittedState else { return }
+        lastEmittedState = state
+        action(.didChangeState(state))
+    }
+}
+
 private struct GoogleNightloopMapView: UIViewRepresentable {
     let markers: [VenueMapMarker]
     let selectedVenueID: String?
@@ -842,12 +999,11 @@ private struct GoogleNightloopMapView: UIViewRepresentable {
         }
 
         func applyPadding(bottomSheetHeight: CGFloat, to mapView: GMSMapView) {
-            guard appliedBottomSheetHeight.map({ abs($0 - bottomSheetHeight) > 2 }) ?? true else {
+            guard appliedBottomSheetHeight.map({ abs($0 - bottomSheetHeight) > 0.5 }) ?? true else {
                 return
             }
-            let smoothedHeight = appliedBottomSheetHeight.map { $0 + (bottomSheetHeight - $0) * 0.45 } ?? bottomSheetHeight
-            appliedBottomSheetHeight = smoothedHeight
-            mapView.padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: smoothedHeight)
+            appliedBottomSheetHeight = bottomSheetHeight
+            mapView.padding = GoogleMapPadding.edgeInsets(bottomSheetHeight: bottomSheetHeight)
         }
 
         func syncMarkers(_ markers: [VenueMapMarker], selectedVenueID: String?, on mapView: GMSMapView) {

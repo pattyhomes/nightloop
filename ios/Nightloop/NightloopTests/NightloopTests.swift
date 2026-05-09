@@ -876,27 +876,38 @@ final class NightloopTests: XCTestCase {
         XCTAssertGreaterThan(layout.height(for: .medium), layout.height(for: .compact))
         XCTAssertGreaterThan(layout.height(for: .expanded), layout.height(for: .medium))
         XCTAssertLessThan(MapPanelLayoutPolicy.listBottomPadding, BottomContentInsets.scrollBottomPadding())
+        XCTAssertEqual(MapPanelLayoutPolicy.panelFrameHeight(layout: layout), layout.expandedHeight)
+        XCTAssertEqual(MapPanelLayoutPolicy.visibleHeight(for: .medium, layout: layout), layout.mediumHeight)
+        XCTAssertFalse(MapPanelLayoutPolicy.isCompact(settledDetent: .medium))
+        XCTAssertTrue(MapPanelLayoutPolicy.isCompact(settledDetent: .compact))
+    }
+
+    func testMapPanelAnchorPolicyClearsBottomNav() {
+        let layout = MapPanelLayoutPolicy.layout(availableHeight: 760)
+        let clearance = MapPanelLayoutPolicy.bottomNavClearance(safeAreaBottom: 34)
+
+        XCTAssertEqual(clearance, 116)
         XCTAssertEqual(
-            MapPanelLayoutPolicy.visualHeight(settledDetent: .medium, dragTranslation: 80, layout: layout),
-            layout.mediumHeight - 80
+            MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .compact, layout: layout, safeAreaBottom: 34),
+            layout.compactHeight + clearance
+        )
+        XCTAssertEqual(
+            MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .medium, layout: layout, safeAreaBottom: 34),
+            layout.mediumHeight + clearance
+        )
+        XCTAssertGreaterThan(
+            MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .medium, layout: layout),
+            MapPanelLayoutPolicy.floatingPanelAnchorInset(for: .compact, layout: layout)
         )
     }
 
-    func testMapPanelSettlesFromPredictedDragWithoutJumpingRows() {
+    func testMapPanelPaddingDerivesFromSettledFloatingPanelStateOnly() {
         let layout = MapPanelLayoutPolicy.layout(availableHeight: 760)
 
-        XCTAssertEqual(
-            MapPanelLayoutPolicy.targetDetent(current: .medium, predictedEndTranslation: -260, layout: layout),
-            .expanded
-        )
-        XCTAssertEqual(
-            MapPanelLayoutPolicy.targetDetent(current: .medium, predictedEndTranslation: 260, layout: layout),
-            .compact
-        )
-        XCTAssertEqual(
-            MapPanelLayoutPolicy.targetDetent(current: .medium, predictedEndTranslation: 8, layout: layout),
-            .medium
-        )
+        XCTAssertEqual(MapPanelLayoutPolicy.mapPaddingHeight(settledDetent: .compact, layout: layout), layout.compactHeight)
+        XCTAssertEqual(MapPanelLayoutPolicy.mapPaddingHeight(settledDetent: .medium, layout: layout), layout.mediumHeight)
+        XCTAssertEqual(MapPanelLayoutPolicy.mapPaddingHeight(settledDetent: .expanded, layout: layout), layout.expandedHeight)
+        XCTAssertEqual(MapPanelLayoutPolicy.panelFrameHeight(layout: layout), layout.expandedHeight)
     }
 
     func testMapVenueNavigationTargetUsesVenueDetails() {

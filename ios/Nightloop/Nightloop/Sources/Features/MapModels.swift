@@ -361,6 +361,7 @@ enum MapPanelLayoutPolicy {
     static let venueLimit = 100
     static let listBottomPadding: CGFloat = 28
     static let topClearance: CGFloat = 92
+    static let mediumHeightFraction: CGFloat = 0.54
 
     static func layout(availableHeight: CGFloat) -> MapPanelLayout {
         let expanded = max(compactHeight, availableHeight - topClearance)
@@ -372,29 +373,41 @@ enum MapPanelLayoutPolicy {
         )
     }
 
-    static func visualHeight(
-        settledDetent: MapPanelDetent,
-        dragTranslation: CGFloat,
-        layout: MapPanelLayout
-    ) -> CGFloat {
-        let settled = layout.height(for: settledDetent)
-        let proposed = settled - dragTranslation
-        return min(layout.expandedHeight, max(layout.compactHeight, proposed))
+    static func panelFrameHeight(layout: MapPanelLayout) -> CGFloat {
+        layout.expandedHeight
     }
 
-    static func targetDetent(
-        current: MapPanelDetent,
-        predictedEndTranslation: CGFloat,
+    static func visibleHeight(
+        for detent: MapPanelDetent,
         layout: MapPanelLayout
-    ) -> MapPanelDetent {
-        let projected = visualHeight(
-            settledDetent: current,
-            dragTranslation: predictedEndTranslation,
-            layout: layout
-        )
-        return MapPanelDetent.allCases.min {
-            abs(layout.height(for: $0) - projected) < abs(layout.height(for: $1) - projected)
-        } ?? current
+    ) -> CGFloat {
+        layout.height(for: detent)
+    }
+
+    static func mapPaddingHeight(
+        settledDetent: MapPanelDetent,
+        layout: MapPanelLayout
+    ) -> CGFloat {
+        visibleHeight(for: settledDetent, layout: layout)
+    }
+
+    static func isCompact(settledDetent: MapPanelDetent) -> Bool {
+        settledDetent == .compact
+    }
+
+    static func bottomNavClearance(
+        safeAreaBottom: CGFloat = 0,
+        tabBarHeight: CGFloat = BottomContentInsets.defaultTabBarHeight
+    ) -> CGFloat {
+        tabBarHeight + safeAreaBottom
+    }
+
+    static func floatingPanelAnchorInset(
+        for detent: MapPanelDetent,
+        layout: MapPanelLayout,
+        safeAreaBottom: CGFloat = 0
+    ) -> CGFloat {
+        visibleHeight(for: detent, layout: layout) + bottomNavClearance(safeAreaBottom: safeAreaBottom)
     }
 }
 
