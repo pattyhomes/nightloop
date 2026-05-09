@@ -947,14 +947,14 @@ final class NightloopTests: XCTestCase {
         XCTAssertEqual(unknown.badgeTitle, "Hours unknown")
     }
 
-    func testProjectBuildNumberIsFour() throws {
+    func testProjectBuildNumberIsFive() throws {
         let projectURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("project.yml")
         let contents = try String(contentsOf: projectURL)
 
-        XCTAssertTrue(contents.contains("CURRENT_PROJECT_VERSION: \"4\""))
+        XCTAssertTrue(contents.contains("CURRENT_PROJECT_VERSION: \"5\""))
     }
 
     func testMapOverlayLayoutFollowsSheetHeight() {
